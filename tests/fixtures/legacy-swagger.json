@@ -1,0 +1,154 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Legacy Petstore",
+    "version": "1.4.2",
+    "description": "A Swagger 2.0 document exercising upgrade edge cases."
+  },
+  "host": "petstore.example.com",
+  "basePath": "/v2",
+  "schemes": ["https", "http"],
+  "consumes": ["application/json"],
+  "securityDefinitions": {
+    "basic_auth": { "type": "basic" },
+    "api_key": { "type": "apiKey", "name": "X-API-Key", "in": "header" },
+    "petstore_auth": {
+      "type": "oauth2",
+      "flow": "accessCode",
+      "authorizationUrl": "https://auth.example.com/authorize",
+      "tokenUrl": "https://auth.example.com/token",
+      "scopes": { "read:pets": "read pets", "write:pets": "write pets" }
+    }
+  },
+  "parameters": {
+    "petId": {
+      "name": "petId",
+      "in": "path",
+      "required": true,
+      "type": "integer",
+      "format": "int64",
+      "description": "Pet identifier"
+    },
+    "PetBody": {
+      "name": "pet",
+      "in": "body",
+      "required": true,
+      "schema": { "$ref": "#/definitions/NewPet" }
+    }
+  },
+  "responses": {
+    "NotFound": {
+      "description": "Resource not found",
+      "schema": { "$ref": "#/definitions/Error" }
+    }
+  },
+  "paths": {
+    "/pets": {
+      "get": {
+        "summary": "List pets",
+        "parameters": [
+          {
+            "name": "limit", "in": "query", "type": "integer",
+            "format": "int32", "default": 20, "maximum": 100
+          },
+          {
+            "name": "tags", "in": "query", "type": "array",
+            "items": { "type": "string" }, "collectionFormat": "csv"
+          },
+          {
+            "name": "statuses", "in": "query", "type": "array",
+            "items": { "type": "string", "enum": ["available", "sold"] },
+            "collectionFormat": "multi"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "pet list",
+            "schema": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/Pet" }
+            },
+            "headers": {
+              "X-Rate-Limit": { "type": "integer", "description": "per hour" }
+            }
+          },
+          "404": { "$ref": "#/responses/NotFound" }
+        }
+      },
+      "post": {
+        "operationId": "addPet",
+        "summary": "Create a pet",
+        "security": [{ "petstore_auth": ["write:pets"] }],
+        "parameters": [{ "$ref": "#/parameters/PetBody" }],
+        "responses": {
+          "201": {
+            "description": "created",
+            "schema": { "$ref": "#/definitions/Pet" },
+            "examples": {
+              "application/json": { "id": 1, "name": "Bella" }
+            }
+          }
+        }
+      }
+    },
+    "/pets/{petId}": {
+      "parameters": [{ "$ref": "#/parameters/petId" }],
+      "get": {
+        "operationId": "getPet",
+        "produces": ["application/json", "application/xml"],
+        "responses": {
+          "200": { "description": "a pet", "schema": { "$ref": "#/definitions/Pet" } },
+          "404": { "$ref": "#/responses/NotFound" }
+        }
+      },
+      "delete": {
+        "responses": { "204": { "description": "deleted" } }
+      }
+    },
+    "/pets/{petId}/photo": {
+      "post": {
+        "operationId": "uploadPhoto",
+        "consumes": ["multipart/form-data"],
+        "parameters": [
+          { "$ref": "#/parameters/petId" },
+          { "name": "caption", "in": "formData", "type": "string" },
+          { "name": "photo", "in": "formData", "type": "file", "required": true }
+        ],
+        "responses": { "200": { "description": "uploaded" } }
+      }
+    }
+  },
+  "definitions": {
+    "Animal": {
+      "type": "object",
+      "discriminator": "petType",
+      "required": ["petType"],
+      "properties": { "petType": { "type": "string" } }
+    },
+    "NewPet": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "tag": { "type": "string", "x-nullable": true }
+      }
+    },
+    "Pet": {
+      "allOf": [
+        { "$ref": "#/definitions/NewPet" },
+        {
+          "type": "object",
+          "required": ["id"],
+          "properties": { "id": { "type": "integer", "format": "int64" } }
+        }
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "integer" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

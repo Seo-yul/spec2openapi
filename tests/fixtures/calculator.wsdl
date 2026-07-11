@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions name="CalculatorService"
+    targetNamespace="http://example.com/calculator"
+    xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+    xmlns:tns="http://example.com/calculator"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+
+  <wsdl:types>
+    <xsd:schema targetNamespace="http://example.com/calculator" elementFormDefault="qualified">
+      <xsd:element name="Add">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="a" type="xsd:int"/>
+            <xsd:element name="b" type="xsd:int"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="AddResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="result" type="xsd:int"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="Divide">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="numerator" type="xsd:double"/>
+            <xsd:element name="denominator" type="xsd:double"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="DivideResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="result" type="xsd:double"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </wsdl:types>
+
+  <wsdl:message name="AddRequest">
+    <wsdl:part name="parameters" element="tns:Add"/>
+  </wsdl:message>
+  <wsdl:message name="AddResponseMsg">
+    <wsdl:part name="parameters" element="tns:AddResponse"/>
+  </wsdl:message>
+  <wsdl:message name="DivideRequest">
+    <wsdl:part name="parameters" element="tns:Divide"/>
+  </wsdl:message>
+  <wsdl:message name="DivideResponseMsg">
+    <wsdl:part name="parameters" element="tns:DivideResponse"/>
+  </wsdl:message>
+
+  <wsdl:portType name="CalculatorPortType">
+    <wsdl:operation name="Add">
+      <wsdl:documentation>Adds two integers and returns the sum.</wsdl:documentation>
+      <wsdl:input message="tns:AddRequest"/>
+      <wsdl:output message="tns:AddResponseMsg"/>
+    </wsdl:operation>
+    <wsdl:operation name="Divide">
+      <wsdl:documentation>Divides numerator by denominator.</wsdl:documentation>
+      <wsdl:input message="tns:DivideRequest"/>
+      <wsdl:output message="tns:DivideResponseMsg"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <wsdl:binding name="CalculatorBinding" type="tns:CalculatorPortType">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="Add">
+      <soap:operation soapAction="http://example.com/calculator/Add"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+    <wsdl:operation name="Divide">
+      <soap:operation soapAction="http://example.com/calculator/Divide"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:service name="CalculatorService">
+    <wsdl:port name="CalculatorPort" binding="tns:CalculatorBinding">
+      <soap:address location="http://localhost:18080/calc"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

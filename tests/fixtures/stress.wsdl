@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions name="StressService"
+    targetNamespace="http://example.com/stress"
+    xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+    xmlns:tns="http://example.com/stress"
+    xmlns:s2="http://example.com/stress2"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+
+  <wsdl:types>
+    <xsd:schema targetNamespace="http://example.com/stress" elementFormDefault="qualified">
+
+      <!-- recursive type -->
+      <xsd:complexType name="Node">
+        <xsd:sequence>
+          <xsd:element name="name" type="xsd:string"/>
+          <xsd:element name="children" type="tns:Node" minOccurs="0" maxOccurs="unbounded"/>
+        </xsd:sequence>
+      </xsd:complexType>
+
+      <!-- collides with the Item defined in the stress2 namespace -->
+      <xsd:complexType name="Item">
+        <xsd:sequence>
+          <xsd:element name="sku" type="xsd:string"/>
+        </xsd:sequence>
+      </xsd:complexType>
+
+      <!-- large enum -->
+      <xsd:simpleType name="RegionCode">
+        <xsd:restriction base="xsd:string">
+          <xsd:enumeration value="KR"/><xsd:enumeration value="JP"/>
+          <xsd:enumeration value="CN"/><xsd:enumeration value="TW"/>
+          <xsd:enumeration value="HK"/><xsd:enumeration value="SG"/>
+          <xsd:enumeration value="TH"/><xsd:enumeration value="VN"/>
+          <xsd:enumeration value="ID"/><xsd:enumeration value="MY"/>
+          <xsd:enumeration value="PH"/><xsd:enumeration value="IN"/>
+          <xsd:enumeration value="US"/><xsd:enumeration value="CA"/>
+          <xsd:enumeration value="MX"/><xsd:enumeration value="BR"/>
+          <xsd:enumeration value="AR"/><xsd:enumeration value="CL"/>
+          <xsd:enumeration value="GB"/><xsd:enumeration value="FR"/>
+          <xsd:enumeration value="DE"/><xsd:enumeration value="IT"/>
+          <xsd:enumeration value="ES"/><xsd:enumeration value="NL"/>
+          <xsd:enumeration value="SE"/><xsd:enumeration value="NO"/>
+          <xsd:enumeration value="FI"/><xsd:enumeration value="PL"/>
+          <xsd:enumeration value="TR"/><xsd:enumeration value="AE"/>
+          <xsd:enumeration value="SA"/><xsd:enumeration value="ZA"/>
+          <xsd:enumeration value="EG"/><xsd:enumeration value="AU"/>
+          <xsd:enumeration value="NZ"/><xsd:enumeration value="RU"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+
+      <!-- deep nesting -->
+      <xsd:complexType name="L4">
+        <xsd:sequence><xsd:element name="value" type="xsd:string"/></xsd:sequence>
+      </xsd:complexType>
+      <xsd:complexType name="L3">
+        <xsd:sequence><xsd:element name="l4" type="tns:L4"/></xsd:sequence>
+      </xsd:complexType>
+      <xsd:complexType name="L2">
+        <xsd:sequence><xsd:element name="l3" type="tns:L3"/></xsd:sequence>
+      </xsd:complexType>
+      <xsd:complexType name="L1">
+        <xsd:sequence><xsd:element name="l2" type="tns:L2"/></xsd:sequence>
+      </xsd:complexType>
+
+      <xsd:element name="EchoTree">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="root" type="tns:Node"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="EchoTreeResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="depth" type="xsd:int"/>
+            <xsd:element name="total" type="xsd:int"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="Classify">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="code" type="tns:RegionCode"/>
+            <xsd:element name="item" type="tns:Item"/>
+            <xsd:element name="deep" type="tns:L1"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="ClassifyResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="ok" type="xsd:boolean"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="Ping">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="msg" type="xsd:string"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="PingResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="msg" type="xsd:string"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+
+    <!-- second namespace: unqualified locals + colliding type name -->
+    <xsd:schema targetNamespace="http://example.com/stress2" elementFormDefault="unqualified"
+        xmlns:s2="http://example.com/stress2">
+      <xsd:complexType name="Item">
+        <xsd:sequence>
+          <xsd:element name="code" type="xsd:string"/>
+        </xsd:sequence>
+      </xsd:complexType>
+      <xsd:element name="Ping">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="msg" type="xsd:string"/>
+            <xsd:element name="item" type="s2:Item" minOccurs="0"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="PingResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="msg" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </wsdl:types>
+
+  <wsdl:message name="EchoTreeReq"><wsdl:part name="parameters" element="tns:EchoTree"/></wsdl:message>
+  <wsdl:message name="EchoTreeResp"><wsdl:part name="parameters" element="tns:EchoTreeResponse"/></wsdl:message>
+  <wsdl:message name="ClassifyReq"><wsdl:part name="parameters" element="tns:Classify"/></wsdl:message>
+  <wsdl:message name="ClassifyResp"><wsdl:part name="parameters" element="tns:ClassifyResponse"/></wsdl:message>
+  <wsdl:message name="PingReq"><wsdl:part name="parameters" element="tns:Ping"/></wsdl:message>
+  <wsdl:message name="PingResp"><wsdl:part name="parameters" element="tns:PingResponse"/></wsdl:message>
+  <wsdl:message name="PingBReq"><wsdl:part name="parameters" element="s2:Ping"/></wsdl:message>
+  <wsdl:message name="PingBResp"><wsdl:part name="parameters" element="s2:PingResponse"/></wsdl:message>
+
+  <wsdl:portType name="StressPortType">
+    <wsdl:operation name="EchoTree">
+      <wsdl:input message="tns:EchoTreeReq"/><wsdl:output message="tns:EchoTreeResp"/>
+    </wsdl:operation>
+    <wsdl:operation name="Classify">
+      <wsdl:input message="tns:ClassifyReq"/><wsdl:output message="tns:ClassifyResp"/>
+    </wsdl:operation>
+    <wsdl:operation name="Ping">
+      <wsdl:input message="tns:PingReq"/><wsdl:output message="tns:PingResp"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <wsdl:portType name="StressBPortType">
+    <wsdl:operation name="Ping">
+      <wsdl:input message="tns:PingBReq"/><wsdl:output message="tns:PingBResp"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <wsdl:binding name="StressBinding" type="tns:StressPortType">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="EchoTree">
+      <soap:operation soapAction="http://example.com/stress/EchoTree"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+    <wsdl:operation name="Classify">
+      <soap:operation soapAction="http://example.com/stress/Classify"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+    <wsdl:operation name="Ping">
+      <soap:operation soapAction="http://example.com/stress/Ping"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:binding name="StressBBinding" type="tns:StressBPortType">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="Ping">
+      <soap:operation soapAction="http://example.com/stress2/Ping"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:service name="StressService">
+    <wsdl:port name="StressPort" binding="tns:StressBinding">
+      <soap:address location="http://localhost:18085/stress"/>
+    </wsdl:port>
+  </wsdl:service>
+
+  <wsdl:service name="StressServiceB">
+    <wsdl:port name="StressBPort" binding="tns:StressBBinding">
+      <soap:address location="http://localhost:18085/stress"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

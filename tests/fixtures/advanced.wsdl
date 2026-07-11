@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions name="ApplicationService"
+    targetNamespace="http://example.com/adv"
+    xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+    xmlns:tns="http://example.com/adv"
+    xmlns:t="http://example.com/adv/types"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+
+  <wsdl:documentation>Handles application submissions.</wsdl:documentation>
+
+  <wsdl:types>
+    <xsd:schema targetNamespace="http://example.com/adv" elementFormDefault="qualified"
+        xmlns:t="http://example.com/adv/types">
+      <xsd:import namespace="http://example.com/adv/types" schemaLocation="advanced-types.xsd"/>
+
+      <xsd:complexType name="BaseParty">
+        <xsd:annotation>
+          <xsd:documentation>Common fields of any party.</xsd:documentation>
+        </xsd:annotation>
+        <xsd:sequence>
+          <xsd:element name="id" type="xsd:string">
+            <xsd:annotation>
+              <xsd:documentation>Internal party identifier.</xsd:documentation>
+            </xsd:annotation>
+          </xsd:element>
+          <xsd:element name="country" type="t:CountryCode" minOccurs="0"/>
+        </xsd:sequence>
+      </xsd:complexType>
+
+      <xsd:complexType name="Person">
+        <xsd:complexContent>
+          <xsd:extension base="tns:BaseParty">
+            <xsd:sequence>
+              <xsd:element name="name" type="t:ShortText"/>
+              <xsd:element name="age" type="xsd:int" minOccurs="0"/>
+            </xsd:sequence>
+          </xsd:extension>
+        </xsd:complexContent>
+      </xsd:complexType>
+
+      <xsd:complexType name="Money">
+        <xsd:simpleContent>
+          <xsd:extension base="xsd:decimal">
+            <xsd:attribute name="currency" type="xsd:string" use="required"/>
+          </xsd:extension>
+        </xsd:simpleContent>
+      </xsd:complexType>
+
+      <xsd:element name="SubmitApplication">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="applicant" type="tns:Person">
+              <xsd:annotation>
+                <xsd:documentation>The person submitting the application.</xsd:documentation>
+              </xsd:annotation>
+            </xsd:element>
+            <xsd:element name="payment" type="tns:Money"/>
+            <xsd:element name="discount" type="t:Percent" minOccurs="0"/>
+            <xsd:choice>
+              <xsd:element name="email" type="xsd:string"/>
+              <xsd:element name="phone" type="xsd:string"/>
+            </xsd:choice>
+            <xsd:element name="tags" type="xsd:string" minOccurs="0" maxOccurs="5"/>
+            <xsd:element name="mode" type="xsd:string" minOccurs="0" default="standard"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="SubmitApplicationResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="applicationId" type="xsd:string"/>
+            <xsd:element name="score" type="t:Percent"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="ValidationError">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="field" type="xsd:string"/>
+            <xsd:element name="message" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <xsd:element name="AuthHeader">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="apiKey" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </wsdl:types>
+
+  <wsdl:message name="SubmitReq">
+    <wsdl:part name="parameters" element="tns:SubmitApplication"/>
+  </wsdl:message>
+  <wsdl:message name="SubmitResp">
+    <wsdl:part name="parameters" element="tns:SubmitApplicationResponse"/>
+  </wsdl:message>
+  <wsdl:message name="AuthHeaderMsg">
+    <wsdl:part name="header" element="tns:AuthHeader"/>
+  </wsdl:message>
+  <wsdl:message name="ValidationFaultMsg">
+    <wsdl:part name="fault" element="tns:ValidationError"/>
+  </wsdl:message>
+
+  <wsdl:portType name="ApplicationPortType">
+    <wsdl:operation name="SubmitApplication">
+      <wsdl:documentation>Submits an application for review.</wsdl:documentation>
+      <wsdl:input message="tns:SubmitReq"/>
+      <wsdl:output message="tns:SubmitResp"/>
+      <wsdl:fault name="ValidationFault" message="tns:ValidationFaultMsg"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <wsdl:binding name="ApplicationBinding" type="tns:ApplicationPortType">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="SubmitApplication">
+      <soap:operation soapAction="http://example.com/adv/SubmitApplication"/>
+      <wsdl:input>
+        <soap:body use="literal"/>
+        <soap:header message="tns:AuthHeaderMsg" part="header" use="literal"/>
+      </wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+      <wsdl:fault name="ValidationFault"><soap:fault name="ValidationFault" use="literal"/></wsdl:fault>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:service name="ApplicationService">
+    <wsdl:port name="ApplicationPort" binding="tns:ApplicationBinding">
+      <soap:address location="http://localhost:18083/app"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

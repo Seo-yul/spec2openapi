@@ -1,0 +1,98 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Stress API", "version": "0.0.1" },
+  "paths": {
+    "/v1/trees": {
+      "post": {
+        "parameters": [
+          {
+            "name": "body", "in": "body", "required": true,
+            "schema": { "$ref": "#/definitions/Wrapper" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "tree stats",
+            "schema": {
+              "type": "object",
+              "properties": { "depth": { "type": "integer" } }
+            }
+          }
+        }
+      }
+    },
+    "/v1/items/{item-id}:activate": {
+      "post": {
+        "parameters": [
+          { "name": "item-id", "in": "path", "required": true, "type": "string" }
+        ],
+        "responses": {
+          "200": { "description": "ok", "schema": { "$ref": "#/definitions/C" } }
+        }
+      }
+    },
+    "/v1/matrix": {
+      "put": {
+        "operationId": "store-matrix",
+        "parameters": [
+          {
+            "name": "m", "in": "body",
+            "schema": { "$ref": "#/definitions/Matrix" }
+          }
+        ],
+        "responses": { "204": { "description": "stored" } }
+      }
+    },
+    "/health": {
+      "get": { "responses": { "200": { "description": "" } } }
+    }
+  },
+  "definitions": {
+    "Node": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/Node" }
+        }
+      }
+    },
+    "Wrapper": {
+      "type": "object",
+      "properties": { "root": { "$ref": "#/definitions/Node" } }
+    },
+    "A": {
+      "type": "object",
+      "properties": { "a": { "type": "string" } }
+    },
+    "B": {
+      "allOf": [
+        { "$ref": "#/definitions/A" },
+        { "type": "object", "properties": { "b": { "type": "integer" } } }
+      ]
+    },
+    "C": {
+      "allOf": [
+        { "$ref": "#/definitions/B" },
+        {
+          "type": "object",
+          "properties": {
+            "c": { "type": "boolean" },
+            "extra": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        }
+      ]
+    },
+    "Matrix": {
+      "type": "object",
+      "properties": {
+        "grid": {
+          "type": "array",
+          "items": { "type": "array", "items": { "type": "number" } }
+        }
+      }
+    }
+  }
+}

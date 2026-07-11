@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions name="EchoService"
+    targetNamespace="http://example.com/echo"
+    xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+    xmlns:soap12="http://schemas.xmlsoap.org/wsdl/soap12/"
+    xmlns:tns="http://example.com/echo"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+
+  <wsdl:types>
+    <xsd:schema targetNamespace="http://example.com/echo" elementFormDefault="qualified">
+      <xsd:element name="Echo">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="message" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="EchoResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="echoed" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </wsdl:types>
+
+  <wsdl:message name="EchoIn"><wsdl:part name="parameters" element="tns:Echo"/></wsdl:message>
+  <wsdl:message name="EchoOut"><wsdl:part name="parameters" element="tns:EchoResponse"/></wsdl:message>
+
+  <wsdl:portType name="EchoPortType">
+    <wsdl:operation name="Echo">
+      <wsdl:input message="tns:EchoIn"/>
+      <wsdl:output message="tns:EchoOut"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <wsdl:binding name="EchoSoap" type="tns:EchoPortType">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="Echo">
+      <soap:operation soapAction="http://example.com/echo/Echo"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:binding name="EchoSoap12" type="tns:EchoPortType">
+    <soap12:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="Echo">
+      <soap12:operation soapAction="http://example.com/echo/Echo"/>
+      <wsdl:input><soap12:body use="literal"/></wsdl:input>
+      <wsdl:output><soap12:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:service name="EchoService">
+    <wsdl:port name="EchoSoapPort" binding="tns:EchoSoap">
+      <soap:address location="http://localhost:18082/echo"/>
+    </wsdl:port>
+    <wsdl:port name="EchoSoap12Port" binding="tns:EchoSoap12">
+      <soap12:address location="http://localhost:18082/echo12"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    targetNamespace="http://example.com/adv/types"
+    elementFormDefault="qualified">
+
+  <xsd:simpleType name="CountryCode">
+    <xsd:annotation>
+      <xsd:documentation>ISO 3166-1 alpha-2 country code.</xsd:documentation>
+    </xsd:annotation>
+    <xsd:restriction base="xsd:string">
+      <xsd:pattern value="[A-Z]{2}"/>
+      <xsd:length value="2"/>
+    </xsd:restriction>
+  </xsd:simpleType>
+
+  <xsd:simpleType name="Percent">
+    <xsd:annotation>
+      <xsd:documentation>A percentage between 0 and 100.</xsd:documentation>
+    </xsd:annotation>
+    <xsd:restriction base="xsd:decimal">
+      <xsd:minInclusive value="0"/>
+      <xsd:maxInclusive value="100"/>
+      <xsd:fractionDigits value="2"/>
+    </xsd:restriction>
+  </xsd:simpleType>
+
+  <xsd:simpleType name="ShortText">
+    <xsd:restriction base="xsd:string">
+      <xsd:minLength value="1"/>
+      <xsd:maxLength value="80"/>
+    </xsd:restriction>
+  </xsd:simpleType>
+</xsd:schema>
