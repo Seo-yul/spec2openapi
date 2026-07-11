@@ -1,0 +1,234 @@
+openapi: 3.0.3
+info:
+  title: OrderService
+  version: 1.0.0
+  description: Generated from WSDL by spec2openapi 0.1.0. Each path is a SOAP operation exposed as a JSON
+    call.
+servers:
+- url: http://localhost:18081
+paths:
+  /operations/CreateOrder:
+    post:
+      operationId: CreateOrder
+      summary: Creates a new order for a customer with one or more items.
+      description: Creates a new order for a customer with one or more items.
+      tags:
+      - OrderService
+      x-soap:
+        operation: CreateOrder
+        service: OrderService
+        port: OrderPort
+        soapAction: http://example.com/orders/CreateOrder
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://localhost:18081/orders
+        input:
+          element: CreateOrder
+          namespace: http://example.com/orders
+        output:
+          element: CreateOrderResponse
+          namespace: http://example.com/orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                customer:
+                  allOf:
+                  - $ref: '#/components/schemas/Customer'
+                  xml:
+                    name: customer
+                    namespace: http://example.com/orders
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Item'
+                  xml:
+                    name: items
+                    namespace: http://example.com/orders
+                  minItems: 1
+                note:
+                  type: string
+                  xml:
+                    name: note
+                    namespace: http://example.com/orders
+              required:
+              - customer
+              - items
+      responses:
+        '200':
+          description: Result of SOAP operation CreateOrder
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId:
+                    type: string
+                    xml:
+                      name: orderId
+                      namespace: http://example.com/orders
+                  status:
+                    type: string
+                    enum: &id001
+                    - NEW
+                    - SHIPPED
+                    - CANCELLED
+                    x-soap-simple-type: OrderStatus
+                    xml:
+                      name: status
+                      namespace: http://example.com/orders
+                  createdAt:
+                    type: string
+                    format: date-time
+                    xml:
+                      name: createdAt
+                      namespace: http://example.com/orders
+                required:
+                - orderId
+                - status
+                - createdAt
+        '500':
+          description: SOAP Fault
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+  /operations/GetOrder:
+    post:
+      operationId: GetOrder
+      summary: Retrieves an order by its id.
+      description: Retrieves an order by its id.
+      tags:
+      - OrderService
+      x-soap:
+        operation: GetOrder
+        service: OrderService
+        port: OrderPort
+        soapAction: http://example.com/orders/GetOrder
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://localhost:18081/orders
+        input:
+          element: GetOrder
+          namespace: http://example.com/orders
+        output:
+          element: GetOrderResponse
+          namespace: http://example.com/orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                orderId:
+                  type: string
+                  xml:
+                    name: orderId
+                    namespace: http://example.com/orders
+              required:
+              - orderId
+      responses:
+        '200':
+          description: Result of SOAP operation GetOrder
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId:
+                    type: string
+                    xml:
+                      name: orderId
+                      namespace: http://example.com/orders
+                  customer:
+                    allOf:
+                    - $ref: '#/components/schemas/Customer'
+                    xml:
+                      name: customer
+                      namespace: http://example.com/orders
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+                    xml:
+                      name: items
+                      namespace: http://example.com/orders
+                  status:
+                    type: string
+                    enum: *id001
+                    x-soap-simple-type: OrderStatus
+                    xml:
+                      name: status
+                      namespace: http://example.com/orders
+                required:
+                - orderId
+                - customer
+                - status
+        '500':
+          description: SOAP Fault
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+components:
+  schemas:
+    Customer:
+      type: object
+      properties:
+        name:
+          type: string
+          xml:
+            name: name
+            namespace: http://example.com/orders
+        email:
+          type: string
+          xml:
+            name: email
+            namespace: http://example.com/orders
+      required:
+      - name
+    Item:
+      type: object
+      properties:
+        sku:
+          type: string
+          xml:
+            name: sku
+            namespace: http://example.com/orders
+        quantity:
+          type: integer
+          xml:
+            name: quantity
+            namespace: http://example.com/orders
+        price:
+          type: number
+          xml:
+            name: price
+            namespace: http://example.com/orders
+        gift:
+          type: boolean
+          xml:
+            name: gift
+            attribute: true
+      required:
+      - sku
+      - quantity
+      - price
+    SoapFault:
+      type: object
+      description: SOAP Fault mapped to a JSON error payload.
+      properties:
+        faultcode:
+          type: string
+        faultstring:
+          type: string
+        detail:
+          type: string
+x-soap:
+  wsdl: tests/fixtures/orders.wsdl
+  generator: spec2openapi/0.1.0
+  skippedOperations: []

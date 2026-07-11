@@ -1,0 +1,235 @@
+openapi: 3.0.3
+info:
+  title: ApplicationService
+  version: 1.0.0
+  description: Handles application submissions.
+servers:
+- url: http://localhost:18083
+paths:
+  /operations/SubmitApplication:
+    post:
+      operationId: SubmitApplication
+      summary: Submits an application for review.
+      description: 'Submits an application for review.
+
+        Requires SOAP header(s): AuthHeader (supplied by the runtime, not by tool arguments).
+
+        Declared faults: ValidationFault.'
+      tags:
+      - ApplicationService
+      x-soap:
+        operation: SubmitApplication
+        service: ApplicationService
+        port: ApplicationPort
+        soapAction: http://example.com/adv/SubmitApplication
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://localhost:18083/app
+        input:
+          element: SubmitApplication
+          namespace: http://example.com/adv
+        output:
+          element: SubmitApplicationResponse
+          namespace: http://example.com/adv
+        headers:
+        - element: AuthHeader
+          namespace: http://example.com/adv
+          part: header
+          schema: '#/components/schemas/AuthHeader'
+        faults:
+        - name: ValidationFault
+          element: ValidationError
+          namespace: http://example.com/adv
+          schema: '#/components/schemas/ValidationError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                applicant:
+                  allOf:
+                  - $ref: '#/components/schemas/Person'
+                  xml:
+                    name: applicant
+                    namespace: http://example.com/adv
+                  description: The person submitting the application.
+                payment:
+                  allOf:
+                  - $ref: '#/components/schemas/Money'
+                  xml:
+                    name: payment
+                    namespace: http://example.com/adv
+                discount:
+                  type: number
+                  minimum: 0.0
+                  maximum: 100.0
+                  multipleOf: 0.01
+                  description: A percentage between 0 and 100.
+                  x-soap-simple-type: Percent
+                  xml:
+                    name: discount
+                    namespace: http://example.com/adv
+                email:
+                  type: string
+                  xml:
+                    name: email
+                    namespace: http://example.com/adv
+                phone:
+                  type: string
+                  xml:
+                    name: phone
+                    namespace: http://example.com/adv
+                tags:
+                  type: array
+                  items:
+                    type: string
+                    xml:
+                      name: tags
+                      namespace: http://example.com/adv
+                  xml:
+                    name: tags
+                    namespace: http://example.com/adv
+                  maxItems: 5
+                mode:
+                  type: string
+                  default: standard
+                  xml:
+                    name: mode
+                    namespace: http://example.com/adv
+              required:
+              - applicant
+              - payment
+              x-soap-choice:
+              - members:
+                - email
+                - phone
+                required: true
+              description: 'Exactly one of: email, phone.'
+      responses:
+        '200':
+          description: Result of SOAP operation SubmitApplication
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  applicationId:
+                    type: string
+                    xml:
+                      name: applicationId
+                      namespace: http://example.com/adv
+                  score:
+                    type: number
+                    minimum: 0.0
+                    maximum: 100.0
+                    multipleOf: 0.01
+                    description: A percentage between 0 and 100.
+                    x-soap-simple-type: Percent
+                    xml:
+                      name: score
+                      namespace: http://example.com/adv
+                required:
+                - applicationId
+                - score
+        '500':
+          description: 'SOAP Fault (declared: ValidationFault)'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+components:
+  schemas:
+    Person:
+      type: object
+      properties:
+        id:
+          type: string
+          xml:
+            name: id
+            namespace: http://example.com/adv
+          description: Internal party identifier.
+        country:
+          type: string
+          pattern: '[A-Z]{2}'
+          minLength: 2
+          maxLength: 2
+          description: ISO 3166-1 alpha-2 country code.
+          x-soap-simple-type: CountryCode
+          xml:
+            name: country
+            namespace: http://example.com/adv
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          x-soap-simple-type: ShortText
+          xml:
+            name: name
+            namespace: http://example.com/adv
+        age:
+          type: integer
+          xml:
+            name: age
+            namespace: http://example.com/adv
+      required:
+      - id
+      - name
+    Money:
+      type: object
+      properties:
+        value:
+          type: number
+          xml:
+            x-text: true
+          description: Text content of the element.
+        currency:
+          type: string
+          xml:
+            name: currency
+            attribute: true
+      required:
+      - value
+      - currency
+      x-soap-simple-content: true
+    AuthHeader:
+      type: object
+      properties:
+        apiKey:
+          type: string
+          xml:
+            name: apiKey
+            namespace: http://example.com/adv
+      required:
+      - apiKey
+    ValidationError:
+      type: object
+      properties:
+        field:
+          type: string
+          xml:
+            name: field
+            namespace: http://example.com/adv
+        message:
+          type: string
+          xml:
+            name: message
+            namespace: http://example.com/adv
+      required:
+      - field
+      - message
+    SoapFault:
+      type: object
+      description: SOAP Fault mapped to a JSON error payload.
+      properties:
+        faultcode:
+          type: string
+        faultstring:
+          type: string
+        detail:
+          type: string
+x-soap:
+  wsdl: tests/fixtures/advanced.wsdl
+  generator: spec2openapi/0.1.0
+  skippedOperations: []

@@ -1,0 +1,208 @@
+openapi: 3.0.3
+info:
+  title: Legacy Petstore
+  version: 1.4.2
+  description: A Swagger 2.0 document exercising upgrade edge cases.
+servers:
+- url: https://petstore.example.com/v2
+- url: http://petstore.example.com/v2
+paths:
+  /pets:
+    get:
+      summary: List pets
+      operationId: get_pets
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          format: int32
+          default: 20
+          maximum: 100
+      - name: tags
+        in: query
+        schema:
+          type: array
+          items:
+            type: string
+        style: form
+        explode: false
+      - name: statuses
+        in: query
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+            - available
+            - sold
+        style: form
+        explode: true
+      responses:
+        '200':
+          description: pet list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+          headers:
+            X-Rate-Limit:
+              description: per hour
+              schema:
+                type: integer
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      summary: Create a pet
+      security:
+      - petstore_auth:
+        - write:pets
+      operationId: addPet
+      requestBody:
+        $ref: '#/components/requestBodies/PetBody'
+      responses:
+        '201':
+          description: created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+              example:
+                id: 1
+                name: Bella
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      parameters:
+      - $ref: '#/components/parameters/petId'
+      responses:
+        '200':
+          description: a pet
+          content:
+            application/json:
+              schema: &id001
+                $ref: '#/components/schemas/Pet'
+            application/xml:
+              schema: *id001
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: delete_pets_petId
+      parameters:
+      - $ref: '#/components/parameters/petId'
+      responses:
+        '204':
+          description: deleted
+  /pets/{petId}/photo:
+    post:
+      operationId: uploadPhoto
+      parameters:
+      - $ref: '#/components/parameters/petId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                caption:
+                  type: string
+                photo:
+                  type: string
+                  format: binary
+              required:
+              - photo
+      responses:
+        '200':
+          description: uploaded
+components:
+  schemas:
+    Animal:
+      type: object
+      discriminator:
+        propertyName: petType
+      required:
+      - petType
+      properties:
+        petType:
+          type: string
+    NewPet:
+      type: object
+      required:
+      - name
+      properties:
+        name:
+          type: string
+        tag:
+          type: string
+          nullable: true
+    Pet:
+      allOf:
+      - $ref: '#/components/schemas/NewPet'
+      - type: object
+        required:
+        - id
+        properties:
+          id:
+            type: integer
+            format: int64
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+  parameters:
+    petId:
+      name: petId
+      in: path
+      required: true
+      description: Pet identifier
+      schema:
+        type: integer
+        format: int64
+  requestBodies:
+    PetBody:
+      required: true
+      x-original-body-name: pet
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/NewPet'
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  securitySchemes:
+    basic_auth:
+      type: http
+      scheme: basic
+    api_key:
+      type: apiKey
+      name: X-API-Key
+      in: header
+    petstore_auth:
+      type: oauth2
+      flows:
+        authorizationCode:
+          scopes:
+            read:pets: read pets
+            write:pets: write pets
+          authorizationUrl: https://auth.example.com/authorize
+          tokenUrl: https://auth.example.com/token
+x-s2o:
+  source: swagger-2.0
+  generator: spec2openapi/0.1.0
+  assumptions:
+  - 'GET /pets: no operationId; generated ''get_pets'''
+  - 'GET /pets: no ''produces'' declared; assumed application/json'
+  - 'POST /pets: no ''produces'' declared; assumed application/json'
+  - 'DELETE /pets/{petId}: no operationId; generated ''delete_pets_petId'''
+  - 'responses.NotFound: no ''produces'' declared; assumed application/json'
+  lossy: []

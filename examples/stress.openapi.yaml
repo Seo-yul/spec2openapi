@@ -1,0 +1,390 @@
+openapi: 3.0.3
+info:
+  title: StressService
+  version: 1.0.0
+  description: Generated from WSDL by spec2openapi 0.1.0. Each path is a SOAP operation exposed as a JSON
+    call.
+servers:
+- url: http://localhost:18085
+paths:
+  /operations/EchoTree:
+    post:
+      operationId: EchoTree
+      summary: SOAP operation EchoTree of service StressService.
+      description: SOAP operation EchoTree of service StressService.
+      tags:
+      - StressService
+      x-soap:
+        operation: EchoTree
+        service: StressService
+        port: StressPort
+        soapAction: http://example.com/stress/EchoTree
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://localhost:18085/stress
+        input:
+          element: EchoTree
+          namespace: http://example.com/stress
+        output:
+          element: EchoTreeResponse
+          namespace: http://example.com/stress
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                root:
+                  allOf:
+                  - $ref: '#/components/schemas/Node'
+                  xml:
+                    name: root
+                    namespace: http://example.com/stress
+              required:
+              - root
+      responses:
+        '200':
+          description: Result of SOAP operation EchoTree
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  depth:
+                    type: integer
+                    xml:
+                      name: depth
+                      namespace: http://example.com/stress
+                  total:
+                    type: integer
+                    xml:
+                      name: total
+                      namespace: http://example.com/stress
+                required:
+                - depth
+                - total
+        '500':
+          description: SOAP Fault
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+  /operations/Classify:
+    post:
+      operationId: Classify
+      summary: SOAP operation Classify of service StressService.
+      description: SOAP operation Classify of service StressService.
+      tags:
+      - StressService
+      x-soap:
+        operation: Classify
+        service: StressService
+        port: StressPort
+        soapAction: http://example.com/stress/Classify
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://localhost:18085/stress
+        input:
+          element: Classify
+          namespace: http://example.com/stress
+        output:
+          element: ClassifyResponse
+          namespace: http://example.com/stress
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+                  enum:
+                  - KR
+                  - JP
+                  - CN
+                  - TW
+                  - HK
+                  - SG
+                  - TH
+                  - VN
+                  - ID
+                  - MY
+                  - PH
+                  - IN
+                  - US
+                  - CA
+                  - MX
+                  - BR
+                  - AR
+                  - CL
+                  - GB
+                  - FR
+                  - DE
+                  - IT
+                  - ES
+                  - NL
+                  - SE
+                  - 'NO'
+                  - FI
+                  - PL
+                  - TR
+                  - AE
+                  - SA
+                  - ZA
+                  - EG
+                  - AU
+                  - NZ
+                  - RU
+                  x-soap-simple-type: RegionCode
+                  xml:
+                    name: code
+                    namespace: http://example.com/stress
+                item:
+                  allOf:
+                  - $ref: '#/components/schemas/Item'
+                  xml:
+                    name: item
+                    namespace: http://example.com/stress
+                deep:
+                  allOf:
+                  - $ref: '#/components/schemas/L1'
+                  xml:
+                    name: deep
+                    namespace: http://example.com/stress
+              required:
+              - code
+              - item
+              - deep
+      responses:
+        '200':
+          description: Result of SOAP operation Classify
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    xml:
+                      name: ok
+                      namespace: http://example.com/stress
+                required:
+                - ok
+        '500':
+          description: SOAP Fault
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+  /operations/Ping:
+    post:
+      operationId: Ping
+      summary: SOAP operation Ping of service StressService.
+      description: SOAP operation Ping of service StressService.
+      tags:
+      - StressService
+      x-soap:
+        operation: Ping
+        service: StressService
+        port: StressPort
+        soapAction: http://example.com/stress/Ping
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://localhost:18085/stress
+        input:
+          element: Ping
+          namespace: http://example.com/stress
+        output:
+          element: PingResponse
+          namespace: http://example.com/stress
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                msg:
+                  type: string
+                  xml:
+                    name: msg
+                    namespace: http://example.com/stress
+              required:
+              - msg
+      responses:
+        '200':
+          description: Result of SOAP operation Ping
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg:
+                    type: string
+                    xml:
+                      name: msg
+                      namespace: http://example.com/stress
+                required:
+                - msg
+        '500':
+          description: SOAP Fault
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+  /operations/StressServiceB_Ping:
+    post:
+      operationId: StressServiceB_Ping
+      summary: SOAP operation Ping of service StressServiceB.
+      description: SOAP operation Ping of service StressServiceB.
+      tags:
+      - StressServiceB
+      x-soap:
+        operation: Ping
+        service: StressServiceB
+        port: StressBPort
+        soapAction: http://example.com/stress2/Ping
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://localhost:18085/stress
+        input:
+          element: Ping
+          namespace: http://example.com/stress2
+        output:
+          element: PingResponse
+          namespace: http://example.com/stress2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                msg:
+                  type: string
+                  xml:
+                    name: msg
+                item:
+                  allOf:
+                  - $ref: '#/components/schemas/Item_2'
+                  xml:
+                    name: item
+              required:
+              - msg
+      responses:
+        '200':
+          description: Result of SOAP operation Ping
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  msg:
+                    type: string
+                    xml:
+                      name: msg
+                required:
+                - msg
+        '500':
+          description: SOAP Fault
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        name:
+          type: string
+          xml:
+            name: name
+            namespace: http://example.com/stress
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/Node'
+          xml:
+            name: children
+            namespace: http://example.com/stress
+      required:
+      - name
+    Item:
+      type: object
+      properties:
+        sku:
+          type: string
+          xml:
+            name: sku
+            namespace: http://example.com/stress
+      required:
+      - sku
+    L1:
+      type: object
+      properties:
+        l2:
+          allOf:
+          - $ref: '#/components/schemas/L2'
+          xml:
+            name: l2
+            namespace: http://example.com/stress
+      required:
+      - l2
+    L2:
+      type: object
+      properties:
+        l3:
+          allOf:
+          - $ref: '#/components/schemas/L3'
+          xml:
+            name: l3
+            namespace: http://example.com/stress
+      required:
+      - l3
+    L3:
+      type: object
+      properties:
+        l4:
+          allOf:
+          - $ref: '#/components/schemas/L4'
+          xml:
+            name: l4
+            namespace: http://example.com/stress
+      required:
+      - l4
+    L4:
+      type: object
+      properties:
+        value:
+          type: string
+          xml:
+            name: value
+            namespace: http://example.com/stress
+      required:
+      - value
+    Item_2:
+      type: object
+      properties:
+        code:
+          type: string
+          xml:
+            name: code
+      required:
+      - code
+    SoapFault:
+      type: object
+      description: SOAP Fault mapped to a JSON error payload.
+      properties:
+        faultcode:
+          type: string
+        faultstring:
+          type: string
+        detail:
+          type: string
+x-soap:
+  wsdl: tests/fixtures/stress.wsdl
+  generator: spec2openapi/0.1.0
+  skippedOperations: []

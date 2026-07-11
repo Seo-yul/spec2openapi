@@ -1,0 +1,149 @@
+openapi: 3.0.3
+info:
+  title: CalculatorService
+  version: 1.0.0
+  description: Generated from WSDL by spec2openapi 0.1.0. Each path is a SOAP operation exposed as a JSON
+    call.
+servers:
+- url: http://localhost:18080
+paths:
+  /operations/Add:
+    post:
+      operationId: Add
+      summary: Adds two integers and returns the sum.
+      description: Adds two integers and returns the sum.
+      tags:
+      - CalculatorService
+      x-soap:
+        operation: Add
+        service: CalculatorService
+        port: CalculatorPort
+        soapAction: http://example.com/calculator/Add
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://localhost:18080/calc
+        input:
+          element: Add
+          namespace: http://example.com/calculator
+        output:
+          element: AddResponse
+          namespace: http://example.com/calculator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a:
+                  type: integer
+                  xml:
+                    name: a
+                    namespace: http://example.com/calculator
+                b:
+                  type: integer
+                  xml:
+                    name: b
+                    namespace: http://example.com/calculator
+              required:
+              - a
+              - b
+      responses:
+        '200':
+          description: Result of SOAP operation Add
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: integer
+                    xml:
+                      name: result
+                      namespace: http://example.com/calculator
+                required:
+                - result
+        '500':
+          description: SOAP Fault
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+  /operations/Divide:
+    post:
+      operationId: Divide
+      summary: Divides numerator by denominator.
+      description: Divides numerator by denominator.
+      tags:
+      - CalculatorService
+      x-soap:
+        operation: Divide
+        service: CalculatorService
+        port: CalculatorPort
+        soapAction: http://example.com/calculator/Divide
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://localhost:18080/calc
+        input:
+          element: Divide
+          namespace: http://example.com/calculator
+        output:
+          element: DivideResponse
+          namespace: http://example.com/calculator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                numerator:
+                  type: number
+                  xml:
+                    name: numerator
+                    namespace: http://example.com/calculator
+                denominator:
+                  type: number
+                  xml:
+                    name: denominator
+                    namespace: http://example.com/calculator
+              required:
+              - numerator
+              - denominator
+      responses:
+        '200':
+          description: Result of SOAP operation Divide
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: number
+                    xml:
+                      name: result
+                      namespace: http://example.com/calculator
+                required:
+                - result
+        '500':
+          description: SOAP Fault
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+components:
+  schemas:
+    SoapFault:
+      type: object
+      description: SOAP Fault mapped to a JSON error payload.
+      properties:
+        faultcode:
+          type: string
+        faultstring:
+          type: string
+        detail:
+          type: string
+x-soap:
+  wsdl: tests/fixtures/calculator.wsdl
+  generator: spec2openapi/0.1.0
+  skippedOperations: []
