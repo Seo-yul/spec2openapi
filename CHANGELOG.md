@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-11
+
 ### Added
 - **WSDL → OpenAPI 3.0/3.1 conversion** — document/literal and rpc/literal
   bindings, SOAP 1.1/1.2 (dual-port dedup, `--prefer-soap12`), nested complex
@@ -51,3 +53,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for very large trusted WSDLs.
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
+
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Seo-yul/spec2openapi/releases/tag/v0.1.0
