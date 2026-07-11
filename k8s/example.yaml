@@ -1,0 +1,84 @@
+# One fixed runtime image, many MCP servers: only this ConfigMap changes.
+#
+# Generate the spec, then load it:
+#   spec2openapi convert https://legacy-host/CalculatorService?wsdl -o openapi.yaml
+#   spec2openapi validate openapi.yaml
+#   kubectl create configmap calculator-mcp-spec --from-file=openapi.yaml \
+#     --dry-run=client -o yaml | kubectl apply -f -
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: calculator-mcp-spec
+data:
+  openapi.yaml: |
+    # paste the output of `spec2openapi convert <wsdl>` here
+    # (or create the ConfigMap with --from-file as shown above)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: calculator-mcp
+  labels:
+    app: calculator-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: calculator-mcp
+  template:
+    metadata:
+      labels:
+        app: calculator-mcp
+    spec:
+      containers:
+        - name: mcp
+          image: spec2openapi:0.1.0   # reference runtime, built from ./Dockerfile
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: spec
+              mountPath: /config
+              readOnly: true
+          env:
+            # optional overrides; the spec's x-soap.endpoint is used by default
+            - name: SPEC2OPENAPI_ENDPOINT
+              value: ""
+            - name: SPEC2OPENAPI_AUTH        # "" | basic | wsse
+              value: ""
+            - name: SPEC2OPENAPI_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: calculator-soap-credentials
+                  key: username
+                  optional: true
+            - name: SPEC2OPENAPI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: calculator-soap-credentials
+                  key: password
+                  optional: true
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+      volumes:
+        - name: spec
+          configMap:
+            name: calculator-mcp-spec
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: calculator-mcp
+spec:
+  selector:
+    app: calculator-mcp
+  ports:
+    - port: 8000
+      targetPort: 8000
+# MCP endpoint: http://calculator-mcp:8000/mcp (streamable HTTP)
