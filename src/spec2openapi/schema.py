@@ -71,36 +71,55 @@ def _coerce_default(value: str, schema: dict[str, Any]) -> Any:
 
 
 def _choice_groups(t: Any) -> list[dict[str, Any]]:
-    """Walk zeep's indicator tree to find xsd:choice member groups."""
+    """Walk zeep's indicator tree to find xsd:choice member groups.
+
+    Handles a choice at any level, including the common top-level
+    ``<complexType><choice>`` case, and choices whose branches are
+    ``<sequence>``s (the branch's leaf element names are flattened into
+    the group so mutually-exclusive fields are not all marked required).
+    """
     groups: list[dict[str, Any]] = []
 
-    def member_names(indicator) -> list[str]:
-        names = []
-        for item in indicator:
+    def leaf_names(node) -> list[str]:
+        """Every element name reachable under an indicator, flattening
+        nested sequences/groups (used to gather a choice's members)."""
+        names: list[str] = []
+        try:
+            items = list(node)
+        except TypeError:
+            return names
+        for item in items:
             if isinstance(item, tuple) and item:
                 names.append(str(item[0]))
-            else:
-                n = getattr(item, "name", None)
-                if n:
-                    names.append(n)
+                continue
+            n = getattr(item, "name", None)
+            if n:
+                names.append(n)
+            else:  # nested indicator with no name (Sequence/Choice/...)
+                names.extend(leaf_names(item))
         return names
 
-    def walk(indicator):
+    def walk(node):
+        cls = type(node).__name__
+        if cls == "Choice":
+            names = leaf_names(node)
+            if names:
+                try:
+                    required = int(getattr(node, "min_occurs", 1)) >= 1
+                except (TypeError, ValueError):
+                    required = True
+                groups.append({"members": names, "required": required})
+            return  # members already collected across all branches
+        if cls not in ("Sequence", "All", "Group"):
+            return
         try:
-            items = list(indicator)
+            items = list(node)
         except TypeError:
             return
         for item in items:
-            cls = type(item).__name__
-            if cls == "Choice":
-                names = member_names(item)
-                if names:
-                    try:
-                        required = int(getattr(item, "min_occurs", 1)) >= 1
-                    except (TypeError, ValueError):
-                        required = True
-                    groups.append({"members": names, "required": required})
-            elif cls in ("Sequence", "All", "Group"):
+            if isinstance(item, tuple):
+                continue
+            if type(item).__name__ in ("Choice", "Sequence", "All", "Group"):
                 walk(item)
 
     root = getattr(t, "_element", None)
@@ -254,7 +273,14 @@ class SchemaConverter:
             if attr is None or type(attr).__name__ == "AnyAttribute":
                 continue
             aschema = self._simple_to_schema(getattr(attr, "type", None))
-            aschema["xml"] = {"name": at_name, "attribute": True}
+            # zeep mangles the dict key when an element and an attribute
+            # share a name (e.g. "attr__id"); the wire name is attr.name
+            real_name = (
+                getattr(getattr(attr, "qname", None), "localname", None)
+                or getattr(attr, "name", None)
+                or at_name
+            )
+            aschema["xml"] = {"name": real_name, "attribute": True}
             props[at_name] = aschema
             if getattr(attr, "required", False):
                 required.append(at_name)

@@ -7,7 +7,7 @@ Optional MCP runtime (pip install 'spec2openapi[mcp]'): from_openapi_spec,
 from_wsdl, BridgeOptions, SoapBridgeTransport.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .convert import convert_wsdl, load_spec, spec_has_soap  # noqa: E402,F401
 from .openapi import build_spec, dump_spec, to_openapi_31  # noqa: E402,F401

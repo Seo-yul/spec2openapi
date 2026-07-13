@@ -20,7 +20,14 @@ WSDL ─────────┐
 Swagger 2.0 ──┘
 ```
 
-The output is a single, ordinary OpenAPI document. It is designed for a **fixed-runtime deployment model**: build one FastMCP-based container image, then swap the spec (e.g. a Kubernetes ConfigMap) to mass-produce MCP servers without rebuilding anything.
+The two inputs produce two kinds of output — this distinction matters:
+
+- **Swagger 2.0 → a plain, standard OpenAPI 3.x document.** The paths are the real REST endpoints. Any OpenAPI-driven runtime (FastMCP, or your own httpx-based server) serves it with **zero runtime changes** — just point it at the converted spec.
+- **WSDL → OpenAPI 3.x + an `x-soap` contract.** The generated `/operations/...` paths are **not real REST endpoints**; each tool call must be serialized to a SOAP envelope, sent to the SOAP endpoint, and the XML response parsed back to JSON. That logic is **not** part of a standard OpenAPI runtime — it lives in the **SOAP bridge shipped in the `[mcp]` extra**. Serving a SOAP-converted spec with a plain OpenAPI/httpx runtime will POST JSON to the SOAP endpoint and fail every call.
+
+So `spec2openapi` is a **converter for Swagger 2.0**, and a **converter + runtime contract (with a reference bridge) for SOAP**. See [How SOAP calls work](#how-soap-calls-work-the-x-soap-contract) below.
+
+The fixed-runtime deployment model — build one image, swap the spec via a Kubernetes ConfigMap to mass-produce MCP servers — applies to both, as long as the image includes the `[mcp]` extra when serving SOAP specs.
 
 ## Features
 
@@ -29,14 +36,16 @@ The output is a single, ordinary OpenAPI document. It is designed for a **fixed-
 - **`x-soap` contract** — SOAPAction, SOAP version, endpoint, wrapper element QNames, `soap:header` parts and declared faults are embedded as vendor extensions; OpenAPI `xml` annotations carry everything a call layer needs to serialize JSON ↔ literal XML.
 - **Swagger 2.0 → OpenAPI 3.x upgrade** — full mechanical mapping (servers, requestBody, formData/multipart, parameter schema wrapping, `collectionFormat` → `style`/`explode`, `$ref` rewriting, security schemes, `type: file`, `x-nullable`, discriminator). Every assumption made for missing information is recorded in `x-s2o.assumptions`; untranslatable constructs are preserved as `x-` extensions and listed in `x-s2o.lossy`.
 - **FastMCP compatibility, guaranteed and verifiable** — operationIds are generated in FastMCP's tool-name alphabet (`[A-Za-z0-9_]`, unique, ≤64 chars) so *tool name == operationId*. `spec2openapi validate` proves it: static checks, `openapi-spec-validator`, and a real `FastMCP.from_openapi()` round-trip listing the resulting tools.
-- **Reference MCP runtime (optional)** — `pip install "spec2openapi[mcp]"` adds a verified SOAP bridge (custom httpx transport) + FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors; plain REST specs are served by the same runtime.
+- **SOAP bridge — required to *serve* SOAP specs** — `pip install "spec2openapi[mcp]"` adds the bridge (custom httpx transport) that implements the `x-soap` contract, plus FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors. **Swagger-converted (pure REST) specs do not need this** — any OpenAPI runtime serves them. Only SOAP-converted specs require the bridge at runtime.
 
 ## Installation
 
 ```bash
-pip install spec2openapi          # converter only (zeep, lxml, PyYAML)
-pip install "spec2openapi[mcp]"   # + reference MCP runtime (fastmcp, httpx)
+pip install spec2openapi          # converter + CLI (zeep, lxml, PyYAML)
+pip install "spec2openapi[mcp]"   # + SOAP bridge & runtime — required to serve SOAP specs
 ```
+
+> The core install is enough to **convert** any spec and to serve **Swagger-converted (REST)** specs from your own runtime. The `[mcp]` extra is required only to **serve SOAP-converted** specs (it provides the bridge that turns JSON tool calls into SOAP envelopes).
 
 ## Quick start
 
@@ -105,7 +114,9 @@ The generated paths (`/operations/...`) are *not* real REST endpoints — a SOAP
 
 Serialization rules (schema `xml` annotations): `xml.name`/`xml.namespace` (absent namespace = unqualified), `xml.attribute: true`, `xml.x-text: true` (simpleContent text), arrays repeat the element, and **property order = XSD sequence order** (do not alphabetize the document). `x-soap-choice` lists mutually exclusive property groups.
 
-The `[mcp]` extra contains a verified implementation of this contract (`src/spec2openapi/bridge.py`) — use it directly or as the reference for your own runtime.
+The `[mcp]` extra contains a verified implementation of this contract (`src/spec2openapi/bridge.py`) — use it directly (via `spec2openapi serve`) or as the reference for your own runtime. **There is no way to serve a SOAP-converted spec without an implementation of this contract**; a standard OpenAPI runtime cannot do it.
+
+> **Mixed SOAP + REST specs.** The reference runtime routes *all* traffic through the SOAP bridge if *any* path carries `x-soap`, so REST operations in a mixed spec are not served correctly today. Keep SOAP and REST specs separate until this is addressed ([tracking issue](https://github.com/Seo-yul/spec2openapi/issues)).
 
 ## Handling missing information (Swagger 2.0)
 
@@ -118,7 +129,7 @@ Upgrading is favorable: OpenAPI 3.x is a superset of Swagger 2.0, so almost noth
 ## Kubernetes: one image, many MCP servers
 
 ```bash
-docker build -t spec2openapi:0.1.0 .
+docker build -t spec2openapi:0.2.0 .
 spec2openapi convert <wsdl> -o openapi.yaml
 kubectl create configmap my-mcp-spec --from-file=openapi.yaml
 kubectl apply -f k8s/example.yaml    # Deployment mounts /config/openapi.yaml
@@ -143,7 +154,7 @@ pip install -e ".[dev]"
 python -m pytest tests/
 ```
 
-The suite (70 tests) covers conversion units, the Swagger upgrader, envelope (de)serialization, end-to-end MCP-tool-call → mock-SOAP-server round-trips (rpc, simpleContent, choice, recursive trees, unqualified forms), FastMCP round-trips for every fixture × OpenAPI 3.0/3.1, and stress patterns (circular `$ref`s, deep nesting, large enums, cross-namespace name collisions, duplicate operation names across services, odd path characters, deep `allOf` chains). Generated samples live in [`examples/`](examples/).
+The suite (103 tests) covers conversion units, the Swagger upgrader, envelope (de)serialization, end-to-end MCP-tool-call → mock-SOAP-server round-trips (rpc, simpleContent, choice, recursive trees, unqualified forms), FastMCP round-trips for every fixture × OpenAPI 3.0/3.1, and stress patterns (circular `$ref`s, deep nesting, large enums, cross-namespace name collisions, duplicate operation names across services, odd path characters, deep `allOf` chains). Generated samples live in [`examples/`](examples/).
 
 ## Project layout
 

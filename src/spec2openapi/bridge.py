@@ -37,6 +37,36 @@ PASSWORD_TEXT = (
 )
 
 
+_FALSEY = {"0", "false", "no", "off", ""}
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    v = raw.strip().lower()
+    if v in _FALSEY:
+        return False
+    if v in _TRUTHY:
+        return True
+    logger.warning("env %s=%r not recognized as boolean; using %s",
+                   name, raw, default)
+    return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("env %s=%r is not a number; using %s",
+                       name, raw, default)
+        return default
+
+
 @dataclasses.dataclass
 class BridgeOptions:
     """Runtime options, typically injected via env vars in the container."""
@@ -57,10 +87,9 @@ class BridgeOptions:
             username=os.getenv("SPEC2OPENAPI_USERNAME") or None,
             password=os.getenv("SPEC2OPENAPI_PASSWORD") or None,
             auth=os.getenv("SPEC2OPENAPI_AUTH") or None,
-            timeout=float(os.getenv("SPEC2OPENAPI_TIMEOUT", "30")),
-            verify=os.getenv("SPEC2OPENAPI_VERIFY", "1") not in ("0", "false", "False"),
-            trust_env=os.getenv("SPEC2OPENAPI_TRUST_ENV", "1")
-            not in ("0", "false", "False"),
+            timeout=_env_float("SPEC2OPENAPI_TIMEOUT", 30.0),
+            verify=_env_bool("SPEC2OPENAPI_VERIFY", True),
+            trust_env=_env_bool("SPEC2OPENAPI_TRUST_ENV", True),
         )
 
 
@@ -188,6 +217,24 @@ def _write_object(parent: etree._Element, schema: dict, data: Any,
             logger.debug("payload key %r not in schema; ignored", name)
 
 
+def _choice_violations(schema: dict[str, Any], data: Any) -> list[str]:
+    """Enforce x-soap-choice on the payload: at most one member per group,
+    and exactly one when the group is required."""
+    if not isinstance(data, dict):
+        return []
+    errors: list[str] = []
+    for group in schema.get("x-soap-choice", []) or []:
+        members = group.get("members", [])
+        present = [m for m in members if data.get(m) is not None]
+        if len(present) > 1:
+            errors.append(
+                f"at most one of {members} may be set (got {present})"
+            )
+        elif group.get("required") and not present:
+            errors.append(f"exactly one of {members} is required")
+    return errors
+
+
 def build_envelope(op: dict[str, Any], payload: dict[str, Any],
                    index: _SpecIndex, options: BridgeOptions) -> bytes:
     xsoap = op["x-soap"]
@@ -246,7 +293,12 @@ def _coerce(text: str | None, schema: dict[str, Any]) -> Any:
         if t == "number":
             return float(s)
         if t == "boolean":
-            return s in ("true", "1")
+            low = s.lower()
+            if low in ("true", "1"):
+                return True
+            if low in ("false", "0"):
+                return False
+            return text  # non-canonical: don't silently coerce to False
     except ValueError:
         return text
     return text if t == "string" else (text if s == "" else s)
@@ -328,17 +380,43 @@ def parse_fault(body: etree._Element, env_ns: str) -> dict[str, Any] | None:
     return {"faultcode": code, "faultstring": reason, "detail": detail}
 
 
+def _http_error(http_status: int, content: bytes) -> tuple[int, dict[str, Any]]:
+    return 502, {
+        "faultcode": "spec2openapi.HTTPError",
+        "faultstring": f"endpoint returned HTTP {http_status}",
+        "detail": content[:2000].decode("utf-8", "replace"),
+    }
+
+
 def parse_response(content: bytes, op: dict[str, Any],
-                   index: _SpecIndex) -> tuple[int, dict[str, Any]]:
-    """Returns (http_status, json_payload)."""
+                   index: _SpecIndex,
+                   http_status: int = 200) -> tuple[int, dict[str, Any]]:
+    """Returns (mapped_status, json_payload). http_status is the transport
+    status code, used to give sensible errors for empty/non-XML bodies."""
     xsoap = op["x-soap"]
+    is_one_way = not xsoap.get("output")
     env_ns = SOAP_ENV_NS.get(xsoap.get("soapVersion", "1.1"), SOAP_ENV_NS["1.1"])
+
+    if not content or not content.strip():
+        # empty body: a one-way call with a 2xx succeeded; otherwise the
+        # HTTP status carries the real story
+        if http_status >= 400:
+            return _http_error(http_status, content)
+        if is_one_way:
+            return 200, {}
+        return 502, {
+            "faultcode": "spec2openapi.EmptyResponse",
+            "faultstring": f"endpoint returned an empty body (HTTP {http_status})",
+            "detail": "",
+        }
     try:
         # endpoint responses are untrusted: no entities, DTDs, or network
         parser = etree.XMLParser(resolve_entities=False, load_dtd=False,
                                  no_network=True, huge_tree=False)
         tree = etree.fromstring(content, parser=parser)
     except Exception as exc:
+        if http_status >= 400:
+            return _http_error(http_status, content)
         return 502, {
             "faultcode": "spec2openapi.InvalidXML",
             "faultstring": f"endpoint returned non-XML response: {exc}",
@@ -353,6 +431,8 @@ def parse_response(content: bytes, op: dict[str, Any],
                 env_ns = alt
                 break
     if body is None:
+        if http_status >= 400:
+            return _http_error(http_status, content)
         return 502, {
             "faultcode": "spec2openapi.NoBody",
             "faultstring": "no SOAP Body found in response",
@@ -444,6 +524,16 @@ class SoapBridgeTransport(httpx.AsyncBaseTransport):
                  "detail": ""},
             )
 
+        violations = _choice_violations(
+            self.index.deref(op.get("input", {})), payload
+        )
+        if violations:
+            return self._json_response(
+                request, 400,
+                {"faultcode": "spec2openapi.ChoiceViolation",
+                 "faultstring": "; ".join(violations), "detail": ""},
+            )
+
         envelope = build_envelope(op, payload, self.index, self.options)
         action = xsoap.get("soapAction", "")
         if xsoap.get("soapVersion") == "1.2":
@@ -468,11 +558,7 @@ class SoapBridgeTransport(httpx.AsyncBaseTransport):
                  "faultstring": f"SOAP endpoint unreachable: {exc}", "detail": ""},
             )
 
-        status, data = parse_response(soap_resp.content, op, self.index)
-        # a SOAP fault usually arrives as HTTP 500; trust envelope content
-        if status == 200 and soap_resp.status_code >= 400 and not data:
-            status = 502
-            data = {"faultcode": "spec2openapi.HTTPError",
-                    "faultstring": f"endpoint returned HTTP {soap_resp.status_code}",
-                    "detail": soap_resp.text[:2000]}
+        status, data = parse_response(
+            soap_resp.content, op, self.index, soap_resp.status_code
+        )
         return self._json_response(request, status, data)

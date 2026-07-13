@@ -17,6 +17,10 @@ from . import __version__
 
 _MCP_HINT = "install the MCP runtime extras first: pip install 'spec2openapi[mcp]'"
 
+_HTTP_METHODS = frozenset(
+    ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+)
+
 
 def _is_wsdl_source(src: str) -> bool:
     low = src.lower()
@@ -28,8 +32,12 @@ def _is_wsdl_source(src: str) -> bool:
         return True
     p = Path(src)
     if p.exists():
-        head = p.read_text(encoding="utf-8", errors="replace")[:512].lstrip()
+        head = p.read_text(encoding="utf-8-sig", errors="replace")[:512].lstrip()
         return head.startswith("<")
+    # a remote URL without a spec extension: zeep can fetch WSDLs, and
+    # load_spec cannot read a URL, so treat it as WSDL
+    if low.startswith(("http://", "https://")):
+        return True
     return False
 
 
@@ -89,7 +97,7 @@ def cmd_convert(args) -> int:
         openapi_version=args.openapi_version,
         forbid_external=args.forbid_external, huge_tree=args.huge_tree,
     )
-    fmt = args.format or ("json" if (args.output or "").endswith(".json") else "yaml")
+    fmt = args.format or ("json" if (args.output or "").lower().endswith(".json") else "yaml")
     text = dump_spec(spec, fmt)
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")
@@ -139,7 +147,7 @@ def cmd_upgrade(args) -> int:
             print(f"{kind[:-1] if kind.endswith('s') else kind}: {msg}",
                   file=sys.stderr)
 
-    fmt = args.format or ("json" if (args.output or "").endswith(".json") else "yaml")
+    fmt = args.format or ("json" if (args.output or "").lower().endswith(".json") else "yaml")
     text = dump_spec(upgraded, fmt)
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")
@@ -164,8 +172,11 @@ def cmd_validate(args) -> int:
         problems.append("spec has no paths")
     op_ids: list[str] = []
     for path, item in paths.items():
-        for method, op in (item or {}).items():
-            if not isinstance(op, dict):
+        if not isinstance(item, dict):
+            continue
+        for method, op in item.items():
+            # only HTTP methods are operations; skip parameters/$ref/x- keys
+            if method.lower() not in _HTTP_METHODS or not isinstance(op, dict):
                 continue
             oid = op.get("operationId")
             if not oid:
@@ -174,7 +185,8 @@ def cmd_validate(args) -> int:
             op_ids.append(oid)
             if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", oid):
                 problems.append(f"{oid}: not a safe MCP tool name")
-            if op.get("x-soap") and not op["x-soap"].get("input", {}).get("element"):
+            xsoap = op.get("x-soap")
+            if isinstance(xsoap, dict) and not xsoap.get("input", {}).get("element"):
                 problems.append(f"{oid}: x-soap.input.element missing")
     dupes = {o for o in op_ids if op_ids.count(o) > 1}
     if dupes:
@@ -195,9 +207,15 @@ def cmd_validate(args) -> int:
 
     try:  # FastMCP round-trip: the compatibility this project guarantees
         import anyio
+        import httpx
         from fastmcp import Client, FastMCP
 
-        mcp = FastMCP.from_openapi(openapi_spec=spec, name="validate")
+        # supply a dummy client so specs without a `servers` entry still
+        # convert — validate measures tool convertibility, not deployment
+        dummy = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+        mcp = FastMCP.from_openapi(
+            openapi_spec=spec, name="validate", client=dummy
+        )
 
         async def _tools():
             async with Client(mcp) as client:
@@ -238,17 +256,19 @@ def cmd_validate(args) -> int:
 
 
 def cmd_serve(args) -> int:
+    spec = _load_or_convert(args.source)
     try:
+        # everything [mcp]-flavored lives inside the guard: server, the
+        # bridge import in _bridge_options, and fastmcp's lazy imports
         from .server import from_openapi_spec
+
+        mcp = from_openapi_spec(
+            spec, options=_bridge_options(args),
+            validate_output=args.validate_output,
+        )
     except ImportError:
         print(f"error: {_MCP_HINT}", file=sys.stderr)
         return 2
-
-    spec = _load_or_convert(args.source)
-    mcp = from_openapi_spec(
-        spec, options=_bridge_options(args),
-        validate_output=args.validate_output,
-    )
     if args.transport == "http":
         mcp.run(transport="http", host=args.host, port=args.port,
                 path=args.path, show_banner=False)
@@ -323,7 +343,12 @@ def main(argv: list[str] | None = None) -> int:
     s.set_defaults(fn=cmd_serve)
 
     args = ap.parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        # expected user-input errors: one-line message, not a traceback
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

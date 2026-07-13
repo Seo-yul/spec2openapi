@@ -44,14 +44,21 @@ def convert_wsdl(
 
 
 def load_spec(path: str | Path) -> dict[str, Any]:
-    """Load an OpenAPI spec from a .yaml/.yml/.json file."""
+    """Load an OpenAPI/Swagger spec from a .yaml/.yml/.json file."""
     p = Path(path)
-    text = p.read_text(encoding="utf-8")
+    text = p.read_text(encoding="utf-8-sig")
     if p.suffix.lower() == ".json" or text.lstrip().startswith("{"):
-        return json.loads(text)
-    import yaml
+        spec = json.loads(text)
+    else:
+        import yaml
 
-    return yaml.safe_load(text)
+        spec = yaml.safe_load(text)
+    if not isinstance(spec, dict):
+        raise ValueError(
+            f"{p}: not a valid OpenAPI/Swagger document "
+            f"(parsed as {type(spec).__name__}, expected a mapping)"
+        )
+    return spec
 
 
 def spec_has_soap(spec: dict[str, Any]) -> bool:

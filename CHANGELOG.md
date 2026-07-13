@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-13
+
+### Changed
+- Documentation repositioned to make the SOAP vs Swagger distinction
+  explicit: Swagger 2.0 converts to a standard REST OpenAPI document that
+  any runtime serves unchanged, while SOAP/WSDL converts to OpenAPI +
+  `x-soap` and **requires the `[mcp]` bridge to be served** (#6).
+
+### Fixed
+- `spec2openapi serve` without the `[mcp]` extra now prints the install
+  hint and exits with code 2 instead of crashing with a raw
+  `ModuleNotFoundError` traceback (#4).
+- **Core converter correctness** (#8):
+  - operationIds are re-checked for uniqueness *after* normalization and
+    64-char truncation, so two operations can no longer collide onto the
+    same path and silently drop one (WSDL and Swagger paths).
+  - a top-level `<xsd:choice>` is now detected (previously only nested
+    choices produced `x-soap-choice`); choices whose branches are
+    `<sequence>`s no longer mark every branch field `required`.
+  - a WSDL type named `SoapFault` is no longer clobbered by the built-in
+    fault schema.
+  - attribute `xml.name` uses the real attribute name, not zeep's mangled
+    `attr__id` key when an element and attribute share a name.
+  - Swagger upgrader: operationId normalizing to empty falls back to a
+    generated id; operation-level parameters override path-level ones
+    instead of duplicating; `basePath` without a leading slash is
+    normalized; boolean `exclusiveMinimum/Maximum` no longer leak into
+    3.1 output; `example`/`default`/`enum` data values are no longer
+    rewritten; paths-level vendor extensions and `$ref` path items are
+    preserved; more silently-dropped constructs (second body param,
+    formData `collectionFormat`, root `x-` extensions, missing `info`,
+    oauth2 without `flow`) are now recorded in `x-s2o`.
+- **Runtime (bridge/serve/CLI) robustness** (#10):
+  - one-way SOAP operations with an empty 2xx body now succeed instead of
+    failing with a spurious `InvalidXML` fault.
+  - HTTP errors without a SOAP fault body report the real status code and
+    body excerpt instead of a misleading `InvalidXML`/`NoBody` fault.
+  - `x-soap-choice` is enforced when serializing: setting more than one
+    member (or none of a required group) returns a client-side error
+    instead of emitting invalid XML.
+  - `SPEC2OPENAPI_TIMEOUT`/`VERIFY`/`TRUST_ENV` parsing no longer crashes
+    on bad values (warns and falls back); boolean env vars are
+    case-insensitive.
+  - non-canonical XML booleans (e.g. `TRUE`) are no longer silently read
+    as `False`.
+  - CLI user-input errors (missing file, wrong type, malformed WSDL, bad
+    output path) print a one-line `error:` and exit 2 instead of dumping a
+    traceback.
+  - WSDL files with a UTF-8 BOM and extension-less WSDL URLs are routed
+    correctly; output `--format` inference is case-insensitive.
+  - `validate` no longer flags path-level vendor extensions as operations,
+    and validates REST specs that omit a `servers` entry.
+  - `serve` warns when a spec mixes SOAP and REST operations (the
+    reference runtime routes everything through the SOAP bridge).
+
 ## [0.1.0] - 2026-07-11
 
 ### Added
@@ -54,5 +109,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Seo-yul/spec2openapi/releases/tag/v0.1.0

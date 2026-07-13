@@ -1,0 +1,101 @@
+<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:edge" targetNamespace="urn:edge">
+  <types>
+    <xsd:schema targetNamespace="urn:edge" xmlns:tns="urn:edge"
+                elementFormDefault="qualified">
+      <!-- top-level choice: must produce x-soap-choice -->
+      <xsd:element name="TopChoice">
+        <xsd:complexType>
+          <xsd:choice>
+            <xsd:element name="cash" type="xsd:string"/>
+            <xsd:element name="card" type="xsd:string"/>
+          </xsd:choice>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="TopChoiceResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="ok" type="xsd:boolean"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+
+      <!-- choice whose branches are sequences: members flattened, not all required -->
+      <xsd:element name="SeqChoice">
+        <xsd:complexType>
+          <xsd:choice>
+            <xsd:sequence>
+              <xsd:element name="cardNumber" type="xsd:string"/>
+              <xsd:element name="cardExpiry" type="xsd:string"/>
+            </xsd:sequence>
+            <xsd:sequence>
+              <xsd:element name="iban" type="xsd:string"/>
+            </xsd:sequence>
+          </xsd:choice>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="SeqChoiceResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <!-- a WSDL type literally named SoapFault, referenced from a real op -->
+            <xsd:element name="fault" type="tns:SoapFault"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:complexType name="SoapFault">
+        <xsd:sequence>
+          <xsd:element name="errorCode" type="xsd:string"/>
+          <xsd:element name="errorDetail" type="xsd:string"/>
+        </xsd:sequence>
+      </xsd:complexType>
+
+      <!-- element and attribute sharing a name: attribute xml.name must be "id" -->
+      <xsd:element name="Clash">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="id" type="xsd:string"/>
+          </xsd:sequence>
+          <xsd:attribute name="id" type="xsd:string"/>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="ClashResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="ok" type="xsd:boolean"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+
+  <message name="TopChoiceIn"><part name="p" element="tns:TopChoice"/></message>
+  <message name="TopChoiceOut"><part name="p" element="tns:TopChoiceResponse"/></message>
+  <message name="SeqChoiceIn"><part name="p" element="tns:SeqChoice"/></message>
+  <message name="SeqChoiceOut"><part name="p" element="tns:SeqChoiceResponse"/></message>
+  <message name="ClashIn"><part name="p" element="tns:Clash"/></message>
+  <message name="ClashOut"><part name="p" element="tns:ClashResponse"/></message>
+
+  <portType name="pt">
+    <!-- two operations that sanitize to the same id "Get_Data" -->
+    <operation name="Get.Data"><input message="tns:TopChoiceIn"/><output message="tns:TopChoiceOut"/></operation>
+    <operation name="Get-Data"><input message="tns:SeqChoiceIn"/><output message="tns:SeqChoiceOut"/></operation>
+    <operation name="Clash"><input message="tns:ClashIn"/><output message="tns:ClashOut"/></operation>
+  </portType>
+
+  <binding name="b" type="tns:pt">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="Get.Data"><soap:operation soapAction="urn:GetDotData"/>
+      <input><soap:body use="literal"/></input><output><soap:body use="literal"/></output></operation>
+    <operation name="Get-Data"><soap:operation soapAction="urn:GetDashData"/>
+      <input><soap:body use="literal"/></input><output><soap:body use="literal"/></output></operation>
+    <operation name="Clash"><soap:operation soapAction="urn:Clash"/>
+      <input><soap:body use="literal"/></input><output><soap:body use="literal"/></output></operation>
+  </binding>
+
+  <service name="s">
+    <port name="pp" binding="tns:b"><soap:address location="http://example.com/edge"/></port>
+  </service>
+</definitions>

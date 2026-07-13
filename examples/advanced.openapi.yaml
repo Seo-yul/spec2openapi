@@ -141,6 +141,16 @@ paths:
                 $ref: '#/components/schemas/SoapFault'
 components:
   schemas:
+    SoapFault:
+      type: object
+      description: SOAP Fault mapped to a JSON error payload.
+      properties:
+        faultcode:
+          type: string
+        faultstring:
+          type: string
+        detail:
+          type: string
     Person:
       type: object
       properties:
@@ -219,17 +229,7 @@ components:
       required:
       - field
       - message
-    SoapFault:
-      type: object
-      description: SOAP Fault mapped to a JSON error payload.
-      properties:
-        faultcode:
-          type: string
-        faultstring:
-          type: string
-        detail:
-          type: string
 x-soap:
   wsdl: tests/fixtures/advanced.wsdl
-  generator: spec2openapi/0.1.0
+  generator: spec2openapi/0.2.0
   skippedOperations: []
