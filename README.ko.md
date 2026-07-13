@@ -6,28 +6,30 @@
 
 기여 방법은 [CONTRIBUTING.md](CONTRIBUTING.md), 행동 강령은 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), 보안 제보는 [SECURITY.md](SECURITY.md)를 참고. 라이선스는 [Apache-2.0](LICENSE).
 
-산출물은 OpenAPI 문서 하나다. 이 문서는 (1) `FastMCP.from_openapi()`에 그대로 넣으면 각 SOAP 오퍼레이션이 MCP tool로 생성되고, (2) `x-soap` 확장과 `xml` 어노테이션에 SOAP 바인딩 정보가 전부 들어 있어 openapi→MCP 런타임이 실제 SOAP 호출을 구현할 수 있다.
+두 입력의 산출물 성격이 다르다 — 이 구분이 중요하다.
+
+- **Swagger 2.0 → 평범한 표준 OpenAPI 3.x 문서.** 경로가 실제 REST 엔드포인트다. 어떤 OpenAPI 런타임(FastMCP나 자체 httpx 서버)에 넣어도 **런타임 변경 0**으로 실제 API를 호출한다.
+- **WSDL → OpenAPI 3.x + `x-soap` 계약.** 생성된 `/operations/...` 경로는 **실제 REST 엔드포인트가 아니다.** 각 tool 호출을 SOAP envelope으로 직렬화 → SOAP 엔드포인트로 POST → XML 응답을 JSON으로 역직렬화하는 계층이 필요하고, 그 계층은 표준 OpenAPI 런타임에 없다 — **`[mcp]` extra의 SOAP 브리지**가 그 구현이다. SOAP 변환 스펙을 일반 OpenAPI/httpx 런타임으로 서빙하면 SOAP 서버에 JSON을 그대로 POST해서 전부 실패한다.
+
+즉 spec2openapi는 **Swagger 2.0에 대해서는 순수 변환기**, **SOAP에 대해서는 변환기 + 런타임 계약(참조 브리지 포함)**이다.
 
 ```
-WSDL ──(spec2openapi convert)──> OpenAPI 스펙 (x-soap 확장 포함)
-                                        │
-                                        ▼
-                        별도의 openapi→MCP 런타임 (FastMCP 기반)
-                        · tool 생성: FastMCP.from_openapi() 그대로 사용
-                        · SOAP 호출: x-soap + xml 어노테이션으로 JSON↔XML 변환
-```
+Swagger 2.0 ──(convert)──> 표준 REST OpenAPI ──> 어떤 OpenAPI 런타임이든 그대로 서빙
 
-주의: 생성된 스펙의 경로(`/operations/...`)는 실제 REST 엔드포인트가 아니다. SOAP 호출 변환 계층 없이 일반 REST 클라이언트로 호출하면 동작하지 않는다. 변환 계층의 검증된 참조 구현이 `[mcp]` extra에 포함되어 있다(아래 참조).
+WSDL ──(convert)──> OpenAPI + x-soap 계약 ──> [mcp] 브리지(필수)로만 실제 SOAP 호출
+```
 
 ## 설치
 
 ```bash
-pip install spec2openapi          # 변환기만 (zeep, lxml, PyYAML)
-pip install "spec2openapi[mcp]"   # + 참조 MCP 런타임 (fastmcp, httpx)
+pip install spec2openapi          # 변환기 + CLI (zeep, lxml, PyYAML)
+pip install "spec2openapi[mcp]"   # + SOAP 브리지·런타임 — SOAP 스펙 서빙에 필수
 
 # 소스 체크아웃에서 개발용 설치 (테스트/검증 도구 포함)
 pip install -e ".[dev]"
 ```
+
+> 코어 설치만으로 모든 스펙을 **변환**할 수 있고, **Swagger 변환(REST)** 스펙은 자체 런타임으로 서빙할 수 있다. `[mcp]` extra는 **SOAP 변환 스펙을 서빙**할 때만 필요하다(JSON tool 호출을 SOAP envelope으로 바꾸는 브리지 제공).
 
 ## CLI
 
@@ -128,9 +130,11 @@ XML 직렬화 규칙(스키마의 `xml` 어노테이션):
 
 루트 `x-soap`에는 원본 WSDL 경로, 생성기 버전, 스킵된 오퍼레이션 목록이 기록된다.
 
-## 참조 MCP 런타임 ([mcp] extra)
+## SOAP 브리지 ([mcp] extra) — SOAP 스펙 서빙에 필수
 
-`from_openapi_spec()` + SOAP 브리지(커스텀 httpx transport)가 위 계약의 검증된 구현이다. tool 호출 JSON을 SOAP envelope으로 직렬화하고 응답 XML을 응답 스키마 기준의 타입 있는 JSON으로 되돌리며, SOAP Fault는 MCP tool 에러로 매핑된다. `x-soap`이 없는 일반 REST 스펙도 같은 코드로 서빙된다.
+`from_openapi_spec()` + SOAP 브리지(커스텀 httpx transport)가 위 계약의 구현이다. tool 호출 JSON을 SOAP envelope으로 직렬화하고 응답 XML을 응답 스키마 기준의 타입 있는 JSON으로 되돌리며, SOAP Fault는 MCP tool 에러로 매핑된다. **SOAP 변환 스펙은 이 계약의 구현 없이는 서빙할 수 없다** — 표준 OpenAPI 런타임으로는 불가능하다. 반대로 Swagger 변환(순수 REST) 스펙은 `[mcp]` 없이 어떤 OpenAPI 런타임으로도 서빙된다.
+
+> **SOAP + REST 혼합 스펙 주의.** 현재 참조 런타임은 한 경로라도 `x-soap`이 있으면 *전체* 트래픽을 SOAP 브리지로 라우팅하므로, 혼합 스펙의 REST 오퍼레이션은 올바르게 서빙되지 않는다. 해결 전까지 SOAP 스펙과 REST 스펙을 분리해서 쓸 것.
 
 런타임 환경변수: `SPEC2OPENAPI_ENDPOINT`(엔드포인트 오버라이드), `SPEC2OPENAPI_AUTH`(`basic`|`wsse`), `SPEC2OPENAPI_USERNAME`/`SPEC2OPENAPI_PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`.
 
