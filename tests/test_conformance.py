@@ -40,6 +40,60 @@ def test_invalid_security_dropped_not_emitted(defs, version):
     assert out["x-s2o"]["lossy"]  # and recorded
 
 
+# -- H4 partial info ---------------------------------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+@pytest.mark.parametrize("info", [
+    {"title": "t"},        # no version
+    {"version": "1"},      # no title
+    {},                    # empty
+])
+def test_partial_info_completed(info, version):
+    out = _valid({"swagger": "2.0", "info": info, "paths": {}}, version)
+    assert out["info"]["title"]
+    assert out["info"]["version"]
+
+
+def test_missing_info_completed():
+    out = _valid({"swagger": "2.0", "paths": {}})
+    assert out["info"] == {"title": "API", "version": "0.0.0"}
+
+
+# -- H7 unresolved path template --------------------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_unresolved_path_template_injected(version):
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a/{id}": {"get": {
+            "operationId": "a", "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src, version)
+    params = out["paths"]["/a/{id}"]["get"]["parameters"]
+    injected = [p for p in params if p.get("name") == "id"]
+    assert injected and injected[0]["in"] == "path"
+    assert injected[0]["required"] is True
+    assert any("path template" in a for a in out["x-s2o"]["assumptions"])
+
+
+def test_partly_declared_path_templates():
+    """One template declared, one missing -> only the missing one injected."""
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a/{x}/{y}": {"get": {
+            "operationId": "a",
+            "parameters": [{"name": "x", "in": "path", "required": True,
+                            "type": "string"}],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src, "3.1")
+    names = [p["name"] for p in out["paths"]["/a/{x}/{y}"]["get"]["parameters"]
+             if p.get("in") == "path"]
+    assert sorted(names) == ["x", "y"]
+
+
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
 def test_valid_security_preserved(version):
     defs = {
