@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `spec2openapi serve` without the `[mcp]` extra now prints the install
+  hint and exits with code 2 instead of crashing with a raw
+  `ModuleNotFoundError` traceback (#4).
+
 ## [0.1.0] - 2026-07-11
 
 ### Added

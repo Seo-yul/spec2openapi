@@ -12,7 +12,7 @@ pip install -e ".[dev]"
 python -m pytest tests/
 ```
 
-All 70 tests should pass before you start. Python 3.10+ is required.
+All 71 tests should pass before you start. Python 3.10+ is required.
 
 ## What to work on
 

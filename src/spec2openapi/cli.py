@@ -238,17 +238,19 @@ def cmd_validate(args) -> int:
 
 
 def cmd_serve(args) -> int:
+    spec = _load_or_convert(args.source)
     try:
+        # everything [mcp]-flavored lives inside the guard: server, the
+        # bridge import in _bridge_options, and fastmcp's lazy imports
         from .server import from_openapi_spec
+
+        mcp = from_openapi_spec(
+            spec, options=_bridge_options(args),
+            validate_output=args.validate_output,
+        )
     except ImportError:
         print(f"error: {_MCP_HINT}", file=sys.stderr)
         return 2
-
-    spec = _load_or_convert(args.source)
-    mcp = from_openapi_spec(
-        spec, options=_bridge_options(args),
-        validate_output=args.validate_output,
-    )
     if args.transport == "http":
         mcp.run(transport="http", host=args.host, port=args.port,
                 path=args.path, show_banner=False)
