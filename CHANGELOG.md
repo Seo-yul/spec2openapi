@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ConversionError` (exported; subclass of `ValueError`) raised when a
+  source cannot be faithfully converted, so failures surface as a clear
+  message (CLI: `error: …`, exit 2) instead of a silent skip (#25).
+
 ### Fixed
+- Unconvertible input now fails loudly instead of being dropped silently
+  (#25): an XSD element with an unresolvable type (which would drop a
+  required schema property) and a WSDL that yields zero convertible SOAP
+  operations both raise `ConversionError` with a message explaining what
+  could not be converted.
 - Swagger upgrader: `in: path` parameters are now forced to
   `required: true` (mandatory in OpenAPI 3); a source that omitted it no
   longer yields an invalid spec, and the coercion is recorded in
