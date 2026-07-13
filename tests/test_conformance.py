@@ -183,6 +183,36 @@ def test_formdata_without_name_does_not_crash():
     assert out["x-s2o"]["lossy"]
 
 
+# -- safe defaults are recorded (never invent silently) ----------------------
+
+def test_synthesized_responses_recorded():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {"operationId": "a"}}}}  # no responses
+    out = _valid(src)
+    assert out["paths"]["/a"]["get"]["responses"]  # a 200 was synthesized
+    assert any("no responses" in a for a in out["x-s2o"]["assumptions"])
+
+
+def test_missing_response_description_recorded():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a",
+               "responses": {"200": {"schema": {"type": "string"}}},  # no description
+           }}}}
+    out = _valid(src)
+    assert any("description" in a for a in out["x-s2o"]["assumptions"])
+
+
+def test_non_object_param_dropped_recorded():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a", "parameters": ["garbage"],
+               "responses": {"200": {"description": "ok"}},
+           }}}}
+    out = _valid(src)
+    assert any("non-object parameter" in m for m in out["x-s2o"]["lossy"])
+
+
 # -- M1-M4 GIGO hardening ----------------------------------------------------
 
 def test_non_boolean_required_coerced():

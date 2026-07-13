@@ -281,6 +281,9 @@ class _Upgrader:
         form: list[dict] = []
         for p in raw:
             if not isinstance(p, dict):
+                self.lossy.append(
+                    f"{ctx}: a non-object parameter entry was dropped"
+                )
                 continue
             if "$ref" in p:
                 ref = self._fix_ref(p["$ref"])
@@ -322,9 +325,14 @@ class _Upgrader:
     def _convert_response(self, resp: dict, op: dict, ctx: str) -> dict:
         if "$ref" in resp:
             return {"$ref": self._fix_ref(resp["$ref"])}
-        out: dict[str, Any] = {
-            "description": resp.get("description", "")
-        }
+        description = resp.get("description")
+        if not description:  # required on the OA3 Response Object
+            description = ""
+            self.assumptions.append(
+                f"{ctx}: response missing 'description' (required in "
+                "OpenAPI 3); used an empty string"
+            )
+        out: dict[str, Any] = {"description": description}
         for k, v in resp.items():
             if k.startswith("x-"):
                 out[k] = v
@@ -500,6 +508,9 @@ class _Upgrader:
                 out["paths"][path] = item
                 continue
             if not isinstance(item, dict):
+                self.lossy.append(
+                    f"path '{path}': non-object path item dropped"
+                )
                 continue
             if "$ref" in item:  # path item is a $ref (legal in OpenAPI 3)
                 out["paths"][path] = {"$ref": self._fix_ref(item["$ref"])}
@@ -551,10 +562,17 @@ class _Upgrader:
                 if request_body is not None:
                     new_op["requestBody"] = request_body
 
-                new_op["responses"] = {
+                responses = {
                     str(code): self._convert_response(resp, op, ctx)
                     for code, resp in (op.get("responses") or {}).items()
-                } or {"200": {"description": "OK"}}
+                }
+                if not responses:  # Responses Object requires >= 1 response
+                    responses = {"200": {"description": "OK"}}
+                    self.assumptions.append(
+                        f"{ctx}: no responses declared; added a generic "
+                        "'200 OK' (required in OpenAPI 3)"
+                    )
+                new_op["responses"] = responses
 
                 new_item[method] = new_op
             out["paths"][path] = new_item

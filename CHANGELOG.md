@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   required schema property) and a WSDL that yields zero convertible SOAP
   operations both raise `ConversionError` with a message explaining what
   could not be converted.
+- Recoverable Swagger defaults/skips that were previously applied silently
+  are now recorded (#27): a synthesized `200` response for an operation
+  with no `responses`, a missing response `description`, a dropped
+  non-object path item or parameter — all recorded in `x-s2o`. An
+  `xsd:any` now emits `additionalProperties: true` (with a warning)
+  instead of being dropped.
 - Swagger upgrader: `in: path` parameters are now forced to
   `required: true` (mandatory in OpenAPI 3); a source that omitted it no
   longer yields an invalid spec, and the coercion is recorded in
