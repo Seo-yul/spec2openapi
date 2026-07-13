@@ -303,7 +303,12 @@ def parse_wsdl(
         forbid_dtd=True, forbid_entities=True,
         forbid_external=forbid_external,
     )
-    client = Client(source, settings=settings)
+    try:
+        client = Client(source, settings=settings)
+    except FileNotFoundError:
+        raise
+    except Exception as exc:  # malformed/unfetchable WSDL -> clean error
+        raise ValueError(f"could not parse WSDL '{source}': {exc}") from exc
 
     svc_doc, op_docs = _extract_wsdl_docs(source)
     xsd_meta = _collect_xsd_meta(client, source, forbid_external=forbid_external)
