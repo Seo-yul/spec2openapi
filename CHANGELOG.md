@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Swagger upgrader: `in: path` parameters are now forced to
+  `required: true` (mandatory in OpenAPI 3); a source that omitted it no
+  longer yields an invalid spec, and the coercion is recorded in
+  `x-s2o.assumptions` (#15).
+
 ## [0.2.0] - 2026-07-13
 
 ### Changed

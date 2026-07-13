@@ -186,6 +186,32 @@ def test_paths_level_vendor_extension_preserved_not_pathified():
     assert "operationId" not in out["paths"]["x-hidden"]
 
 
+def test_path_param_forced_required():
+    """OpenAPI 3 requires path params to be required:true (#15)."""
+    spec = {
+        "swagger": "2.0",
+        "info": {"title": "t", "version": "1"},
+        "paths": {
+            "/u/{id}": {
+                "get": {
+                    "operationId": "g",
+                    "parameters": [
+                        {"name": "id", "in": "path", "type": "string"},  # no required
+                        {"name": "q", "in": "query", "type": "string"},
+                    ],
+                    "responses": {"200": {"description": "ok"}},
+                }
+            }
+        },
+    }
+    out = convert_swagger(spec)
+    params = {p["name"]: p for p in out["paths"]["/u/{id}"]["get"]["parameters"]}
+    assert params["id"]["required"] is True
+    # a non-path param without `required` is left as-is (defaults false)
+    assert params["q"].get("required") is not True
+    assert any("path parameter 'id'" in a for a in out["x-s2o"]["assumptions"])
+
+
 def test_two_body_params_recorded_lossy():
     spec = {
         "swagger": "2.0",
