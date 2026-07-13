@@ -17,6 +17,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `spec2openapi serve` without the `[mcp]` extra now prints the install
   hint and exits with code 2 instead of crashing with a raw
   `ModuleNotFoundError` traceback (#4).
+- **Core converter correctness** (#8):
+  - operationIds are re-checked for uniqueness *after* normalization and
+    64-char truncation, so two operations can no longer collide onto the
+    same path and silently drop one (WSDL and Swagger paths).
+  - a top-level `<xsd:choice>` is now detected (previously only nested
+    choices produced `x-soap-choice`); choices whose branches are
+    `<sequence>`s no longer mark every branch field `required`.
+  - a WSDL type named `SoapFault` is no longer clobbered by the built-in
+    fault schema.
+  - attribute `xml.name` uses the real attribute name, not zeep's mangled
+    `attr__id` key when an element and attribute share a name.
+  - Swagger upgrader: operationId normalizing to empty falls back to a
+    generated id; operation-level parameters override path-level ones
+    instead of duplicating; `basePath` without a leading slash is
+    normalized; boolean `exclusiveMinimum/Maximum` no longer leak into
+    3.1 output; `example`/`default`/`enum` data values are no longer
+    rewritten; paths-level vendor extensions and `$ref` path items are
+    preserved; more silently-dropped constructs (second body param,
+    formData `collectionFormat`, root `x-` extensions, missing `info`,
+    oauth2 without `flow`) are now recorded in `x-s2o`.
 
 ## [0.1.0] - 2026-07-11
 

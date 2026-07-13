@@ -25,6 +25,28 @@ import re
 from .schema import SchemaConverter, sanitize_name
 
 _TOOL_ID_RE = re.compile(r"[^A-Za-z0-9_]+")
+_MAX_ID_LEN = 64
+
+
+def _tool_id(raw: str) -> str:
+    """Normalize to FastMCP's tool-name alphabet, bounded to 64 chars."""
+    tid = _TOOL_ID_RE.sub("_", sanitize_name(raw)).strip("_")
+    return tid[:_MAX_ID_LEN] if tid else "op"
+
+
+def _unique_id(base: str, used: set[str]) -> str:
+    """Make base unique within `used`, keeping the result <= 64 chars."""
+    if base not in used:
+        used.add(base)
+        return base
+    n = 2
+    while True:
+        suffix = f"_{n}"
+        candidate = base[: _MAX_ID_LEN - len(suffix)] + suffix
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+        n += 1
 
 SOAP_FAULT_SCHEMA = {
     "type": "object",
@@ -64,11 +86,20 @@ def build_spec(
 ) -> dict[str, Any]:
     conv = SchemaConverter(parsed.xsd_meta)
     paths: dict[str, Any] = {}
+    used_ids: set[str] = set()
+
+    # reserve the built-in fault schema name up front so a WSDL type also
+    # named "SoapFault" is deduped to another name instead of clobbering it
+    fault_ref_name = "SoapFault"
+    conv.components[fault_ref_name] = SOAP_FAULT_SCHEMA
+    fault_ref = f"#/components/schemas/{fault_ref_name}"
 
     for op in parsed.operations:
         # FastMCP normalizes tool names to [A-Za-z0-9_]; emit operationIds
-        # in that alphabet so tool name == operationId after the round-trip
-        op_id = _TOOL_ID_RE.sub("_", sanitize_name(op.op_id)).strip("_")
+        # in that alphabet, bounded to 64 chars, and re-checked for
+        # uniqueness *after* normalization/truncation so two operations
+        # never collide onto the same path (which would drop one).
+        op_id = _unique_id(_tool_id(op.op_id), used_ids)
         in_q = _element_qname(op.input_element)
         in_schema = conv.element_type_to_object_schema(
             op.input_element.type,
@@ -163,7 +194,7 @@ def build_spec(
                     ),
                     "content": {
                         "application/json": {
-                            "schema": {"$ref": "#/components/schemas/SoapFault"}
+                            "schema": {"$ref": fault_ref}
                         }
                     },
                 },
@@ -172,8 +203,7 @@ def build_spec(
         paths[f"{base_path}/{op_id}"] = {"post": post}
 
     endpoint = parsed.operations[0].endpoint if parsed.operations else ""
-    components = dict(conv.components)
-    components["SoapFault"] = SOAP_FAULT_SCHEMA
+    components = dict(conv.components)  # already includes the fault schema
 
     spec: dict[str, Any] = {
         "openapi": "3.0.3",
@@ -203,20 +233,31 @@ def build_spec(
 def to_openapi_31(spec: dict[str, Any]) -> dict[str, Any]:
     """Convert the generated 3.0 document to OpenAPI 3.1 JSON Schema style."""
 
+    # keywords whose values are data, not sub-schemas — don't descend
+    data_kw = ("example", "examples", "default", "enum")
+
     def walk(node: Any) -> Any:
         if isinstance(node, list):
             return [walk(v) for v in node]
         if not isinstance(node, dict):
             return node
-        node = {k: walk(v) for k, v in node.items()}
+        node = {k: (v if k in data_kw else walk(v)) for k, v in node.items()}
         if node.pop("nullable", False):
             t = node.get("type")
             if isinstance(t, str):
                 node["type"] = [t, "null"]
-        if node.get("exclusiveMinimum") is True and "minimum" in node:
-            node["exclusiveMinimum"] = node.pop("minimum")
-        if node.get("exclusiveMaximum") is True and "maximum" in node:
-            node["exclusiveMaximum"] = node.pop("maximum")
+        # 3.0 uses boolean exclusiveMinimum/Maximum alongside minimum/maximum;
+        # 2020-12 requires a number. Convert true+bound, and drop the boolean
+        # otherwise (false = inclusive default; true without a bound is
+        # malformed and cannot be represented).
+        for kw, bound in (("exclusiveMinimum", "minimum"),
+                          ("exclusiveMaximum", "maximum")):
+            val = node.get(kw)
+            if isinstance(val, bool):
+                if val and bound in node:
+                    node[kw] = node.pop(bound)
+                else:
+                    node.pop(kw, None)
         return node
 
     out = walk(dict(spec))
