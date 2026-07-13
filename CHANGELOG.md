@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `style` (path/header use `simple` instead of the invalid `form`); a
   `formData` parameter without a name is dropped (recorded in
   `x-s2o.lossy`) instead of crashing.
+- Swagger upgrader hardened against non-conformant input (#23): a
+  non-boolean `required` is coerced to a boolean; a non-path parameter
+  without a `name` is dropped; a JSON-Schema `type` array is collapsed to
+  a single type + `nullable` for 3.0 (re-expanded for 3.1); a
+  `discriminator` object without `propertyName` is dropped. All recorded
+  in `x-s2o`.
 
 ## [0.2.0] - 2026-07-13
 

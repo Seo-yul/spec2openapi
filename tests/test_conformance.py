@@ -183,6 +183,62 @@ def test_formdata_without_name_does_not_crash():
     assert out["x-s2o"]["lossy"]
 
 
+# -- M1-M4 GIGO hardening ----------------------------------------------------
+
+def test_non_boolean_required_coerced():
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a": {"get": {
+            "operationId": "a",
+            "parameters": [{"name": "q", "in": "query", "type": "string",
+                            "required": "yes"}],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src)
+    assert out["paths"]["/a"]["get"]["parameters"][0]["required"] is True
+
+
+def test_nameless_non_path_param_dropped():
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a": {"get": {
+            "operationId": "a",
+            "parameters": [{"in": "query", "type": "string"},
+                           {"name": "ok", "in": "query", "type": "string"}],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src)
+    names = [p.get("name") for p in out["paths"]["/a"]["get"]["parameters"]]
+    assert names == ["ok"]
+    assert out["x-s2o"]["lossy"]
+
+
+def test_type_array_collapsed_in_30_reexpanded_in_31():
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {}, "definitions": {"T": {"type": ["string", "null"]}},
+    }
+    out30 = _valid(src, "3.0")
+    assert out30["components"]["schemas"]["T"] == {
+        "type": "string", "nullable": True}
+    out31 = _valid(src, "3.1")
+    assert out31["components"]["schemas"]["T"]["type"] == ["string", "null"]
+
+
+def test_discriminator_without_property_name_dropped():
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {},
+        "definitions": {"T": {"type": "object",
+                              "discriminator": {"mapping": {"a": "#/x"}}}},
+    }
+    out = _valid(src)
+    assert "discriminator" not in out["components"]["schemas"]["T"]
+    assert out["x-s2o"]["lossy"]
+
+
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
 def test_valid_security_preserved(version):
     defs = {
