@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Documentation repositioned to make the SOAP vs Swagger distinction
+  explicit: Swagger 2.0 converts to a standard REST OpenAPI document that
+  any runtime serves unchanged, while SOAP/WSDL converts to OpenAPI +
+  `x-soap` and **requires the `[mcp]` bridge to be served** (#6).
+
 ### Fixed
 - `spec2openapi serve` without the `[mcp]` extra now prints the install
   hint and exits with code 2 instead of crashing with a raw
