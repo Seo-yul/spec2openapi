@@ -41,6 +41,14 @@ def is_swagger2(spec: dict[str, Any]) -> bool:
     return str(spec.get("swagger", "")).startswith("2")
 
 
+def _as_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes")
+    return bool(v)
+
+
 def _merge_params(shared: list, op_level: list) -> list:
     """Combine path-item and operation parameters. Per the spec, an
     operation parameter overrides a path-item one with the same
@@ -112,6 +120,13 @@ class _Upgrader:
                 out["nullable"] = v
             elif k == "discriminator" and isinstance(v, str):
                 out[k] = {"propertyName": v}
+            elif k == "discriminator" and isinstance(v, dict):
+                if v.get("propertyName"):
+                    out[k] = v
+                else:  # invalid: discriminator requires propertyName
+                    self.lossy.append(
+                        "discriminator without 'propertyName' dropped"
+                    )
             elif k in _DATA_KEYWORDS:
                 out[k] = v  # data value: pass through verbatim
             else:
@@ -119,6 +134,22 @@ class _Upgrader:
         if out.get("type") == "file":
             out["type"] = "string"
             out["format"] = "binary"
+        elif isinstance(out.get("type"), list):
+            # JSON-Schema type array is invalid in OpenAPI 3.0; collapse to a
+            # single type + nullable (to_openapi_31 re-expands for 3.1)
+            types = [t for t in out["type"] if t != "null"]
+            if "null" in out["type"]:
+                out["nullable"] = True
+            if len(types) == 1:
+                out["type"] = types[0]
+            elif not types:
+                out.pop("type")
+            else:
+                out["type"] = types[0]
+                self.lossy.append(
+                    f"schema type {out.get('type')!r} chosen from multi-type "
+                    f"array {node['type']} (OpenAPI 3.0 allows one type)"
+                )
         return out
 
     def _media_types(self, kind: str, op: dict, ctx: str) -> list[str]:
@@ -138,12 +169,15 @@ class _Upgrader:
         out = {
             k: v
             for k, v in p.items()
-            if k in ("name", "in", "description", "required")
+            if k in ("name", "in", "description")
             or k.startswith("x-")
         }
+        # required must be a boolean in OpenAPI 3
+        if "required" in p:
+            out["required"] = _as_bool(p["required"])
         # allowEmptyValue is valid only for query parameters in OpenAPI 3
         if loc == "query" and "allowEmptyValue" in p:
-            out["allowEmptyValue"] = p["allowEmptyValue"]
+            out["allowEmptyValue"] = _as_bool(p["allowEmptyValue"])
         # OpenAPI 3 requires path parameters to be required:true
         if loc == "path" and out.get("required") is not True:
             out["required"] = True
@@ -265,6 +299,12 @@ class _Upgrader:
                 body = self._body_to_request_body(p, op, ctx)
             elif loc == "formData":
                 form.append(p)
+            elif not p.get("name"):
+                # query/path/header parameters require a name in OpenAPI 3
+                self.lossy.append(
+                    f"{ctx}: {loc or 'unknown-location'} parameter without a "
+                    "name dropped"
+                )
             else:
                 params.append(self._convert_param(p, ctx))
         if form:
