@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `required: true` (mandatory in OpenAPI 3); a source that omitted it no
   longer yields an invalid spec, and the coercion is recorded in
   `x-s2o.assumptions` (#15).
+- Swagger upgrader no longer emits invalid `securitySchemes` (#17): an
+  unknown security `type`, an `apiKey` missing `name`/`in`, or an `oauth2`
+  flow missing its required URL(s) is dropped and recorded in
+  `x-s2o.lossy` instead of producing a spec that fails validation.
 
 ## [0.2.0] - 2026-07-13
 

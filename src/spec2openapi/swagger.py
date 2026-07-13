@@ -296,54 +296,61 @@ class _Upgrader:
 
     # -- security -------------------------------------------------------------
 
+    # oauth2 flow name mapping + which URLs each flow requires in OpenAPI 3
+    _OAUTH_FLOWS = {
+        "implicit": ("implicit", ("authorizationUrl",)),
+        "password": ("password", ("tokenUrl",)),
+        "application": ("clientCredentials", ("tokenUrl",)),
+        "accessCode": ("authorizationCode", ("authorizationUrl", "tokenUrl")),
+    }
+
     def _convert_security_schemes(self) -> dict:
         out: dict[str, Any] = {}
-        flow_names = {
-            "implicit": "implicit",
-            "password": "password",
-            "application": "clientCredentials",
-            "accessCode": "authorizationCode",
-        }
         for name, sd in (self.src.get("securityDefinitions") or {}).items():
             t = sd.get("type")
-            if t == "basic":
-                out[name] = {"type": "http", "scheme": "basic"}
-                if sd.get("description"):
-                    out[name]["description"] = sd["description"]
-            elif t == "apiKey":
-                out[name] = {k: sd[k] for k in ("type", "name", "in")
-                             if k in sd}
-                if sd.get("description"):
-                    out[name]["description"] = sd["description"]
-            elif t == "oauth2":
-                raw_flow = sd.get("flow")
-                flow = flow_names.get(raw_flow)
-                if flow is None:
-                    flow = "implicit"
-                    self.lossy.append(
-                        f"securityDefinitions.{name}: oauth2 flow "
-                        f"'{raw_flow}' missing/unrecognized; assumed "
-                        "'implicit'"
-                    )
-                flow_obj: dict[str, Any] = {
-                    "scopes": sd.get("scopes", {}),
-                }
-                if "authorizationUrl" in sd:
-                    flow_obj["authorizationUrl"] = sd["authorizationUrl"]
-                if "tokenUrl" in sd:
-                    flow_obj["tokenUrl"] = sd["tokenUrl"]
-                entry: dict[str, Any] = {
-                    "type": "oauth2", "flows": {flow: flow_obj},
-                }
-                if sd.get("description"):
-                    entry["description"] = sd["description"]
+            entry = self._one_security_scheme(name, t, sd)
+            if entry is not None:
                 out[name] = entry
-            else:
-                out[name] = dict(sd)
-                self.lossy.append(
-                    f"securityDefinitions.{name}: unknown type '{t}' copied as-is"
-                )
         return out
+
+    def _one_security_scheme(self, name: str, t: str, sd: dict):
+        """Return a valid OpenAPI 3 securityScheme, or None (dropped +
+        recorded in x-s2o.lossy) when the source cannot yield one."""
+        def drop(reason: str):
+            self.lossy.append(
+                f"securityDefinitions.{name}: {reason}; dropped from "
+                "securitySchemes"
+            )
+            return None
+
+        if t == "basic":
+            entry = {"type": "http", "scheme": "basic"}
+        elif t == "apiKey":
+            if not sd.get("name") or sd.get("in") not in ("query", "header", "cookie"):
+                return drop("apiKey missing a valid 'name'/'in'")
+            entry = {"type": "apiKey", "name": sd["name"], "in": sd["in"]}
+        elif t == "oauth2":
+            raw_flow = sd.get("flow")
+            mapped = self._OAUTH_FLOWS.get(raw_flow)
+            if mapped is None:
+                return drop(f"oauth2 flow '{raw_flow}' missing/unrecognized")
+            flow_key, required_urls = mapped
+            missing = [u for u in required_urls if not sd.get(u)]
+            if missing:
+                return drop(
+                    f"oauth2 '{raw_flow}' flow missing required "
+                    f"{', '.join(missing)}"
+                )
+            flow_obj: dict[str, Any] = {"scopes": sd.get("scopes") or {}}
+            for u in required_urls:
+                flow_obj[u] = sd[u]
+            entry = {"type": "oauth2", "flows": {flow_key: flow_obj}}
+        else:
+            return drop(f"unknown security type '{t}'")
+
+        if sd.get("description"):
+            entry["description"] = sd["description"]
+        return entry
 
     # -- top level -------------------------------------------------------------
 
