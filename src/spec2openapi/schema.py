@@ -235,6 +235,7 @@ class SchemaConverter:
     ) -> dict[str, Any]:
         props: dict[str, Any] = {}
         required: list[str] = []
+        allow_additional = False
 
         elements = list(getattr(t, "elements", []))
         attributes = list(getattr(t, "attributes", []))
@@ -257,7 +258,13 @@ class SchemaConverter:
 
         for el_name, el in elements:
             if el is None or type(el).__name__ in ("Any", "AnyObject"):
-                logger.debug("xsd:any inside %s -> additionalProperties", hint)
+                # xsd:any accepts arbitrary content; allow it through as
+                # unconstrained additional properties and surface a warning
+                allow_additional = True
+                logger.warning(
+                    "xsd:any inside %s: emitting additionalProperties:true "
+                    "(arbitrary content is not schema-constrained)", hint
+                )
                 continue
             prop = self._element_to_property(el_name, el, hint, qkey)
             if prop is None:
@@ -287,6 +294,8 @@ class SchemaConverter:
                 required.append(at_name)
 
         schema: dict[str, Any] = {"type": "object", "properties": props}
+        if allow_additional:
+            schema["additionalProperties"] = True
         if required:
             schema["required"] = required
 
