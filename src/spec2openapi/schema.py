@@ -18,6 +18,7 @@ from typing import Any
 
 from zeep import xsd as zx
 
+from .errors import ConversionError
 from .parser import XsdMeta
 
 logger = logging.getLogger("spec2openapi")
@@ -330,7 +331,13 @@ class SchemaConverter:
     ) -> dict | None:
         el_type = getattr(el, "type", None)
         if el_type is None:
-            return None
+            raise ConversionError(
+                f"element '{el_name}' in '{parent_hint}' has an unresolvable "
+                "XSD type; cannot generate a schema property for it. The "
+                "WSDL/XSD may reference a type that was not imported or is "
+                "not supported. Fix the source schema, or exclude the "
+                "operation."
+            )
 
         base = self._type_to_schema(el_type, hint=f"{parent_hint}_{el_name}")
 
