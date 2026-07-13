@@ -17,9 +17,13 @@ import re
 from typing import Any
 
 from . import __version__ as _version
-from .openapi import to_openapi_31
+from .openapi import _unique_id, to_openapi_31
 
 _METHODS = ("get", "put", "post", "delete", "options", "head", "patch")
+
+# schema keywords whose *values* are data, not sub-schemas — never rewrite
+# $ref/x-nullable/discriminator inside them
+_DATA_KEYWORDS = ("example", "examples", "default", "enum")
 
 # Swagger 2.0 parameter fields that move into `schema` in OpenAPI 3
 _SCHEMA_FIELDS = (
@@ -35,6 +39,23 @@ _ID_RE = re.compile(r"[^A-Za-z0-9_]+")
 
 def is_swagger2(spec: dict[str, Any]) -> bool:
     return str(spec.get("swagger", "")).startswith("2")
+
+
+def _merge_params(shared: list, op_level: list) -> list:
+    """Combine path-item and operation parameters. Per the spec, an
+    operation parameter overrides a path-item one with the same
+    (name, in). $ref params (no visible name/in) are kept as-is."""
+    merged: list = []
+    index: dict[tuple, int] = {}
+    for p in list(shared or []) + list(op_level or []):
+        if isinstance(p, dict) and "name" in p and "in" in p:
+            key = (p["name"], p["in"])
+            if key in index:
+                merged[index[key]] = p  # later (op-level) wins
+                continue
+            index[key] = len(merged)
+        merged.append(p)
+    return merged
 
 
 def convert_swagger(
@@ -91,6 +112,8 @@ class _Upgrader:
                 out["nullable"] = v
             elif k == "discriminator" and isinstance(v, str):
                 out[k] = {"propertyName": v}
+            elif k in _DATA_KEYWORDS:
+                out[k] = v  # data value: pass through verbatim
             else:
                 out[k] = self._fix_schema(v)
         if out.get("type") == "file":
@@ -179,6 +202,12 @@ class _Upgrader:
             props[p["name"]] = schema or {"type": "string"}
             if p.get("required"):
                 required.append(p["name"])
+            if p.get("collectionFormat"):
+                self.lossy.append(
+                    f"{ctx}: collectionFormat '{p['collectionFormat']}' on "
+                    f"formData '{p.get('name')}' dropped (no requestBody "
+                    "encoding equivalent emitted)"
+                )
         body_schema: dict[str, Any] = {"type": "object", "properties": props}
         if required:
             body_schema["required"] = required
@@ -205,6 +234,11 @@ class _Upgrader:
                 continue
             loc = p.get("in")
             if loc == "body":
+                if body is not None:
+                    self.lossy.append(
+                        f"{ctx}: multiple body parameters; kept the last "
+                        "(OpenAPI 3 allows only one requestBody)"
+                    )
                 body = self._body_to_request_body(p, op, ctx)
             elif loc == "formData":
                 form.append(p)
@@ -275,7 +309,15 @@ class _Upgrader:
                 if sd.get("description"):
                     out[name]["description"] = sd["description"]
             elif t == "oauth2":
-                flow = flow_names.get(sd.get("flow"), sd.get("flow"))
+                raw_flow = sd.get("flow")
+                flow = flow_names.get(raw_flow)
+                if flow is None:
+                    flow = "implicit"
+                    self.lossy.append(
+                        f"securityDefinitions.{name}: oauth2 flow "
+                        f"'{raw_flow}' missing/unrecognized; assumed "
+                        "'implicit'"
+                    )
                 flow_obj: dict[str, Any] = {
                     "scopes": sd.get("scopes", {}),
                 }
@@ -300,7 +342,12 @@ class _Upgrader:
 
     def _servers(self) -> list[dict]:
         host = self.src.get("host")
-        base = self.src.get("basePath", "")
+        base = self.src.get("basePath", "") or ""
+        if base and not base.startswith("/"):
+            self.assumptions.append(
+                f"basePath '{base}' has no leading slash; normalized to '/{base}'"
+            )
+            base = "/" + base
         schemes = self.src.get("schemes")
         if not host:
             self.assumptions.append(
@@ -322,6 +369,10 @@ class _Upgrader:
 
     def convert(self) -> dict[str, Any]:
         src = self.src
+        if "info" not in src:
+            self.assumptions.append(
+                "no 'info' object; used default title 'API' version '0.0.0'"
+            )
         out: dict[str, Any] = {
             "openapi": "3.0.3",
             "info": dict(src.get("info", {"title": "API", "version": "0.0.0"})),
@@ -331,10 +382,20 @@ class _Upgrader:
         for k in ("tags", "externalDocs", "security"):
             if k in src:
                 out[k] = src[k]
+        # carry root-level vendor extensions
+        for k, v in src.items():
+            if k.startswith("x-"):
+                out[k] = v
 
         used_ids: set[str] = set()
         for path, item in (src.get("paths") or {}).items():
+            if path.startswith("x-"):  # Paths-object vendor extension
+                out["paths"][path] = item
+                continue
             if not isinstance(item, dict):
+                continue
+            if "$ref" in item:  # path item is a $ref (legal in OpenAPI 3)
+                out["paths"][path] = {"$ref": self._fix_ref(item["$ref"])}
                 continue
             new_item: dict[str, Any] = {}
             shared_raw = item.get("parameters", [])
@@ -363,21 +424,19 @@ class _Upgrader:
                     )
                 else:
                     normalized = _ID_RE.sub("_", op_id).strip("_")[:64]
+                    if not normalized:  # e.g. operationId was "!!!"
+                        normalized = self._gen_operation_id(method, path)
                     if normalized != op_id:
                         self.assumptions.append(
                             f"{ctx}: operationId '{op_id}' normalized to "
                             f"'{normalized}' (FastMCP tool-name convention)"
                         )
                         op_id = normalized
-                base_id = op_id
-                n = 2
-                while op_id in used_ids:
-                    op_id = f"{base_id}_{n}"
-                    n += 1
-                used_ids.add(op_id)
+                # dedup after normalization/truncation, staying <= 64 chars
+                op_id = _unique_id(op_id, used_ids)
                 new_op["operationId"] = op_id
 
-                raw_params = list(shared_raw) + list(op.get("parameters", []))
+                raw_params = _merge_params(shared_raw, op.get("parameters", []))
                 params, request_body = self._split_params(raw_params, op, ctx)
                 if params:
                     new_op["parameters"] = params
