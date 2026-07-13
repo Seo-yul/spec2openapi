@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-13
+
 ### Changed
 - Documentation repositioned to make the SOAP vs Swagger distinction
   explicit: Swagger 2.0 converts to a standard REST OpenAPI document that
@@ -107,5 +109,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Seo-yul/spec2openapi/releases/tag/v0.1.0

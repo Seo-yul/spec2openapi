@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: OrderService
   version: 1.0.0
-  description: Generated from WSDL by spec2openapi 0.1.0. Each path is a SOAP operation exposed as a JSON
+  description: Generated from WSDL by spec2openapi 0.2.0. Each path is a SOAP operation exposed as a JSON
     call.
 servers:
 - url: http://localhost:18081
@@ -176,6 +176,16 @@ paths:
                 $ref: '#/components/schemas/SoapFault'
 components:
   schemas:
+    SoapFault:
+      type: object
+      description: SOAP Fault mapped to a JSON error payload.
+      properties:
+        faultcode:
+          type: string
+        faultstring:
+          type: string
+        detail:
+          type: string
     Customer:
       type: object
       properties:
@@ -218,17 +228,7 @@ components:
       - sku
       - quantity
       - price
-    SoapFault:
-      type: object
-      description: SOAP Fault mapped to a JSON error payload.
-      properties:
-        faultcode:
-          type: string
-        faultstring:
-          type: string
-        detail:
-          type: string
 x-soap:
   wsdl: tests/fixtures/orders.wsdl
-  generator: spec2openapi/0.1.0
+  generator: spec2openapi/0.2.0
   skippedOperations: []
