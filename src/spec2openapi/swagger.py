@@ -140,6 +140,13 @@ class _Upgrader:
             if k in ("name", "in", "description", "required", "allowEmptyValue")
             or k.startswith("x-")
         }
+        # OpenAPI 3 requires path parameters to be required:true
+        if p.get("in") == "path" and out.get("required") is not True:
+            out["required"] = True
+            self.assumptions.append(
+                f"{ctx}: path parameter '{p.get('name')}' forced to "
+                "required:true (mandatory in OpenAPI 3)"
+            )
         schema = {k: self._fix_schema(v) for k, v in p.items()
                   if k in _SCHEMA_FIELDS}
         if schema.get("type") == "file":
