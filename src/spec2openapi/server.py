@@ -18,6 +18,19 @@ logger = logging.getLogger("spec2openapi")
 
 BRIDGE_BASE_URL = "http://spec2openapi.bridge.local"
 
+
+def _spec_has_rest(spec: dict[str, Any]) -> bool:
+    """True if any operation lacks x-soap (i.e. is a plain REST call)."""
+    methods = ("get", "put", "post", "delete", "options", "head", "patch")
+    for item in (spec.get("paths") or {}).values():
+        if not isinstance(item, dict):
+            continue
+        for method, op in item.items():
+            if method.lower() in methods and isinstance(op, dict):
+                if "x-soap" not in op:
+                    return True
+    return False
+
 _MCP_HINT = (
     "the MCP runtime requires optional dependencies; "
     "install them with: pip install 'spec2openapi[mcp]'"
@@ -46,6 +59,13 @@ def from_openapi_spec(
     from .bridge import BridgeOptions, SoapBridgeTransport
 
     if spec_has_soap(spec):
+        if _spec_has_rest(spec):
+            logger.warning(
+                "spec contains both SOAP (x-soap) and plain REST operations; "
+                "the reference runtime routes ALL traffic through the SOAP "
+                "bridge, so the REST operations will not work. Split SOAP and "
+                "REST specs until mixed specs are supported."
+            )
         transport = SoapBridgeTransport(spec, options)
         client = httpx.AsyncClient(transport=transport, base_url=BRIDGE_BASE_URL)
     else:

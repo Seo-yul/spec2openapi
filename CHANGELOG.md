@@ -37,6 +37,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     preserved; more silently-dropped constructs (second body param,
     formData `collectionFormat`, root `x-` extensions, missing `info`,
     oauth2 without `flow`) are now recorded in `x-s2o`.
+- **Runtime (bridge/serve/CLI) robustness** (#10):
+  - one-way SOAP operations with an empty 2xx body now succeed instead of
+    failing with a spurious `InvalidXML` fault.
+  - HTTP errors without a SOAP fault body report the real status code and
+    body excerpt instead of a misleading `InvalidXML`/`NoBody` fault.
+  - `x-soap-choice` is enforced when serializing: setting more than one
+    member (or none of a required group) returns a client-side error
+    instead of emitting invalid XML.
+  - `SPEC2OPENAPI_TIMEOUT`/`VERIFY`/`TRUST_ENV` parsing no longer crashes
+    on bad values (warns and falls back); boolean env vars are
+    case-insensitive.
+  - non-canonical XML booleans (e.g. `TRUE`) are no longer silently read
+    as `False`.
+  - CLI user-input errors (missing file, wrong type, malformed WSDL, bad
+    output path) print a one-line `error:` and exit 2 instead of dumping a
+    traceback.
+  - WSDL files with a UTF-8 BOM and extension-less WSDL URLs are routed
+    correctly; output `--format` inference is case-insensitive.
+  - `validate` no longer flags path-level vendor extensions as operations,
+    and validates REST specs that omit a `servers` entry.
+  - `serve` warns when a spec mixes SOAP and REST operations (the
+    reference runtime routes everything through the SOAP bridge).
 
 ## [0.1.0] - 2026-07-11
 
