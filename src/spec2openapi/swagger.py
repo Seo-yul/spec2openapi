@@ -134,14 +134,18 @@ class _Upgrader:
 
     def _convert_param(self, p: dict, ctx: str) -> dict:
         """query/path/header (non-body, non-formData) parameter."""
+        loc = p.get("in")
         out = {
             k: v
             for k, v in p.items()
-            if k in ("name", "in", "description", "required", "allowEmptyValue")
+            if k in ("name", "in", "description", "required")
             or k.startswith("x-")
         }
+        # allowEmptyValue is valid only for query parameters in OpenAPI 3
+        if loc == "query" and "allowEmptyValue" in p:
+            out["allowEmptyValue"] = p["allowEmptyValue"]
         # OpenAPI 3 requires path parameters to be required:true
-        if p.get("in") == "path" and out.get("required") is not True:
+        if loc == "path" and out.get("required") is not True:
             out["required"] = True
             self.assumptions.append(
                 f"{ctx}: path parameter '{p.get('name')}' forced to "
@@ -155,25 +159,31 @@ class _Upgrader:
 
         cf = p.get("collectionFormat")
         if cf:
-            loc = p.get("in")
-            if cf == "csv":
-                out["style"] = "form" if loc in ("query", "formData") else "simple"
-                out["explode"] = False
-            elif cf == "multi":
-                out["style"] = "form"
-                out["explode"] = True
-            elif cf == "ssv":
-                out["style"] = "spaceDelimited"
-                out["explode"] = False
-            elif cf == "pipes":
-                out["style"] = "pipeDelimited"
-                out["explode"] = False
-            else:  # tsv and friends have no OpenAPI 3 equivalent
-                out["x-collectionFormat"] = cf
-                self.lossy.append(
-                    f"{ctx}: collectionFormat '{cf}' has no OpenAPI 3 "
-                    "equivalent; preserved as x-collectionFormat"
-                )
+            # style/explode depend on the location; path/header accept only
+            # 'simple' (form/spaceDelimited/pipeDelimited are query-only)
+            if loc in ("query", "formData"):
+                mapping = {
+                    "csv": ("form", False), "multi": ("form", True),
+                    "ssv": ("spaceDelimited", False),
+                    "pipes": ("pipeDelimited", False),
+                }
+                if cf in mapping:
+                    out["style"], out["explode"] = mapping[cf]
+                else:  # tsv has no OpenAPI 3 equivalent
+                    out["x-collectionFormat"] = cf
+                    self.lossy.append(
+                        f"{ctx}: collectionFormat '{cf}' has no OpenAPI 3 "
+                        "equivalent; preserved as x-collectionFormat"
+                    )
+            else:  # path / header
+                out["style"], out["explode"] = "simple", False
+                if cf != "csv":
+                    out["x-collectionFormat"] = cf
+                    self.lossy.append(
+                        f"{ctx}: collectionFormat '{cf}' on {loc} parameter "
+                        "has no OpenAPI 3 equivalent; used style:simple and "
+                        "preserved x-collectionFormat"
+                    )
         return out
 
     def _body_to_request_body(self, p: dict, op: dict, ctx: str) -> dict:
@@ -200,15 +210,21 @@ class _Upgrader:
         props: dict[str, Any] = {}
         required: list[str] = []
         for p in params:
+            name = p.get("name")
+            if not name:  # formData property name is mandatory
+                self.lossy.append(
+                    f"{ctx}: formData parameter without a name dropped"
+                )
+                continue
             schema = {k: self._fix_schema(v) for k, v in p.items()
                       if k in _SCHEMA_FIELDS}
             if p.get("type") == "file":
                 schema = {"type": "string", "format": "binary"}
             if p.get("description"):
                 schema["description"] = p["description"]
-            props[p["name"]] = schema or {"type": "string"}
+            props[name] = schema or {"type": "string"}
             if p.get("required"):
-                required.append(p["name"])
+                required.append(name)
             if p.get("collectionFormat"):
                 self.lossy.append(
                     f"{ctx}: collectionFormat '{p['collectionFormat']}' on "
