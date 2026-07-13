@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown security `type`, an `apiKey` missing `name`/`in`, or an `oauth2`
   flow missing its required URL(s) is dropped and recorded in
   `x-s2o.lossy` instead of producing a spec that fails validation.
+- Swagger upgrader completes a partial `info` object (missing `title` or
+  `version`, both required in OpenAPI 3) and injects a required path
+  parameter for any `{template}` segment that lacks one, so the output no
+  longer fails validation; both are recorded in `x-s2o.assumptions` (#19).
 
 ## [0.2.0] - 2026-07-13
 

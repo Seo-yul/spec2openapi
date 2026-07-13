@@ -381,15 +381,52 @@ class _Upgrader:
         raw = raw.replace("{", "").replace("}", "")
         return _ID_RE.sub("_", raw).strip("_")[:64]
 
+    def _build_info(self) -> dict[str, Any]:
+        # title and version are REQUIRED in OpenAPI 3; fill whichever is
+        # missing (a present-but-partial info must still be completed)
+        info = dict(self.src.get("info") or {})
+        if not info.get("title"):
+            info["title"] = "API"
+            self.assumptions.append("info.title missing; defaulted to 'API'")
+        if not info.get("version"):
+            info["version"] = "0.0.0"
+            self.assumptions.append(
+                "info.version missing; defaulted to '0.0.0'"
+            )
+        return info
+
+    def _ensure_path_params(self, path: str, params: list, ctx: str) -> list:
+        """Every {template} in the path MUST have an in:path parameter."""
+        global_params = self.src.get("parameters") or {}
+        present: set = set()
+        for p in params:
+            if not isinstance(p, dict):
+                continue
+            if p.get("in") == "path" and p.get("name"):
+                present.add(p["name"])
+            elif "$ref" in p:  # resolve to the referenced global parameter
+                ref = global_params.get(p["$ref"].rsplit("/", 1)[-1])
+                if isinstance(ref, dict) and ref.get("in") == "path":
+                    present.add(ref.get("name"))
+        for name in re.findall(r"{([^}]+)}", path):
+            if name in present:
+                continue
+            params = params + [{
+                "name": name, "in": "path", "required": True,
+                "schema": {"type": "string"},
+            }]
+            present.add(name)
+            self.assumptions.append(
+                f"{ctx}: path template '{{{name}}}' had no parameter; "
+                "injected a required string path parameter"
+            )
+        return params
+
     def convert(self) -> dict[str, Any]:
         src = self.src
-        if "info" not in src:
-            self.assumptions.append(
-                "no 'info' object; used default title 'API' version '0.0.0'"
-            )
         out: dict[str, Any] = {
             "openapi": "3.0.3",
-            "info": dict(src.get("info", {"title": "API", "version": "0.0.0"})),
+            "info": self._build_info(),
             "servers": self._servers(),
             "paths": {},
         }
@@ -452,6 +489,7 @@ class _Upgrader:
 
                 raw_params = _merge_params(shared_raw, op.get("parameters", []))
                 params, request_body = self._split_params(raw_params, op, ctx)
+                params = self._ensure_path_params(path, params, ctx)
                 if params:
                     new_op["parameters"] = params
                 if request_body is not None:
