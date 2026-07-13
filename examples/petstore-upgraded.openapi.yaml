@@ -198,7 +198,7 @@ components:
           tokenUrl: https://auth.example.com/token
 x-s2o:
   source: swagger-2.0
-  generator: spec2openapi/0.1.0
+  generator: spec2openapi/0.2.0
   assumptions:
   - 'GET /pets: no operationId; generated ''get_pets'''
   - 'GET /pets: no ''produces'' declared; assumed application/json'
