@@ -94,6 +94,95 @@ def test_partly_declared_path_templates():
     assert sorted(names) == ["x", "y"]
 
 
+# -- H5 allowEmptyValue location --------------------------------------------
+
+def test_allow_empty_value_dropped_off_query():
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a/{id}": {"get": {
+            "operationId": "a",
+            "parameters": [{"name": "id", "in": "path", "required": True,
+                            "type": "string", "allowEmptyValue": True}],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src, "3.1")  # 3.1 rejects allowEmptyValue on path
+    p = out["paths"]["/a/{id}"]["get"]["parameters"][0]
+    assert "allowEmptyValue" not in p
+
+
+def test_allow_empty_value_kept_on_query():
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a": {"get": {
+            "operationId": "a",
+            "parameters": [{"name": "q", "in": "query", "type": "string",
+                            "allowEmptyValue": True}],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src)
+    assert out["paths"]["/a"]["get"]["parameters"][0]["allowEmptyValue"] is True
+
+
+# -- H6 collectionFormat location -------------------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+@pytest.mark.parametrize("loc", ["path", "header"])
+def test_collection_format_multi_on_path_header(loc, version):
+    p = {"name": "v", "in": loc, "type": "array",
+         "items": {"type": "string"}, "collectionFormat": "multi"}
+    if loc == "path":
+        p["required"] = True
+    path = "/a/{v}" if loc == "path" else "/a"
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {path: {"get": {
+            "operationId": "a", "parameters": [p],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src, version)
+    param = out["paths"][path]["get"]["parameters"][0]
+    assert param.get("style") == "simple"  # not the invalid 'form'
+
+
+def test_collection_format_query_still_form():
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a": {"get": {
+            "operationId": "a",
+            "parameters": [{"name": "q", "in": "query", "type": "array",
+                            "items": {"type": "string"},
+                            "collectionFormat": "csv"}],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src)
+    assert out["paths"]["/a"]["get"]["parameters"][0]["style"] == "form"
+
+
+# -- H8 formData without a name ---------------------------------------------
+
+def test_formdata_without_name_does_not_crash():
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a": {"post": {
+            "operationId": "a",
+            "parameters": [
+                {"in": "formData", "type": "string"},        # no name
+                {"name": "ok", "in": "formData", "type": "string"},
+            ],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src)  # must not raise
+    schema = out["paths"]["/a"]["post"]["requestBody"]["content"][
+        "application/x-www-form-urlencoded"]["schema"]
+    assert set(schema["properties"]) == {"ok"}
+    assert out["x-s2o"]["lossy"]
+
+
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
 def test_valid_security_preserved(version):
     defs = {

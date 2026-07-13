@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `version`, both required in OpenAPI 3) and injects a required path
   parameter for any `{template}` segment that lacks one, so the output no
   longer fails validation; both are recorded in `x-s2o.assumptions` (#19).
+- Swagger upgrader respects parameter location (#21): `allowEmptyValue` is
+  kept only on query parameters; `collectionFormat` maps to a location-legal
+  `style` (path/header use `simple` instead of the invalid `form`); a
+  `formData` parameter without a name is dropped (recorded in
+  `x-s2o.lossy`) instead of crashing.
 
 ## [0.2.0] - 2026-07-13
 
