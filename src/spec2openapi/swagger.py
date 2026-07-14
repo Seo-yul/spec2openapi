@@ -172,14 +172,14 @@ class _Upgrader:
             if k in ("name", "in", "description")
             or k.startswith("x-")
         }
-        # required must be a boolean in OpenAPI 3
-        if "required" in p:
-            out["required"] = _as_bool(p["required"])
+        # always emit an explicit boolean 'required' (absent == false in
+        # OpenAPI 3, but we make it explicit for unambiguous output)
+        out["required"] = _as_bool(p.get("required", False))
         # allowEmptyValue is valid only for query parameters in OpenAPI 3
         if loc == "query" and "allowEmptyValue" in p:
             out["allowEmptyValue"] = _as_bool(p["allowEmptyValue"])
         # OpenAPI 3 requires path parameters to be required:true
-        if loc == "path" and out.get("required") is not True:
+        if loc == "path" and out["required"] is not True:
             out["required"] = True
             self.assumptions.append(
                 f"{ctx}: path parameter '{p.get('name')}' forced to "

@@ -94,6 +94,32 @@ def test_partly_declared_path_templates():
     assert sorted(names) == ["x", "y"]
 
 
+# -- explicit required on every parameter ------------------------------------
+
+def test_required_always_explicit():
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a/{id}": {"get": {
+            "operationId": "a",
+            "parameters": [
+                {"name": "id", "in": "path", "type": "string"},        # no required
+                {"name": "q1", "in": "query", "type": "string", "required": True},
+                {"name": "q2", "in": "query", "type": "string"},        # no required
+                {"name": "h", "in": "header", "type": "string"},        # no required
+            ],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+    }
+    out = _valid(src)
+    got = {p["name"]: p for p in out["paths"]["/a/{id}"]["get"]["parameters"]}
+    # every parameter carries an explicit boolean 'required'
+    assert all(isinstance(p["required"], bool) for p in got.values())
+    assert got["id"]["required"] is True    # path always true
+    assert got["q1"]["required"] is True     # source value kept
+    assert got["q2"]["required"] is False    # explicit default
+    assert got["h"]["required"] is False
+
+
 # -- H5 allowEmptyValue location --------------------------------------------
 
 def test_allow_empty_value_dropped_off_query():
