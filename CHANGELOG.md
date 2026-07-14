@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source cannot be faithfully converted, so failures surface as a clear
   message (CLI: `error: …`, exit 2) instead of a silent skip (#25).
 
+### Changed
+- Every converted parameter now carries an explicit boolean `required`
+  (`false` when the Swagger source omitted it, `true` for path
+  parameters), instead of relying on the OpenAPI default — same meaning,
+  unambiguous output (#29).
+
 ### Fixed
 - Unconvertible input now fails loudly instead of being dropped silently
   (#25): an XSD element with an unresolvable type (which would drop a
