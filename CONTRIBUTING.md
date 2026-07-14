@@ -61,13 +61,15 @@ python -m pytest tests/ -v
 
 ## Pull request process
 
-`develop` is the default branch and the target of all contributions;
-`main` is reserved for releases.
+`main` is the default branch and always points at the **latest release**;
+day-to-day development happens on `develop`. **All contributions target
+`develop`, not `main`** — `main` only ever receives release merges.
 
 1. Open (or find) an issue first — every PR should be linked to one.
-2. Fork and create a topic branch from `develop`
-   (naming convention: `feature/<issue-number>-<short-slug>`).
-3. Open the PR against `develop` and reference the issue with `Closes #123`.
+2. Fork, then branch from `develop` (not the default `main`):
+   `git switch develop && git switch -c feature/<issue-number>-<short-slug>`.
+3. **Open the PR against `develop`** (change the base branch if GitHub
+   pre-selects `main`) and reference the issue with `Closes #123`.
    PRs are **squash-merged**, so one PR = one commit in history — keep PRs
    focused; unrelated refactoring belongs in separate PRs.
 4. Update documentation (`README.md`, `README.ko.md`) and `CHANGELOG.md`
