@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from . import __version__ as _version
+from .errors import ConversionError
 from .parser import ParsedWsdl
 import re
 
@@ -84,6 +85,20 @@ def build_spec(
     base_path: str = "/operations",
     openapi_version: str = "3.0",
 ) -> dict[str, Any]:
+    # Paths Object keys must start with '/'
+    base_path = base_path or ""
+    if not base_path.startswith("/"):
+        base_path = "/" + base_path
+    if not parsed.operations:
+        detail = ""
+        if parsed.skipped:
+            reasons = "; ".join(f"{op}: {r}" for op, r in parsed.skipped)
+            detail = f" {len(parsed.skipped)} operation(s) were skipped ({reasons})."
+        raise ConversionError(
+            f"no convertible SOAP operations found in '{parsed.source}'."
+            f"{detail} Nothing to generate — check that the WSDL exposes "
+            "document/literal or rpc/literal SOAP bindings."
+        )
     conv = SchemaConverter(parsed.xsd_meta)
     paths: dict[str, Any] = {}
     used_ids: set[str] = set()

@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-14
+
+### Added
+- `ConversionError` (exported; subclass of `ValueError`) raised when a
+  source cannot be faithfully converted, so failures surface as a clear
+  message (CLI: `error: …`, exit 2) instead of a silent skip (#25).
+
+### Changed
+- Every converted parameter now carries an explicit boolean `required`
+  (`false` when the Swagger source omitted it, `true` for path
+  parameters), instead of relying on the OpenAPI default — same meaning,
+  unambiguous output (#29).
+
+### Fixed
+- Swagger `definitions` names with invalid characters (spaces, slashes)
+  are sanitized to valid OpenAPI 3 component keys, with every `$ref`
+  rewritten to match and collisions deduped; renames recorded in
+  `x-s2o.assumptions` (#33).
+- More context-required OpenAPI 3 rules enforced (#31): a path key without
+  a leading `/` is prefixed (Swagger paths and WSDL `--base-path`); a `tag`
+  without a `name` is dropped; a `type: array` schema without `items` gets
+  `items: {}` (parameters, form fields, and definitions). Recorded in
+  `x-s2o`.
+- Unconvertible input now fails loudly instead of being dropped silently
+  (#25): an XSD element with an unresolvable type (which would drop a
+  required schema property) and a WSDL that yields zero convertible SOAP
+  operations both raise `ConversionError` with a message explaining what
+  could not be converted.
+- Recoverable Swagger defaults/skips that were previously applied silently
+  are now recorded (#27): a synthesized `200` response for an operation
+  with no `responses`, a missing response `description`, a dropped
+  non-object path item or parameter — all recorded in `x-s2o`. An
+  `xsd:any` now emits `additionalProperties: true` (with a warning)
+  instead of being dropped.
+- Swagger upgrader: `in: path` parameters are now forced to
+  `required: true` (mandatory in OpenAPI 3); a source that omitted it no
+  longer yields an invalid spec, and the coercion is recorded in
+  `x-s2o.assumptions` (#15).
+- Swagger upgrader no longer emits invalid `securitySchemes` (#17): an
+  unknown security `type`, an `apiKey` missing `name`/`in`, or an `oauth2`
+  flow missing its required URL(s) is dropped and recorded in
+  `x-s2o.lossy` instead of producing a spec that fails validation.
+- Swagger upgrader completes a partial `info` object (missing `title` or
+  `version`, both required in OpenAPI 3) and injects a required path
+  parameter for any `{template}` segment that lacks one, so the output no
+  longer fails validation; both are recorded in `x-s2o.assumptions` (#19).
+- Swagger upgrader respects parameter location (#21): `allowEmptyValue` is
+  kept only on query parameters; `collectionFormat` maps to a location-legal
+  `style` (path/header use `simple` instead of the invalid `form`); a
+  `formData` parameter without a name is dropped (recorded in
+  `x-s2o.lossy`) instead of crashing.
+- Swagger upgrader hardened against non-conformant input (#23): a
+  non-boolean `required` is coerced to a boolean; a non-path parameter
+  without a `name` is dropped; a JSON-Schema `type` array is collapsed to
+  a single type + `nullable` for 3.0 (re-expanded for 3.1); a
+  `discriminator` object without `propertyName` is dropped. All recorded
+  in `x-s2o`.
+
 ## [0.2.0] - 2026-07-13
 
 ### Changed
@@ -109,6 +167,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Seo-yul/spec2openapi/releases/tag/v0.1.0

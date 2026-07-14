@@ -35,10 +35,20 @@ _SCHEMA_FIELDS = (
 # FastMCP normalizes tool names to [A-Za-z0-9_]; generate ids accordingly
 # so that tool name == operationId holds after the round-trip.
 _ID_RE = re.compile(r"[^A-Za-z0-9_]+")
+# OpenAPI 3 component keys allow letters, digits, '.', '-', '_'
+_COMPONENT_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def is_swagger2(spec: dict[str, Any]) -> bool:
     return str(spec.get("swagger", "")).startswith("2")
+
+
+def _as_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes")
+    return bool(v)
 
 
 def _merge_params(shared: list, op_level: list) -> list:
@@ -82,12 +92,32 @@ class _Upgrader:
             for name, p in (src.get("parameters") or {}).items()
             if isinstance(p, dict) and p.get("in") == "body"
         }
+        # OpenAPI 3 component keys must match ^[a-zA-Z0-9.\-_]+$; map each
+        # definition name to a valid, unique component key
+        self._schema_key: dict[str, str] = {}
+        used: set[str] = set()
+        for name in (src.get("definitions") or {}):
+            key = _COMPONENT_KEY_RE.sub("_", name).strip("_") or "schema"
+            if key in used:
+                i = 2
+                while f"{key}_{i}" in used:
+                    i += 1
+                key = f"{key}_{i}"
+            used.add(key)
+            self._schema_key[name] = key
+            if key != name:
+                self.assumptions.append(
+                    f"definition '{name}' renamed to component schema "
+                    f"'{key}' (OpenAPI 3 component-key charset)"
+                )
 
     # -- helpers -----------------------------------------------------------
 
     def _fix_ref(self, ref: str) -> str:
         if ref.startswith("#/definitions/"):
-            return ref.replace("#/definitions/", "#/components/schemas/", 1)
+            name = ref[len("#/definitions/"):]
+            key = self._schema_key.get(name, name)
+            return f"#/components/schemas/{key}"
         if ref.startswith("#/parameters/"):
             name = ref.rsplit("/", 1)[-1]
             if name in self._global_body_params:
@@ -112,6 +142,13 @@ class _Upgrader:
                 out["nullable"] = v
             elif k == "discriminator" and isinstance(v, str):
                 out[k] = {"propertyName": v}
+            elif k == "discriminator" and isinstance(v, dict):
+                if v.get("propertyName"):
+                    out[k] = v
+                else:  # invalid: discriminator requires propertyName
+                    self.lossy.append(
+                        "discriminator without 'propertyName' dropped"
+                    )
             elif k in _DATA_KEYWORDS:
                 out[k] = v  # data value: pass through verbatim
             else:
@@ -119,6 +156,29 @@ class _Upgrader:
         if out.get("type") == "file":
             out["type"] = "string"
             out["format"] = "binary"
+        elif out.get("type") == "array" and "items" not in out:
+            # OpenAPI (3.0 and 3.1) requires items on an array schema
+            out["items"] = {}
+            self.assumptions.append(
+                "an array schema without 'items' got 'items: {}' (required "
+                "in OpenAPI 3)"
+            )
+        elif isinstance(out.get("type"), list):
+            # JSON-Schema type array is invalid in OpenAPI 3.0; collapse to a
+            # single type + nullable (to_openapi_31 re-expands for 3.1)
+            types = [t for t in out["type"] if t != "null"]
+            if "null" in out["type"]:
+                out["nullable"] = True
+            if len(types) == 1:
+                out["type"] = types[0]
+            elif not types:
+                out.pop("type")
+            else:
+                out["type"] = types[0]
+                self.lossy.append(
+                    f"schema type {out.get('type')!r} chosen from multi-type "
+                    f"array {node['type']} (OpenAPI 3.0 allows one type)"
+                )
         return out
 
     def _media_types(self, kind: str, op: dict, ctx: str) -> list[str]:
@@ -134,39 +194,59 @@ class _Upgrader:
 
     def _convert_param(self, p: dict, ctx: str) -> dict:
         """query/path/header (non-body, non-formData) parameter."""
+        loc = p.get("in")
         out = {
             k: v
             for k, v in p.items()
-            if k in ("name", "in", "description", "required", "allowEmptyValue")
+            if k in ("name", "in", "description")
             or k.startswith("x-")
         }
-        schema = {k: self._fix_schema(v) for k, v in p.items()
-                  if k in _SCHEMA_FIELDS}
-        if schema.get("type") == "file":
-            schema = {"type": "string", "format": "binary"}
+        # always emit an explicit boolean 'required' (absent == false in
+        # OpenAPI 3, but we make it explicit for unambiguous output)
+        out["required"] = _as_bool(p.get("required", False))
+        # allowEmptyValue is valid only for query parameters in OpenAPI 3
+        if loc == "query" and "allowEmptyValue" in p:
+            out["allowEmptyValue"] = _as_bool(p["allowEmptyValue"])
+        # OpenAPI 3 requires path parameters to be required:true
+        if loc == "path" and out["required"] is not True:
+            out["required"] = True
+            self.assumptions.append(
+                f"{ctx}: path parameter '{p.get('name')}' forced to "
+                "required:true (mandatory in OpenAPI 3)"
+            )
+        # run the assembled schema through _fix_schema so top-level rules
+        # (type:file, array-needs-items, type-array) apply
+        raw_schema = {k: v for k, v in p.items() if k in _SCHEMA_FIELDS}
+        schema = self._fix_schema(raw_schema) if raw_schema else {}
         out["schema"] = schema or {"type": "string"}
 
         cf = p.get("collectionFormat")
         if cf:
-            loc = p.get("in")
-            if cf == "csv":
-                out["style"] = "form" if loc in ("query", "formData") else "simple"
-                out["explode"] = False
-            elif cf == "multi":
-                out["style"] = "form"
-                out["explode"] = True
-            elif cf == "ssv":
-                out["style"] = "spaceDelimited"
-                out["explode"] = False
-            elif cf == "pipes":
-                out["style"] = "pipeDelimited"
-                out["explode"] = False
-            else:  # tsv and friends have no OpenAPI 3 equivalent
-                out["x-collectionFormat"] = cf
-                self.lossy.append(
-                    f"{ctx}: collectionFormat '{cf}' has no OpenAPI 3 "
-                    "equivalent; preserved as x-collectionFormat"
-                )
+            # style/explode depend on the location; path/header accept only
+            # 'simple' (form/spaceDelimited/pipeDelimited are query-only)
+            if loc in ("query", "formData"):
+                mapping = {
+                    "csv": ("form", False), "multi": ("form", True),
+                    "ssv": ("spaceDelimited", False),
+                    "pipes": ("pipeDelimited", False),
+                }
+                if cf in mapping:
+                    out["style"], out["explode"] = mapping[cf]
+                else:  # tsv has no OpenAPI 3 equivalent
+                    out["x-collectionFormat"] = cf
+                    self.lossy.append(
+                        f"{ctx}: collectionFormat '{cf}' has no OpenAPI 3 "
+                        "equivalent; preserved as x-collectionFormat"
+                    )
+            else:  # path / header
+                out["style"], out["explode"] = "simple", False
+                if cf != "csv":
+                    out["x-collectionFormat"] = cf
+                    self.lossy.append(
+                        f"{ctx}: collectionFormat '{cf}' on {loc} parameter "
+                        "has no OpenAPI 3 equivalent; used style:simple and "
+                        "preserved x-collectionFormat"
+                    )
         return out
 
     def _body_to_request_body(self, p: dict, op: dict, ctx: str) -> dict:
@@ -193,15 +273,19 @@ class _Upgrader:
         props: dict[str, Any] = {}
         required: list[str] = []
         for p in params:
-            schema = {k: self._fix_schema(v) for k, v in p.items()
-                      if k in _SCHEMA_FIELDS}
-            if p.get("type") == "file":
-                schema = {"type": "string", "format": "binary"}
+            name = p.get("name")
+            if not name:  # formData property name is mandatory
+                self.lossy.append(
+                    f"{ctx}: formData parameter without a name dropped"
+                )
+                continue
+            raw_schema = {k: v for k, v in p.items() if k in _SCHEMA_FIELDS}
+            schema = self._fix_schema(raw_schema) if raw_schema else {}
             if p.get("description"):
                 schema["description"] = p["description"]
-            props[p["name"]] = schema or {"type": "string"}
+            props[name] = schema or {"type": "string"}
             if p.get("required"):
-                required.append(p["name"])
+                required.append(name)
             if p.get("collectionFormat"):
                 self.lossy.append(
                     f"{ctx}: collectionFormat '{p['collectionFormat']}' on "
@@ -224,6 +308,9 @@ class _Upgrader:
         form: list[dict] = []
         for p in raw:
             if not isinstance(p, dict):
+                self.lossy.append(
+                    f"{ctx}: a non-object parameter entry was dropped"
+                )
                 continue
             if "$ref" in p:
                 ref = self._fix_ref(p["$ref"])
@@ -242,6 +329,12 @@ class _Upgrader:
                 body = self._body_to_request_body(p, op, ctx)
             elif loc == "formData":
                 form.append(p)
+            elif not p.get("name"):
+                # query/path/header parameters require a name in OpenAPI 3
+                self.lossy.append(
+                    f"{ctx}: {loc or 'unknown-location'} parameter without a "
+                    "name dropped"
+                )
             else:
                 params.append(self._convert_param(p, ctx))
         if form:
@@ -259,9 +352,14 @@ class _Upgrader:
     def _convert_response(self, resp: dict, op: dict, ctx: str) -> dict:
         if "$ref" in resp:
             return {"$ref": self._fix_ref(resp["$ref"])}
-        out: dict[str, Any] = {
-            "description": resp.get("description", "")
-        }
+        description = resp.get("description")
+        if not description:  # required on the OA3 Response Object
+            description = ""
+            self.assumptions.append(
+                f"{ctx}: response missing 'description' (required in "
+                "OpenAPI 3); used an empty string"
+            )
+        out: dict[str, Any] = {"description": description}
         for k, v in resp.items():
             if k.startswith("x-"):
                 out[k] = v
@@ -289,54 +387,61 @@ class _Upgrader:
 
     # -- security -------------------------------------------------------------
 
+    # oauth2 flow name mapping + which URLs each flow requires in OpenAPI 3
+    _OAUTH_FLOWS = {
+        "implicit": ("implicit", ("authorizationUrl",)),
+        "password": ("password", ("tokenUrl",)),
+        "application": ("clientCredentials", ("tokenUrl",)),
+        "accessCode": ("authorizationCode", ("authorizationUrl", "tokenUrl")),
+    }
+
     def _convert_security_schemes(self) -> dict:
         out: dict[str, Any] = {}
-        flow_names = {
-            "implicit": "implicit",
-            "password": "password",
-            "application": "clientCredentials",
-            "accessCode": "authorizationCode",
-        }
         for name, sd in (self.src.get("securityDefinitions") or {}).items():
             t = sd.get("type")
-            if t == "basic":
-                out[name] = {"type": "http", "scheme": "basic"}
-                if sd.get("description"):
-                    out[name]["description"] = sd["description"]
-            elif t == "apiKey":
-                out[name] = {k: sd[k] for k in ("type", "name", "in")
-                             if k in sd}
-                if sd.get("description"):
-                    out[name]["description"] = sd["description"]
-            elif t == "oauth2":
-                raw_flow = sd.get("flow")
-                flow = flow_names.get(raw_flow)
-                if flow is None:
-                    flow = "implicit"
-                    self.lossy.append(
-                        f"securityDefinitions.{name}: oauth2 flow "
-                        f"'{raw_flow}' missing/unrecognized; assumed "
-                        "'implicit'"
-                    )
-                flow_obj: dict[str, Any] = {
-                    "scopes": sd.get("scopes", {}),
-                }
-                if "authorizationUrl" in sd:
-                    flow_obj["authorizationUrl"] = sd["authorizationUrl"]
-                if "tokenUrl" in sd:
-                    flow_obj["tokenUrl"] = sd["tokenUrl"]
-                entry: dict[str, Any] = {
-                    "type": "oauth2", "flows": {flow: flow_obj},
-                }
-                if sd.get("description"):
-                    entry["description"] = sd["description"]
+            entry = self._one_security_scheme(name, t, sd)
+            if entry is not None:
                 out[name] = entry
-            else:
-                out[name] = dict(sd)
-                self.lossy.append(
-                    f"securityDefinitions.{name}: unknown type '{t}' copied as-is"
-                )
         return out
+
+    def _one_security_scheme(self, name: str, t: str, sd: dict):
+        """Return a valid OpenAPI 3 securityScheme, or None (dropped +
+        recorded in x-s2o.lossy) when the source cannot yield one."""
+        def drop(reason: str):
+            self.lossy.append(
+                f"securityDefinitions.{name}: {reason}; dropped from "
+                "securitySchemes"
+            )
+            return None
+
+        if t == "basic":
+            entry = {"type": "http", "scheme": "basic"}
+        elif t == "apiKey":
+            if not sd.get("name") or sd.get("in") not in ("query", "header", "cookie"):
+                return drop("apiKey missing a valid 'name'/'in'")
+            entry = {"type": "apiKey", "name": sd["name"], "in": sd["in"]}
+        elif t == "oauth2":
+            raw_flow = sd.get("flow")
+            mapped = self._OAUTH_FLOWS.get(raw_flow)
+            if mapped is None:
+                return drop(f"oauth2 flow '{raw_flow}' missing/unrecognized")
+            flow_key, required_urls = mapped
+            missing = [u for u in required_urls if not sd.get(u)]
+            if missing:
+                return drop(
+                    f"oauth2 '{raw_flow}' flow missing required "
+                    f"{', '.join(missing)}"
+                )
+            flow_obj: dict[str, Any] = {"scopes": sd.get("scopes") or {}}
+            for u in required_urls:
+                flow_obj[u] = sd[u]
+            entry = {"type": "oauth2", "flows": {flow_key: flow_obj}}
+        else:
+            return drop(f"unknown security type '{t}'")
+
+        if sd.get("description"):
+            entry["description"] = sd["description"]
+        return entry
 
     # -- top level -------------------------------------------------------------
 
@@ -367,21 +472,67 @@ class _Upgrader:
         raw = raw.replace("{", "").replace("}", "")
         return _ID_RE.sub("_", raw).strip("_")[:64]
 
+    def _build_info(self) -> dict[str, Any]:
+        # title and version are REQUIRED in OpenAPI 3; fill whichever is
+        # missing (a present-but-partial info must still be completed)
+        info = dict(self.src.get("info") or {})
+        if not info.get("title"):
+            info["title"] = "API"
+            self.assumptions.append("info.title missing; defaulted to 'API'")
+        if not info.get("version"):
+            info["version"] = "0.0.0"
+            self.assumptions.append(
+                "info.version missing; defaulted to '0.0.0'"
+            )
+        return info
+
+    def _ensure_path_params(self, path: str, params: list, ctx: str) -> list:
+        """Every {template} in the path MUST have an in:path parameter."""
+        global_params = self.src.get("parameters") or {}
+        present: set = set()
+        for p in params:
+            if not isinstance(p, dict):
+                continue
+            if p.get("in") == "path" and p.get("name"):
+                present.add(p["name"])
+            elif "$ref" in p:  # resolve to the referenced global parameter
+                ref = global_params.get(p["$ref"].rsplit("/", 1)[-1])
+                if isinstance(ref, dict) and ref.get("in") == "path":
+                    present.add(ref.get("name"))
+        for name in re.findall(r"{([^}]+)}", path):
+            if name in present:
+                continue
+            params = params + [{
+                "name": name, "in": "path", "required": True,
+                "schema": {"type": "string"},
+            }]
+            present.add(name)
+            self.assumptions.append(
+                f"{ctx}: path template '{{{name}}}' had no parameter; "
+                "injected a required string path parameter"
+            )
+        return params
+
     def convert(self) -> dict[str, Any]:
         src = self.src
-        if "info" not in src:
-            self.assumptions.append(
-                "no 'info' object; used default title 'API' version '0.0.0'"
-            )
         out: dict[str, Any] = {
             "openapi": "3.0.3",
-            "info": dict(src.get("info", {"title": "API", "version": "0.0.0"})),
+            "info": self._build_info(),
             "servers": self._servers(),
             "paths": {},
         }
-        for k in ("tags", "externalDocs", "security"):
+        for k in ("externalDocs", "security"):
             if k in src:
                 out[k] = src[k]
+        if "tags" in src:  # Tag Object requires a name
+            tags = []
+            for tag in src["tags"]:
+                if isinstance(tag, dict) and tag.get("name"):
+                    tags.append(tag)
+                else:
+                    self.lossy.append("a tag without a name was dropped")
+            if tags:
+                out["tags"] = tags
         # carry root-level vendor extensions
         for k, v in src.items():
             if k.startswith("x-"):
@@ -392,10 +543,20 @@ class _Upgrader:
             if path.startswith("x-"):  # Paths-object vendor extension
                 out["paths"][path] = item
                 continue
+            # Paths Object keys must start with '/'
+            out_path = path if path.startswith("/") else "/" + path
+            if out_path != path:
+                self.assumptions.append(
+                    f"path '{path}' has no leading slash; normalized to "
+                    f"'{out_path}'"
+                )
             if not isinstance(item, dict):
+                self.lossy.append(
+                    f"path '{path}': non-object path item dropped"
+                )
                 continue
             if "$ref" in item:  # path item is a $ref (legal in OpenAPI 3)
-                out["paths"][path] = {"$ref": self._fix_ref(item["$ref"])}
+                out["paths"][out_path] = {"$ref": self._fix_ref(item["$ref"])}
                 continue
             new_item: dict[str, Any] = {}
             shared_raw = item.get("parameters", [])
@@ -438,23 +599,31 @@ class _Upgrader:
 
                 raw_params = _merge_params(shared_raw, op.get("parameters", []))
                 params, request_body = self._split_params(raw_params, op, ctx)
+                params = self._ensure_path_params(path, params, ctx)
                 if params:
                     new_op["parameters"] = params
                 if request_body is not None:
                     new_op["requestBody"] = request_body
 
-                new_op["responses"] = {
+                responses = {
                     str(code): self._convert_response(resp, op, ctx)
                     for code, resp in (op.get("responses") or {}).items()
-                } or {"200": {"description": "OK"}}
+                }
+                if not responses:  # Responses Object requires >= 1 response
+                    responses = {"200": {"description": "OK"}}
+                    self.assumptions.append(
+                        f"{ctx}: no responses declared; added a generic "
+                        "'200 OK' (required in OpenAPI 3)"
+                    )
+                new_op["responses"] = responses
 
                 new_item[method] = new_op
-            out["paths"][path] = new_item
+            out["paths"][out_path] = new_item
 
         components: dict[str, Any] = {}
         if src.get("definitions"):
             components["schemas"] = {
-                name: self._fix_schema(schema)
+                self._schema_key.get(name, name): self._fix_schema(schema)
                 for name, schema in src["definitions"].items()
             }
         global_params = src.get("parameters") or {}
