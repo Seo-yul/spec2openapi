@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: StressService
   version: 1.0.0
-  description: Generated from WSDL by spec2openapi 0.2.0. Each path is a SOAP operation exposed as a JSON
+  description: Generated from WSDL by spec2openapi 0.2.1. Each path is a SOAP operation exposed as a JSON
     call.
 servers:
 - url: http://localhost:18085
@@ -386,5 +386,5 @@ components:
       - code
 x-soap:
   wsdl: tests/fixtures/stress.wsdl
-  generator: spec2openapi/0.2.0
+  generator: spec2openapi/0.2.1
   skippedOperations: []
