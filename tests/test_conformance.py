@@ -94,6 +94,44 @@ def test_partly_declared_path_templates():
     assert sorted(names) == ["x", "y"]
 
 
+# -- path leading slash / tag name / array items -----------------------------
+
+def test_path_gets_leading_slash():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"noslash": {"get": {
+               "operationId": "a", "responses": {"200": {"description": "ok"}},
+           }}}}
+    out = _valid(src)
+    assert "/noslash" in out["paths"]
+    assert "noslash" not in out["paths"]
+
+
+def test_tag_without_name_dropped():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "tags": [{"description": "x"}, {"name": "good"}]}
+    out = _valid(src)
+    assert out["tags"] == [{"name": "good"}]
+    assert out["x-s2o"]["lossy"]
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_array_without_items_gets_items(version):
+    # in a definition
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {"T": {"type": "array"}}}
+    out = _valid(src, version)
+    assert out["components"]["schemas"]["T"].get("items") == {}
+    # in a parameter
+    src2 = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+            "paths": {"/a": {"get": {
+                "operationId": "a",
+                "parameters": [{"name": "q", "in": "query", "type": "array"}],
+                "responses": {"200": {"description": "ok"}},
+            }}}}
+    out2 = _valid(src2, version)
+    assert out2["paths"]["/a"]["get"]["parameters"][0]["schema"]["items"] == {}
+
+
 # -- explicit required on every parameter ------------------------------------
 
 def test_required_always_explicit():

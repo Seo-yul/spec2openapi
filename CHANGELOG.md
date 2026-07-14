@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unambiguous output (#29).
 
 ### Fixed
+- More context-required OpenAPI 3 rules enforced (#31): a path key without
+  a leading `/` is prefixed (Swagger paths and WSDL `--base-path`); a `tag`
+  without a `name` is dropped; a `type: array` schema without `items` gets
+  `items: {}` (parameters, form fields, and definitions). Recorded in
+  `x-s2o`.
 - Unconvertible input now fails loudly instead of being dropped silently
   (#25): an XSD element with an unresolvable type (which would drop a
   required schema property) and a WSDL that yields zero convertible SOAP
