@@ -63,7 +63,8 @@ python -m pytest tests/ -v
 
 `main` is the default branch and always points at the **latest release**;
 day-to-day development happens on `develop`. **All contributions target
-`develop`, not `main`** — `main` only ever receives release merges.
+`develop`, not `main`** — `main` only ever receives release merges. See
+[docs/branching.md](docs/branching.md) for the full branch & release model.
 
 1. Open (or find) an issue first — every PR should be linked to one.
 2. Fork, then branch from `develop` (not the default `main`):
