@@ -134,6 +134,13 @@ class _Upgrader:
         if out.get("type") == "file":
             out["type"] = "string"
             out["format"] = "binary"
+        elif out.get("type") == "array" and "items" not in out:
+            # OpenAPI (3.0 and 3.1) requires items on an array schema
+            out["items"] = {}
+            self.assumptions.append(
+                "an array schema without 'items' got 'items: {}' (required "
+                "in OpenAPI 3)"
+            )
         elif isinstance(out.get("type"), list):
             # JSON-Schema type array is invalid in OpenAPI 3.0; collapse to a
             # single type + nullable (to_openapi_31 re-expands for 3.1)
@@ -185,10 +192,10 @@ class _Upgrader:
                 f"{ctx}: path parameter '{p.get('name')}' forced to "
                 "required:true (mandatory in OpenAPI 3)"
             )
-        schema = {k: self._fix_schema(v) for k, v in p.items()
-                  if k in _SCHEMA_FIELDS}
-        if schema.get("type") == "file":
-            schema = {"type": "string", "format": "binary"}
+        # run the assembled schema through _fix_schema so top-level rules
+        # (type:file, array-needs-items, type-array) apply
+        raw_schema = {k: v for k, v in p.items() if k in _SCHEMA_FIELDS}
+        schema = self._fix_schema(raw_schema) if raw_schema else {}
         out["schema"] = schema or {"type": "string"}
 
         cf = p.get("collectionFormat")
@@ -250,10 +257,8 @@ class _Upgrader:
                     f"{ctx}: formData parameter without a name dropped"
                 )
                 continue
-            schema = {k: self._fix_schema(v) for k, v in p.items()
-                      if k in _SCHEMA_FIELDS}
-            if p.get("type") == "file":
-                schema = {"type": "string", "format": "binary"}
+            raw_schema = {k: v for k, v in p.items() if k in _SCHEMA_FIELDS}
+            schema = self._fix_schema(raw_schema) if raw_schema else {}
             if p.get("description"):
                 schema["description"] = p["description"]
             props[name] = schema or {"type": "string"}
@@ -494,9 +499,18 @@ class _Upgrader:
             "servers": self._servers(),
             "paths": {},
         }
-        for k in ("tags", "externalDocs", "security"):
+        for k in ("externalDocs", "security"):
             if k in src:
                 out[k] = src[k]
+        if "tags" in src:  # Tag Object requires a name
+            tags = []
+            for tag in src["tags"]:
+                if isinstance(tag, dict) and tag.get("name"):
+                    tags.append(tag)
+                else:
+                    self.lossy.append("a tag without a name was dropped")
+            if tags:
+                out["tags"] = tags
         # carry root-level vendor extensions
         for k, v in src.items():
             if k.startswith("x-"):
@@ -507,13 +521,20 @@ class _Upgrader:
             if path.startswith("x-"):  # Paths-object vendor extension
                 out["paths"][path] = item
                 continue
+            # Paths Object keys must start with '/'
+            out_path = path if path.startswith("/") else "/" + path
+            if out_path != path:
+                self.assumptions.append(
+                    f"path '{path}' has no leading slash; normalized to "
+                    f"'{out_path}'"
+                )
             if not isinstance(item, dict):
                 self.lossy.append(
                     f"path '{path}': non-object path item dropped"
                 )
                 continue
             if "$ref" in item:  # path item is a $ref (legal in OpenAPI 3)
-                out["paths"][path] = {"$ref": self._fix_ref(item["$ref"])}
+                out["paths"][out_path] = {"$ref": self._fix_ref(item["$ref"])}
                 continue
             new_item: dict[str, Any] = {}
             shared_raw = item.get("parameters", [])
@@ -575,7 +596,7 @@ class _Upgrader:
                 new_op["responses"] = responses
 
                 new_item[method] = new_op
-            out["paths"][path] = new_item
+            out["paths"][out_path] = new_item
 
         components: dict[str, Any] = {}
         if src.get("definitions"):

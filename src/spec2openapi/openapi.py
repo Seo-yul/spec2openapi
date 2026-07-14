@@ -85,6 +85,10 @@ def build_spec(
     base_path: str = "/operations",
     openapi_version: str = "3.0",
 ) -> dict[str, Any]:
+    # Paths Object keys must start with '/'
+    base_path = base_path or ""
+    if not base_path.startswith("/"):
+        base_path = "/" + base_path
     if not parsed.operations:
         detail = ""
         if parsed.skipped:
