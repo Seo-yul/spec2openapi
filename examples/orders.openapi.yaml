@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: OrderService
   version: 1.0.0
-  description: Generated from WSDL by spec2openapi 0.2.0. Each path is a SOAP operation exposed as a JSON
+  description: Generated from WSDL by spec2openapi 0.2.1. Each path is a SOAP operation exposed as a JSON
     call.
 servers:
 - url: http://localhost:18081
@@ -230,5 +230,5 @@ components:
       - price
 x-soap:
   wsdl: tests/fixtures/orders.wsdl
-  generator: spec2openapi/0.2.0
+  generator: spec2openapi/0.2.1
   skippedOperations: []
