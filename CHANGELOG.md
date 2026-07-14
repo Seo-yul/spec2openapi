@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unambiguous output (#29).
 
 ### Fixed
+- Swagger `definitions` names with invalid characters (spaces, slashes)
+  are sanitized to valid OpenAPI 3 component keys, with every `$ref`
+  rewritten to match and collisions deduped; renames recorded in
+  `x-s2o.assumptions` (#33).
 - More context-required OpenAPI 3 rules enforced (#31): a path key without
   a leading `/` is prefixed (Swagger paths and WSDL `--base-path`); a `tag`
   without a `name` is dropped; a `type: array` schema without `items` gets

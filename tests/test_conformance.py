@@ -94,6 +94,38 @@ def test_partly_declared_path_templates():
     assert sorted(names) == ["x", "y"]
 
 
+# -- component key charset ---------------------------------------------------
+
+def test_definition_names_sanitized_and_refs_rewritten():
+    import re
+    key_re = re.compile(r"^[a-zA-Z0-9._-]+$")
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a": {"post": {
+            "operationId": "a",
+            "parameters": [{"name": "b", "in": "body",
+                            "schema": {"$ref": "#/definitions/Foo Bar"}}],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+        "definitions": {
+            "Foo Bar": {"type": "object",
+                        "properties": {"c": {"$ref": "#/definitions/Foo/Bar"}}},
+            "Foo/Bar": {"type": "object"},
+        },
+    }
+    out = _valid(src)
+    keys = list(out["components"]["schemas"])
+    assert all(key_re.match(k) for k in keys)          # all keys valid
+    assert len(keys) == len(set(keys)) == 2            # collision deduped
+    # every $ref points at a real, sanitized key
+    body_ref = out["paths"]["/a"]["post"]["requestBody"]["content"][
+        "application/json"]["schema"]["$ref"]
+    assert body_ref.rsplit("/", 1)[-1] in keys
+    nested_ref = out["components"]["schemas"][
+        body_ref.rsplit("/", 1)[-1]]["properties"]["c"]["$ref"]
+    assert nested_ref.rsplit("/", 1)[-1] in keys
+
+
 # -- path leading slash / tag name / array items -----------------------------
 
 def test_path_gets_leading_slash():

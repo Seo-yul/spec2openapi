@@ -35,6 +35,8 @@ _SCHEMA_FIELDS = (
 # FastMCP normalizes tool names to [A-Za-z0-9_]; generate ids accordingly
 # so that tool name == operationId holds after the round-trip.
 _ID_RE = re.compile(r"[^A-Za-z0-9_]+")
+# OpenAPI 3 component keys allow letters, digits, '.', '-', '_'
+_COMPONENT_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def is_swagger2(spec: dict[str, Any]) -> bool:
@@ -90,12 +92,32 @@ class _Upgrader:
             for name, p in (src.get("parameters") or {}).items()
             if isinstance(p, dict) and p.get("in") == "body"
         }
+        # OpenAPI 3 component keys must match ^[a-zA-Z0-9.\-_]+$; map each
+        # definition name to a valid, unique component key
+        self._schema_key: dict[str, str] = {}
+        used: set[str] = set()
+        for name in (src.get("definitions") or {}):
+            key = _COMPONENT_KEY_RE.sub("_", name).strip("_") or "schema"
+            if key in used:
+                i = 2
+                while f"{key}_{i}" in used:
+                    i += 1
+                key = f"{key}_{i}"
+            used.add(key)
+            self._schema_key[name] = key
+            if key != name:
+                self.assumptions.append(
+                    f"definition '{name}' renamed to component schema "
+                    f"'{key}' (OpenAPI 3 component-key charset)"
+                )
 
     # -- helpers -----------------------------------------------------------
 
     def _fix_ref(self, ref: str) -> str:
         if ref.startswith("#/definitions/"):
-            return ref.replace("#/definitions/", "#/components/schemas/", 1)
+            name = ref[len("#/definitions/"):]
+            key = self._schema_key.get(name, name)
+            return f"#/components/schemas/{key}"
         if ref.startswith("#/parameters/"):
             name = ref.rsplit("/", 1)[-1]
             if name in self._global_body_params:
@@ -601,7 +623,7 @@ class _Upgrader:
         components: dict[str, Any] = {}
         if src.get("definitions"):
             components["schemas"] = {
-                name: self._fix_schema(schema)
+                self._schema_key.get(name, name): self._fix_schema(schema)
                 for name, schema in src["definitions"].items()
             }
         global_params = src.get("parameters") or {}
