@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 from . import __version__ as _version
+from .errors import ConversionError
 from .openapi import _unique_id, to_openapi_31
 
 _METHODS = ("get", "put", "post", "delete", "options", "head", "patch")
@@ -40,7 +41,8 @@ _COMPONENT_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def is_swagger2(spec: dict[str, Any]) -> bool:
-    return str(spec.get("swagger", "")).startswith("2")
+    # predicate: a non-mapping simply isn't a Swagger 2.0 document
+    return isinstance(spec, dict) and str(spec.get("swagger", "")).startswith("2")
 
 
 def _as_bool(v: Any) -> bool:
@@ -72,6 +74,11 @@ def convert_swagger(
     spec: dict[str, Any], *, openapi_version: str = "3.0"
 ) -> dict[str, Any]:
     """Upgrade a Swagger 2.0 dict to OpenAPI 3.0 (or 3.1)."""
+    if not isinstance(spec, dict):
+        raise ConversionError(
+            "convert_swagger expects an OpenAPI/Swagger mapping (dict), "
+            f"got {type(spec).__name__}"
+        )
     if not is_swagger2(spec):
         raise ValueError("not a Swagger 2.0 document (missing swagger: '2.0')")
     up = _Upgrader(spec)

@@ -122,3 +122,28 @@ def test_non_xml_wsdl_reports_xml_error_not_cryptic(tmp_path):
         assert "getroottree" not in str(exc.value)  # no zeep-internal leak
     finally:
         logging.disable(logging.NOTSET)
+
+
+# -- library input type guards (#50) -----------------------------------------
+
+@pytest.mark.parametrize("bad", ["a string", None, [1, 2], 42])
+def test_convert_swagger_rejects_non_mapping(bad):
+    from spec2openapi import convert_swagger
+    with pytest.raises(ConversionError) as exc:
+        convert_swagger(bad)
+    msg = str(exc.value)
+    assert "mapping" in msg and type(bad).__name__ in msg
+
+
+@pytest.mark.parametrize("bad", [{"not": "a path"}, None, 42, ["x"]])
+def test_convert_wsdl_rejects_non_path(bad):
+    with pytest.raises(ConversionError) as exc:
+        convert_wsdl(bad)
+    assert type(bad).__name__ in str(exc.value)
+
+
+def test_is_swagger2_false_for_non_mapping():
+    from spec2openapi import is_swagger2
+    assert is_swagger2("not a dict") is False
+    assert is_swagger2(None) is False
+    assert is_swagger2({"swagger": "2.0"}) is True

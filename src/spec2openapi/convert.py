@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,11 @@ def convert_wsdl(
     Set forbid_external=True when the WSDL comes from an untrusted source
     (refuses to fetch remote wsdl:/xsd: imports).
     """
+    if not isinstance(source, (str, os.PathLike)):
+        raise ConversionError(
+            "convert_wsdl expects a WSDL file path or URL (str), "
+            f"got {type(source).__name__}"
+        )
     parsed = parse_wsdl(
         source, service=service, port=port,
         prefer_soap12=prefer_soap12, strict=strict,
