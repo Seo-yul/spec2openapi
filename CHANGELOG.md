@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Format errors are now traceable (#48): JSON/YAML syntax errors are
+  prefixed with the source file path (in addition to the line/column the
+  parser reports), and a malformed WSDL is pre-parsed so the error points
+  at the XML syntax location (`invalid XML in <file>: … line X, column Y`)
+  instead of a misleading "no convertible operations" or a cryptic
+  zeep-internal message.
+
 ## [0.2.1] - 2026-07-14
 
 ### Added

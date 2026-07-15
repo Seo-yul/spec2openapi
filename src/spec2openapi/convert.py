@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .errors import ConversionError
 from .openapi import build_spec, dump_spec  # noqa: F401  (re-exported)
 from .parser import parse_wsdl
 
@@ -45,14 +46,21 @@ def convert_wsdl(
 
 def load_spec(path: str | Path) -> dict[str, Any]:
     """Load an OpenAPI/Swagger spec from a .yaml/.yml/.json file."""
+    import yaml
+
     p = Path(path)
     text = p.read_text(encoding="utf-8-sig")
-    if p.suffix.lower() == ".json" or text.lstrip().startswith("{"):
-        spec = json.loads(text)
-    else:
-        import yaml
-
-        spec = yaml.safe_load(text)
+    # parse errors are prefixed with the file path so the location is
+    # traceable (json/yaml already report the line and column)
+    try:
+        if p.suffix.lower() == ".json" or text.lstrip().startswith("{"):
+            spec = json.loads(text)
+        else:
+            spec = yaml.safe_load(text)
+    except json.JSONDecodeError as exc:
+        raise ConversionError(f"{p}: invalid JSON — {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise ConversionError(f"{p}: invalid YAML — {exc}") from exc
     if not isinstance(spec, dict):
         raise ValueError(
             f"{p}: not a valid OpenAPI/Swagger document "
