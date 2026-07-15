@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Library entry points reject the wrong input type with a clear error
+  instead of crashing downstream (#50): `convert_swagger` requires a
+  mapping and `convert_wsdl` a path/URL string — a mismatch raises
+  `ConversionError` naming the expected and actual type; `is_swagger2`
+  returns `False` for a non-mapping.
 - Format errors are now traceable (#48): JSON/YAML syntax errors are
   prefixed with the source file path (in addition to the line/column the
   parser reports), and a malformed WSDL is pre-parsed so the error points
