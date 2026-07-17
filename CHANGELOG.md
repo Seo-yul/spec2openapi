@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `x-s2o.assumptions` (#61).
 
 ### Fixed
+- A templated `host`/`basePath` (`{region}.example.com`) now declares the
+  template names under `servers[].variables` (empty defaults, recorded in
+  `x-s2o.assumptions`) instead of emitting an unusable URL with undeclared
+  variables (#65).
 - A `$ref` to a global `formData` parameter is now dereferenced and merged
   into the operation's form `requestBody`, and the global entry (which has
   no standalone OpenAPI 3 equivalent) is dropped from components with an

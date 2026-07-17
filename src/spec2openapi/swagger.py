@@ -585,7 +585,22 @@ class _Upgrader:
             self.assumptions.append(
                 "no 'schemes' declared; assumed https"
             )
-        return [{"url": f"{s}://{host}{base}"} for s in schemes]
+        servers = []
+        for s in schemes:
+            url = f"{s}://{host}{base}"
+            server: dict[str, Any] = {"url": url}
+            # OpenAPI 3 requires every {variable} in a server URL to be
+            # declared under `variables` (with a default)
+            tvars = re.findall(r"{([^}]+)}", url)
+            if tvars:
+                server["variables"] = {v: {"default": ""} for v in tvars}
+                self.assumptions.append(
+                    f"server url '{url}' is templated; declared "
+                    f"variables {tvars} with empty defaults (supply values "
+                    "at runtime)"
+                )
+            servers.append(server)
+        return servers
 
     def _gen_operation_id(self, method: str, path: str) -> str:
         raw = f"{method}_{path.strip('/') or 'root'}"
