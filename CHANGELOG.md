@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `x-s2o.assumptions` (#61).
 
 ### Fixed
+- Deep local `$ref`s that address an arbitrary document location
+  (`#/paths/.../responses/200/schema/...`,
+  `#/definitions/Foo/properties/bar`) no longer dangle after the
+  conversion moves their target: the referenced source subtree is
+  resolved and inlined (with all schema fixups applied), recorded in
+  `x-s2o.assumptions`; cyclic or unresolvable pointers become `{}` and
+  are recorded in `x-s2o.lossy` (#75).
 - `collectionFormat` inside an Items Object (legal in Swagger 2.0 for
   nested-array serialization) no longer leaks into the OpenAPI 3 schema:
   it is preserved as `x-collectionFormat` and recorded in `x-s2o.lossy`,
