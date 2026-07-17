@@ -507,3 +507,49 @@ def test_existing_description_untouched():
                "200": {"description": "custom"}}}}}}
     out = _valid(src)
     assert out["paths"]["/a"]["get"]["responses"]["200"]["description"] == "custom"
+
+
+# -- strict mode + recording completeness (#63) --------------------------------
+
+def test_allow_empty_value_drop_recorded():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a/{id}": {"get": {
+               "operationId": "a",
+               "parameters": [{"name": "id", "in": "path", "required": True,
+                               "type": "string", "allowEmptyValue": True}],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src)
+    assert any("allowEmptyValue" in m for m in out["x-s2o"]["lossy"])
+
+
+def test_operationid_dedup_recorded():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {
+               "/a": {"get": {"operationId": "same",
+                              "responses": {"200": {"description": "ok"}}}},
+               "/b": {"get": {"operationId": "same",
+                              "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src)
+    assert any("renamed to 'same_2'" in a for a in out["x-s2o"]["assumptions"])
+
+
+def test_strict_raises_with_records_listed():
+    from spec2openapi import ConversionError
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {  # no operationId, no host -> assumptions
+               "responses": {"200": {"description": "ok"}}}}}}
+    with pytest.raises(ConversionError) as exc:
+        convert_swagger(src, strict=True)
+    msg = str(exc.value)
+    assert "strict mode" in msg
+    assert "operationId" in msg  # the actual records are listed
+
+
+def test_strict_passes_clean_spec():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "host": "api.example.com", "schemes": ["https"],
+           "paths": {"/a": {"get": {
+               "operationId": "a", "produces": ["application/json"],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = convert_swagger(src, strict=True)
+    assert out["x-s2o"]["assumptions"] == [] and out["x-s2o"]["lossy"] == []

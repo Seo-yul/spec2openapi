@@ -126,6 +126,8 @@ Upgrading is favorable: OpenAPI 3.x is a superset of Swagger 2.0, so almost noth
 2. **Preserve, never drop** — constructs with no OpenAPI 3 equivalent (e.g. `collectionFormat: tsv`) are kept as `x-` extensions and listed in `x-s2o.lossy`.
 3. **Verify the outcome** — `spec2openapi validate` runs the actual FastMCP round-trip; assumptions never block tool generation because tools only need paths and schemas.
 
+Pipelines that must not accept guessed conversions can pass `--strict` to `upgrade` (or `strict=True` to `convert_swagger`): the conversion then fails with the full list of assumption/lossy records instead of applying them.
+
 ## Kubernetes: one image, many MCP servers
 
 ```bash

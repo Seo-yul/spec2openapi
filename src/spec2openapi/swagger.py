@@ -72,9 +72,15 @@ def _merge_params(shared: list, op_level: list) -> list:
 
 
 def convert_swagger(
-    spec: dict[str, Any], *, openapi_version: str = "3.0"
+    spec: dict[str, Any], *, openapi_version: str = "3.0",
+    strict: bool = False,
 ) -> dict[str, Any]:
-    """Upgrade a Swagger 2.0 dict to OpenAPI 3.0 (or 3.1)."""
+    """Upgrade a Swagger 2.0 dict to OpenAPI 3.0 (or 3.1).
+
+    strict=True fails (ConversionError) when the conversion would need any
+    assumption or lossy transformation — for pipelines that must not accept
+    guessed conversions. The records are listed in the error message.
+    """
     if not isinstance(spec, dict):
         raise ConversionError(
             "convert_swagger expects an OpenAPI/Swagger mapping (dict), "
@@ -84,6 +90,15 @@ def convert_swagger(
         raise ValueError("not a Swagger 2.0 document (missing swagger: '2.0')")
     up = _Upgrader(spec)
     out = up.convert()
+    if strict and (up.assumptions or up.lossy):
+        records = [f"assumption: {a}" for a in up.assumptions]
+        records += [f"lossy: {m}" for m in up.lossy]
+        shown = "\n  ".join(records[:20])
+        more = f"\n  … and {len(records) - 20} more" if len(records) > 20 else ""
+        raise ConversionError(
+            f"strict mode: conversion required {len(records)} "
+            f"assumption(s)/lossy transformation(s):\n  {shown}{more}"
+        )
     if openapi_version.startswith("3.1"):
         out = to_openapi_31(out)
     return out
@@ -280,8 +295,14 @@ class _Upgrader:
         # OpenAPI 3, but we make it explicit for unambiguous output)
         out["required"] = _as_bool(p.get("required", False))
         # allowEmptyValue is valid only for query parameters in OpenAPI 3
-        if loc == "query" and "allowEmptyValue" in p:
-            out["allowEmptyValue"] = _as_bool(p["allowEmptyValue"])
+        if "allowEmptyValue" in p:
+            if loc == "query":
+                out["allowEmptyValue"] = _as_bool(p["allowEmptyValue"])
+            else:
+                self.lossy.append(
+                    f"{ctx}: allowEmptyValue on {loc or 'unknown'} parameter "
+                    f"'{p.get('name')}' dropped (query-only in OpenAPI 3)"
+                )
         # OpenAPI 3 requires path parameters to be required:true
         if loc == "path" and out["required"] is not True:
             out["required"] = True
@@ -702,7 +723,13 @@ class _Upgrader:
                         )
                         op_id = normalized
                 # dedup after normalization/truncation, staying <= 64 chars
-                op_id = _unique_id(op_id, used_ids)
+                deduped = _unique_id(op_id, used_ids)
+                if deduped != op_id:
+                    self.assumptions.append(
+                        f"{ctx}: operationId '{op_id}' already used; "
+                        f"renamed to '{deduped}'"
+                    )
+                op_id = deduped
                 new_op["operationId"] = op_id
 
                 raw_params = _merge_params(shared_raw, op.get("parameters", []))
