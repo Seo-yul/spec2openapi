@@ -450,3 +450,33 @@ def test_null_values_stripped_but_data_nulls_kept():
     t = out["components"]["schemas"]["T"]
     assert t["enum"] == ["a", None] and "default" in t          # data nulls kept
     assert any("null value" in a for a in out["x-s2o"]["assumptions"])
+
+
+# -- global formData parameters (#59) ------------------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_global_formdata_param_inlined(version):
+    """A $ref to a global formData parameter is merged into the form
+    requestBody; the global entry is dropped from components (found on a
+    real-world corpus spec)."""
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a": {"post": {
+            "operationId": "a",
+            "parameters": [{"$ref": "#/parameters/cb"},
+                           {"name": "q", "in": "query", "type": "string"}],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+        "parameters": {"cb": {"name": "callback", "in": "formData",
+                              "type": "string"}},
+    }
+    out = _valid(src, version)
+    post = out["paths"]["/a"]["post"]
+    schema = post["requestBody"]["content"][
+        "application/x-www-form-urlencoded"]["schema"]
+    assert "callback" in schema["properties"]           # inlined
+    names = [p.get("name") for p in post.get("parameters", [])]
+    assert names == ["q"]                               # no leftover $ref
+    comp_params = out.get("components", {}).get("parameters", {})
+    assert "cb" not in comp_params                      # dropped from components
+    assert any("formData parameter" in m for m in out["x-s2o"]["lossy"])

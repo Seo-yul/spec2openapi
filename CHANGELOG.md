@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A `$ref` to a global `formData` parameter is now dereferenced and merged
+  into the operation's form `requestBody`, and the global entry (which has
+  no standalone OpenAPI 3 equivalent) is dropped from components with an
+  `x-s2o` record — previously the output carried an invalid
+  `in: formData` component and an unresolved `$ref` (#59).
 - A string-valued `consumes`/`produces` (a spec violation seen in the
   wild) is now wrapped into a list instead of being split into characters,
   which silently corrupted the `content` map keys; recorded in
