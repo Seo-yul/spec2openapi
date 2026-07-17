@@ -156,7 +156,15 @@ pip install -e ".[dev]"
 python -m pytest tests/
 ```
 
-The suite (104 tests) covers conversion units, the Swagger upgrader, envelope (de)serialization, end-to-end MCP-tool-call → mock-SOAP-server round-trips (rpc, simpleContent, choice, recursive trees, unqualified forms), FastMCP round-trips for every fixture × OpenAPI 3.0/3.1, and stress patterns (circular `$ref`s, deep nesting, large enums, cross-namespace name collisions, duplicate operation names across services, odd path characters, deep `allOf` chains). Generated samples live in [`examples/`](examples/).
+The suite (190 tests) covers conversion units, the Swagger upgrader, envelope (de)serialization, end-to-end MCP-tool-call → mock-SOAP-server round-trips (rpc, simpleContent, choice, recursive trees, unqualified forms), FastMCP round-trips for every fixture × OpenAPI 3.0/3.1, and stress patterns (circular `$ref`s, deep nesting, large enums, cross-namespace name collisions, duplicate operation names across services, odd path characters, deep `allOf` chains). Generated samples live in [`examples/`](examples/).
+
+An opt-in **corpus sweep** additionally runs the Swagger upgrader over a stratified sample of real-world Swagger 2.0 definitions from the public [APIs.guru](https://apis.guru) directory (fetched at test time, cached locally, never committed), checking every output against openapi-spec-validator (3.0 and 3.1) **and** a live `FastMCP.from_openapi()` round-trip:
+
+```bash
+python -m pytest -m corpus     # network required; see tests/corpus/
+```
+
+Pre-existing upstream findings are tracked in `tests/corpus/known_failures.txt` with issue links, so the sweep only fails on regressions.
 
 ## Project layout
 

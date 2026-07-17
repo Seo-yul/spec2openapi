@@ -1,0 +1,20 @@
+# Known corpus failures (allowlist).
+#
+# One spec name per line (as printed by the sweep, e.g. "epa.gov:eff"),
+# optionally followed by "  # reason / tracking issue".
+# Specs listed here may fail without breaking the sweep; anything NOT
+# listed that fails is treated as a regression.
+pims.io  # securitySchemes key with a space — tracked in #72
+setlist.fm  # string default on integer schema — tracked in #73
+ebay.com:buy-browse  # securityScheme key charset — #72
+ijenko.net  # securityScheme key charset — #72
+lyft.com  # securityScheme key charset — #72
+pendo.io  # securityScheme key charset — #72
+openfintech.io  # components.parameters key charset — #72
+clarify.io  # percent-encoded $ref misses key map — #74
+geneea.com  # percent-encoded $ref misses key map — #74
+bethmardutho.org  # deep /paths/... $ref dangles — #75
+opendatasoft.com  # invalid components.parameters entry — #76
+idtbeyond.com  # numeric default on string schema — #73
+gisgraphy.com  # 'false' default on boolean schema — #73
+image-charts.com  # default violates its own pattern — #73

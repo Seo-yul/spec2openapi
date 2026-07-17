@@ -62,3 +62,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "corpus: opt-in sweep over real-world specs (network; run with -m corpus)",
+]
+addopts = "-m 'not corpus'"

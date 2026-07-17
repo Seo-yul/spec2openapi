@@ -149,6 +149,8 @@ python -m pytest tests/
 
 테스트 스위트는 다음으로 구성된다. 변환 단위 테스트, Swagger 업그레이드 테스트, envelope 직렬화/역직렬화 테스트, 목 SOAP 서버를 상대로 한 e2e 테스트(MCP tool 호출→SOAP 왕복이며 rpc·simpleContent·choice·재귀 타입·unqualified form을 포함), 전체 픽스처에 대한 OpenAPI 3.0/3.1 FastMCP 라운드트립, 그리고 실전 난제 패턴을 다룬 스트레스 테스트(재귀·순환 $ref, 4단 중첩, 대형 enum, 네임스페이스 간 타입명 충돌, 서비스 간 동명 오퍼레이션, 특수문자 경로, 깊은 allOf 체인). 생성된 스펙 샘플은 `examples/`에 있다.
 
+추가로 opt-in **코퍼스 스윕**이 있다: 공개 [APIs.guru](https://apis.guru) 디렉터리의 실전 Swagger 2.0 문서를 층화 표본으로 받아(테스트 시 다운로드·로컬 캐시, 저장소에는 커밋하지 않음) 모든 출력에 openapi-spec-validator(3.0/3.1)와 실제 `FastMCP.from_openapi()` 라운드트립을 적용한다. `python -m pytest -m corpus`로 실행하며(네트워크 필요), 기존에 알려진 실패는 `tests/corpus/known_failures.txt`에 이슈 링크와 함께 관리되어 회귀만 실패로 잡힌다.
+
 참고: FastMCP는 tool 이름을 `[A-Za-z0-9_]`로 정규화하므로, 이 라이브러리는 operationId를 처음부터 그 알파벳으로 생성/정규화해 "tool 이름 == operationId"가 항상 성립하게 한다(정규화 발생 시 `x-s2o.assumptions`에 기록, `validate`가 리네임을 감지해 안내).
 
 ## 프로젝트 구조
