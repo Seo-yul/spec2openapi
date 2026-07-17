@@ -396,3 +396,57 @@ def test_string_media_types_wrapped_not_split(kind, where):
                else post["responses"]["200"]["content"])
     assert list(content.keys()) == ["application/json"]  # not ['a','p','l',…]
     assert any("was a string" in a for a in out["x-s2o"]["assumptions"])
+
+
+# -- more GIGO hardening (#57) -------------------------------------------------
+
+def test_boolean_required_hoisted_to_parent():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {},
+           "definitions": {"T": {"type": "object", "properties": {
+               "a": {"type": "string", "required": True},
+               "b": {"type": "string", "required": False}}}}}
+    out = _valid(src)
+    t = out["components"]["schemas"]["T"]
+    assert t["required"] == ["a"]
+    assert "required" not in t["properties"]["a"]
+    assert "required" not in t["properties"]["b"]
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_type_null_literal_becomes_nullable(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {},
+           "definitions": {"T": {"type": "null"}}}
+    out = _valid(src, version)
+    assert out["components"]["schemas"]["T"].get("type") != "null"
+
+
+def test_tuple_items_collapsed():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {},
+           "definitions": {
+               "One": {"type": "array", "items": [{"type": "string"}]},
+               "Two": {"type": "array",
+                       "items": [{"type": "string"}, {"type": "integer"}]}}}
+    out = _valid(src)
+    assert out["components"]["schemas"]["One"]["items"] == {"type": "string"}
+    assert "anyOf" in out["components"]["schemas"]["Two"]["items"]
+
+
+def test_non_string_info_coerced():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": 2}, "paths": {}}
+    out = _valid(src)
+    assert out["info"]["version"] == "2"
+
+
+def test_null_values_stripped_but_data_nulls_kept():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a", "summary": None,
+               "responses": {"200": {"description": "ok",
+                                     "schema": {"type": "string", "format": None}}}}}},
+           "definitions": {"T": {"type": "string", "nullable": True,
+                                 "enum": ["a", None], "default": None}}}
+    out = _valid(src)
+    assert "summary" not in out["paths"]["/a"]["get"]          # structural null gone
+    t = out["components"]["schemas"]["T"]
+    assert t["enum"] == ["a", None] and "default" in t          # data nulls kept
+    assert any("null value" in a for a in out["x-s2o"]["assumptions"])
