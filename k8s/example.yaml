@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: spec2openapi:0.2.1   # reference runtime, built from ./Dockerfile
+          image: spec2openapi:0.2.2   # reference runtime, built from ./Dockerfile
           ports:
             - containerPort: 8000
           volumeMounts:
