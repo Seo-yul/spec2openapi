@@ -5,4 +5,3 @@
 # Specs listed here may fail without breaking the sweep; anything NOT
 # listed that fails is treated as a regression.
 bethmardutho.org  # deep /paths/... $ref dangles — #75
-opendatasoft.com  # invalid components.parameters entry — #76
