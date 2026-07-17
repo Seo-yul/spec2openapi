@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `--strict` on `spec2openapi upgrade` (and `strict=True` on
+  `convert_swagger`): fail with the full list of assumption/lossy records
+  when the conversion would need any, for pipelines that must not accept
+  guessed conversions (#63).
+
 ### Changed
+- Two previously-silent auto-fixes are now recorded (#63): dropping
+  `allowEmptyValue` from a non-query parameter (`x-s2o.lossy`) and
+  renaming a colliding operationId (`same` → `same_2`,
+  `x-s2o.assumptions`).
 - A missing response `description` is now filled with the standard HTTP
   status phrase (`200 → "OK"`, `404 → "Not Found"`, `default → "Default
   response"`; unknown codes stay empty) instead of always an empty

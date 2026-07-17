@@ -139,7 +139,8 @@ def cmd_upgrade(args) -> int:
     from .swagger import convert_swagger
 
     spec = load_spec(args.source)
-    upgraded = convert_swagger(spec, openapi_version=args.openapi_version)
+    upgraded = convert_swagger(spec, openapi_version=args.openapi_version,
+                               strict=args.strict)
 
     report = upgraded.get("x-s2o", {})
     for kind in ("assumptions", "lossy"):
@@ -323,6 +324,9 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("-o", "--output", help="output file (default: stdout)")
     u.add_argument("--format", choices=["yaml", "json"])
     u.add_argument("--openapi-version", choices=["3.0", "3.1"], default="3.0")
+    u.add_argument("--strict", action="store_true",
+                   help="fail when the conversion would need any assumption "
+                        "or lossy transformation")
     u.set_defaults(fn=cmd_upgrade)
 
     v = sub.add_parser("validate",
