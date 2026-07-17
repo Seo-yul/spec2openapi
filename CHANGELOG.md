@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `x-s2o.assumptions` (#61).
 
 ### Fixed
+- `collectionFormat` inside an Items Object (legal in Swagger 2.0 for
+  nested-array serialization) no longer leaks into the OpenAPI 3 schema:
+  it is preserved as `x-collectionFormat` and recorded in `x-s2o.lossy`,
+  since OpenAPI 3 has no serialization keyword inside schemas (#76).
 - A `default` that does not satisfy its own schema is now coerced when
   trivially convertible (`"1"` → `1` for integer/number, `"false"` →
   `false` for boolean, numeric/bool → string for string type; recorded

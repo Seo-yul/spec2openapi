@@ -238,6 +238,15 @@ class _Upgrader:
                     self.lossy.append(
                         "discriminator without 'propertyName' dropped"
                     )
+            elif k == "collectionFormat":
+                # legal in a Swagger 2.0 Items Object, but OpenAPI 3 has no
+                # serialization keyword inside schemas (style/explode exist
+                # only at the parameter level)
+                out["x-collectionFormat"] = v
+                self.lossy.append(
+                    f"collectionFormat {v!r} inside a schema has no "
+                    "OpenAPI 3 equivalent; preserved as x-collectionFormat"
+                )
             elif k in _DATA_KEYWORDS:
                 out[k] = v  # data value: pass through verbatim
             else:

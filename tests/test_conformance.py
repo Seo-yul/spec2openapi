@@ -679,3 +679,19 @@ def test_defaults_coerced_or_dropped(version):
     assert "default" in s["F"] and s["F"]["default"] is None  # null kept
     assert any("coerced" in a for a in out["x-s2o"]["assumptions"])
     assert any("dropped" in m for m in out["x-s2o"]["lossy"])
+
+
+# -- collectionFormat inside an Items Object (#76) -----------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_items_collectionformat_preserved_as_extension(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {"parameters": [
+               {"in": "query", "name": "order_by", "type": "array",
+                "items": {"type": "string", "collectionFormat": "csv"}}],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    items = out["paths"]["/a"]["get"]["parameters"][0]["schema"]["items"]
+    assert "collectionFormat" not in items
+    assert items["x-collectionFormat"] == "csv"
+    assert any("collectionFormat" in m for m in out["x-s2o"]["lossy"])
