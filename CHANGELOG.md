@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `x-s2o.assumptions` (#61).
 
 ### Fixed
+- Component keys are now sanitized across every namespace, not just
+  schemas (#72): `securityDefinitions` / global `parameters` / global
+  `responses` names with invalid characters (`Basic Auth`,
+  `filter[code]`) map to valid `securitySchemes`/`parameters`/
+  `requestBodies`/`responses` keys, with every reference rewritten —
+  security requirement objects (root and operation) and `$ref`s.
+  Renames recorded in `x-s2o.assumptions`.
 - Siblings next to a schema `$ref` (commonly a `description`) are now
   wrapped in `allOf` so OpenAPI 3.0 consumers no longer silently ignore
   them; recorded in `x-s2o.assumptions` (#67).

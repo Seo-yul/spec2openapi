@@ -591,3 +591,51 @@ def test_ref_siblings_wrapped_in_allof(version):
     assert props["x"]["description"] == "keep me"       # sibling stays alive
     assert props["y"] == {"$ref": "#/components/schemas/A"}  # bare untouched
     assert any("allOf" in a for a in out["x-s2o"]["assumptions"])
+
+
+# -- component-key sanitization beyond schemas (#72) ---------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_all_component_namespaces_sanitized(version):
+    """securityDefinitions / global parameters / responses names with
+    invalid characters get valid component keys, with every reference
+    (security requirements, $refs) rewritten to match."""
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "securityDefinitions": {"Basic Auth": {"type": "basic"}},
+        "security": [{"Basic Auth": []}],
+        "parameters": {
+            "filter[code]": {"name": "code", "in": "query", "type": "string"},
+            "the body!": {"name": "b", "in": "body",
+                          "schema": {"type": "object"}},
+        },
+        "responses": {"Not Found!": {"description": "nf"}},
+        "paths": {"/a": {
+            "get": {
+                "operationId": "a",
+                "security": [{"Basic Auth": []}],
+                "parameters": [{"$ref": "#/parameters/filter[code]"}],
+                "responses": {"404": {"$ref": "#/responses/Not Found!"},
+                              "200": {"description": "ok"}},
+            },
+            "post": {
+                "operationId": "b",
+                "parameters": [{"$ref": "#/parameters/the body!"}],
+                "responses": {"200": {"description": "ok"}},
+            },
+        }},
+    }
+    out = _valid(src, version)
+    c = out["components"]
+    key_re = __import__("re").compile(r"^[a-zA-Z0-9._-]+$")
+    for ns in ("securitySchemes", "parameters", "requestBodies", "responses"):
+        assert all(key_re.match(k) for k in c.get(ns, {})), ns
+    # references follow the sanitized keys
+    assert out["security"] == [{"Basic_Auth": []}]
+    get_op = out["paths"]["/a"]["get"]
+    assert get_op["security"] == [{"Basic_Auth": []}]
+    assert get_op["parameters"][0]["$ref"].endswith("/filter_code")
+    assert get_op["responses"]["404"]["$ref"].endswith("/Not_Found")
+    assert out["paths"]["/a"]["post"]["requestBody"]["$ref"].endswith("/the_body")
+    assert any("renamed to component key" in a
+               for a in out["x-s2o"]["assumptions"])

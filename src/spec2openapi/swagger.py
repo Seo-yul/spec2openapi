@@ -124,26 +124,40 @@ class _Upgrader:
             for name, p in (src.get("parameters") or {}).items()
             if isinstance(p, dict) and p.get("in") == "body"
         }
-        # OpenAPI 3 component keys must match ^[a-zA-Z0-9.\-_]+$; map each
-        # definition name to a valid, unique component key
-        self._schema_key: dict[str, str] = {}
+        # OpenAPI 3 component keys must match ^[a-zA-Z0-9.\-_]+$; map every
+        # source name (definitions, global parameters/responses,
+        # securityDefinitions) to a valid, unique component key
+        self._schema_key = self._build_key_map(
+            src.get("definitions") or {}, "definition")
+        self._param_key = self._build_key_map(
+            src.get("parameters") or {}, "parameter")
+        self._param_key_rev = {v: k for k, v in self._param_key.items()}
+        self._resp_key = self._build_key_map(
+            src.get("responses") or {}, "response")
+        self._sec_key = self._build_key_map(
+            src.get("securityDefinitions") or {}, "securityDefinition")
+
+    # -- helpers -----------------------------------------------------------
+
+    def _build_key_map(self, names: Any, kind: str) -> dict[str, str]:
+        """Map source names to valid, unique OpenAPI 3 component keys."""
+        mapping: dict[str, str] = {}
         used: set[str] = set()
-        for name in (src.get("definitions") or {}):
-            key = _COMPONENT_KEY_RE.sub("_", name).strip("_") or "schema"
+        for name in names:
+            key = _COMPONENT_KEY_RE.sub("_", str(name)).strip("_") or kind
             if key in used:
                 i = 2
                 while f"{key}_{i}" in used:
                     i += 1
                 key = f"{key}_{i}"
             used.add(key)
-            self._schema_key[name] = key
+            mapping[name] = key
             if key != name:
                 self.assumptions.append(
-                    f"definition '{name}' renamed to component schema "
-                    f"'{key}' (OpenAPI 3 component-key charset)"
+                    f"{kind} '{name}' renamed to component key '{key}' "
+                    "(OpenAPI 3 component-key charset)"
                 )
-
-    # -- helpers -----------------------------------------------------------
+        return mapping
 
     def _strip_nulls(self, node: Any) -> Any:
         if isinstance(node, list):
@@ -167,13 +181,25 @@ class _Upgrader:
             key = self._schema_key.get(name, name)
             return f"#/components/schemas/{key}"
         if ref.startswith("#/parameters/"):
-            name = ref.rsplit("/", 1)[-1]
+            name = ref[len("#/parameters/"):]
+            key = self._param_key.get(name, name)
             if name in self._global_body_params:
-                return f"#/components/requestBodies/{name}"
-            return ref.replace("#/parameters/", "#/components/parameters/", 1)
+                return f"#/components/requestBodies/{key}"
+            return f"#/components/parameters/{key}"
         if ref.startswith("#/responses/"):
-            return ref.replace("#/responses/", "#/components/responses/", 1)
+            name = ref[len("#/responses/"):]
+            return f"#/components/responses/{self._resp_key.get(name, name)}"
         return ref
+
+    def _fix_security(self, reqs: Any) -> list:
+        """Rewrite security requirement objects to the sanitized scheme keys."""
+        fixed = []
+        for req in reqs if isinstance(reqs, list) else []:
+            if isinstance(req, dict):
+                fixed.append({self._sec_key.get(k, k): v for k, v in req.items()})
+            else:
+                fixed.append(req)
+        return fixed
 
     def _fix_schema(self, node: Any) -> Any:
         """Recursive schema fixups: $refs, type:file, x-nullable,
@@ -530,7 +556,7 @@ class _Upgrader:
             t = sd.get("type")
             entry = self._one_security_scheme(name, t, sd)
             if entry is not None:
-                out[name] = entry
+                out[self._sec_key.get(name, name)] = entry
         return out
 
     def _one_security_scheme(self, name: str, t: str, sd: dict):
@@ -649,7 +675,10 @@ class _Upgrader:
             if p.get("in") == "path" and p.get("name"):
                 present.add(p["name"])
             elif "$ref" in p:  # resolve to the referenced global parameter
-                ref = global_params.get(p["$ref"].rsplit("/", 1)[-1])
+                tail = p["$ref"].rsplit("/", 1)[-1]
+                # rewritten refs carry the sanitized key; map back
+                orig = self._param_key_rev.get(tail, tail)
+                ref = global_params.get(orig)
                 if isinstance(ref, dict) and ref.get("in") == "path":
                     present.add(ref.get("name"))
         for name in re.findall(r"{([^}]+)}", path):
@@ -674,9 +703,10 @@ class _Upgrader:
             "servers": self._servers(),
             "paths": {},
         }
-        for k in ("externalDocs", "security"):
-            if k in src:
-                out[k] = src[k]
+        if "externalDocs" in src:
+            out["externalDocs"] = src["externalDocs"]
+        if "security" in src:  # requirement keys follow sanitized scheme keys
+            out["security"] = self._fix_security(src["security"])
         if "tags" in src:  # Tag Object requires a name
             tags = []
             for tag in src["tags"]:
@@ -723,9 +753,11 @@ class _Upgrader:
                 ctx = f"{method.upper()} {path}"
                 new_op: dict[str, Any] = {}
                 for k in ("summary", "description", "tags", "deprecated",
-                          "externalDocs", "security"):
+                          "externalDocs"):
                     if k in op:
                         new_op[k] = op[k]
+                if "security" in op:
+                    new_op["security"] = self._fix_security(op["security"])
                 for k, v in op.items():
                     if k.startswith("x-"):
                         new_op[k] = v
@@ -790,7 +822,8 @@ class _Upgrader:
         request_bodies = {}
         for name, p in global_params.items():
             if name in self._global_body_params:
-                request_bodies[name] = self._body_to_request_body(p, {}, name)
+                request_bodies[self._param_key.get(name, name)] = (
+                    self._body_to_request_body(p, {}, name))
             elif isinstance(p, dict) and p.get("in") == "formData":
                 # inlined at each use site by _split_params; a standalone
                 # formData parameter cannot exist in OpenAPI 3 components
@@ -800,14 +833,16 @@ class _Upgrader:
                     "and dropped from components"
                 )
             else:
-                conv_params[name] = self._convert_param(p, f"parameters.{name}")
+                conv_params[self._param_key.get(name, name)] = (
+                    self._convert_param(p, f"parameters.{name}"))
         if conv_params:
             components["parameters"] = conv_params
         if request_bodies:
             components["requestBodies"] = request_bodies
         if src.get("responses"):
             components["responses"] = {
-                name: self._convert_response(r, {}, f"responses.{name}")
+                self._resp_key.get(name, name):
+                    self._convert_response(r, {}, f"responses.{name}")
                 for name, r in src["responses"].items()
             }
         schemes = self._convert_security_schemes()
