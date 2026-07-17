@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A string-valued `consumes`/`produces` (a spec violation seen in the
+  wild) is now wrapped into a list instead of being split into characters,
+  which silently corrupted the `content` map keys; recorded in
+  `x-s2o.assumptions` (#55).
+
 ## [0.2.2] - 2026-07-17
 
 ### Fixed
