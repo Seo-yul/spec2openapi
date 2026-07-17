@@ -390,8 +390,20 @@ class _Upgrader:
                 ref = self._fix_ref(p["$ref"])
                 if "/requestBodies/" in ref:
                     body = {"$ref": ref}
-                else:
-                    params.append({"$ref": ref})
+                    continue
+                # a $ref to a global formData parameter must be inlined:
+                # formData fields are fragments of the form requestBody and
+                # have no standalone OpenAPI 3 component equivalent
+                gname = p["$ref"].rsplit("/", 1)[-1]
+                gparam = (self.src.get("parameters") or {}).get(gname)
+                if isinstance(gparam, dict) and gparam.get("in") == "formData":
+                    form.append(gparam)
+                    self.assumptions.append(
+                        f"{ctx}: $ref to global formData parameter "
+                        f"'{gname}' inlined into the form requestBody"
+                    )
+                    continue
+                params.append({"$ref": ref})
                 continue
             loc = p.get("in")
             if loc == "body":
@@ -715,6 +727,14 @@ class _Upgrader:
         for name, p in global_params.items():
             if name in self._global_body_params:
                 request_bodies[name] = self._body_to_request_body(p, {}, name)
+            elif isinstance(p, dict) and p.get("in") == "formData":
+                # inlined at each use site by _split_params; a standalone
+                # formData parameter cannot exist in OpenAPI 3 components
+                self.lossy.append(
+                    f"parameters.{name}: global formData parameter has no "
+                    "OpenAPI 3 component equivalent; inlined at use sites "
+                    "and dropped from components"
+                )
             else:
                 conv_params[name] = self._convert_param(p, f"parameters.{name}")
         if conv_params:
