@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- A missing response `description` is now filled with the standard HTTP
+  status phrase (`200 → "OK"`, `404 → "Not Found"`, `default → "Default
+  response"`; unknown codes stay empty) instead of always an empty
+  string — better tool descriptions for LLMs; still recorded in
+  `x-s2o.assumptions` (#61).
+
 ### Fixed
 - A `$ref` to a global `formData` parameter is now dereferenced and merged
   into the operation's form `requestBody`, and the global entry (which has

@@ -14,6 +14,7 @@ Design principles for information gaps (2.0 documents often omit things):
 from __future__ import annotations
 
 import re
+from http import HTTPStatus
 from typing import Any
 
 from . import __version__ as _version
@@ -435,15 +436,27 @@ class _Upgrader:
 
     # -- responses ----------------------------------------------------------
 
-    def _convert_response(self, resp: dict, op: dict, ctx: str) -> dict:
+    @staticmethod
+    def _status_phrase(code: Any) -> str:
+        """Deterministic default description for a status code."""
+        if code == "default":
+            return "Default response"
+        try:
+            return HTTPStatus(int(code)).phrase
+        except (ValueError, TypeError):
+            return ""
+
+    def _convert_response(self, resp: dict, op: dict, ctx: str,
+                          code: Any = None) -> dict:
         if "$ref" in resp:
             return {"$ref": self._fix_ref(resp["$ref"])}
         description = resp.get("description")
         if not description:  # required on the OA3 Response Object
-            description = ""
+            description = self._status_phrase(code)
+            filled = f"'{description}'" if description else "an empty string"
             self.assumptions.append(
                 f"{ctx}: response missing 'description' (required in "
-                "OpenAPI 3); used an empty string"
+                f"OpenAPI 3); used {filled}"
             )
         out: dict[str, Any] = {"description": description}
         for k, v in resp.items():
@@ -701,7 +714,7 @@ class _Upgrader:
                     new_op["requestBody"] = request_body
 
                 responses = {
-                    str(code): self._convert_response(resp, op, ctx)
+                    str(code): self._convert_response(resp, op, ctx, code)
                     for code, resp in (op.get("responses") or {}).items()
                 }
                 if not responses:  # Responses Object requires >= 1 response
