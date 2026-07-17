@@ -190,12 +190,19 @@ class _Upgrader:
 
     def _media_types(self, kind: str, op: dict, ctx: str) -> list[str]:
         types = op.get(kind) or self.src.get(kind) or []
+        if isinstance(types, str):
+            # spec violation seen in the wild: a bare string instead of an
+            # array — list(str) would split it into characters
+            self.assumptions.append(
+                f"{ctx}: '{kind}' was a string; wrapped in a list"
+            )
+            types = [types]
         if not types:
             self.assumptions.append(
                 f"{ctx}: no '{kind}' declared; assumed application/json"
             )
             return ["application/json"]
-        return list(types)
+        return [str(t) for t in types]
 
     # -- parameters --------------------------------------------------------
 

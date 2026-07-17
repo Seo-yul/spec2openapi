@@ -377,3 +377,22 @@ def test_valid_security_preserved(version):
     schemes = out["components"]["securitySchemes"]
     assert set(schemes) == {"b", "k", "o"}
     assert schemes["b"] == {"type": "http", "scheme": "basic"}
+
+
+# -- string-valued consumes/produces (#55) ------------------------------------
+
+@pytest.mark.parametrize("kind,where", [("consumes", "op"), ("produces", "op"),
+                                        ("consumes", "root"), ("produces", "root")])
+def test_string_media_types_wrapped_not_split(kind, where):
+    op = {"operationId": "a",
+          "parameters": [{"name": "b", "in": "body", "schema": {"type": "object"}}],
+          "responses": {"200": {"description": "ok", "schema": {"type": "string"}}}}
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"post": op}}}
+    (op if where == "op" else src)[kind] = "application/json"  # bare string
+    out = _valid(src)
+    post = out["paths"]["/a"]["post"]
+    content = (post["requestBody"]["content"] if kind == "consumes"
+               else post["responses"]["200"]["content"])
+    assert list(content.keys()) == ["application/json"]  # not ['a','p','l',…]
+    assert any("was a string" in a for a in out["x-s2o"]["assumptions"])
