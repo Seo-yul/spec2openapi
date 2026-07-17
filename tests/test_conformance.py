@@ -639,3 +639,18 @@ def test_all_component_namespaces_sanitized(version):
     assert out["paths"]["/a"]["post"]["requestBody"]["$ref"].endswith("/the_body")
     assert any("renamed to component key" in a
                for a in out["x-s2o"]["assumptions"])
+
+
+# -- percent-encoded $ref tokens (#74) -----------------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_percent_encoded_ref_follows_sanitized_key(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Ref (of Bundle)": {"type": "object"},
+               "B": {"type": "object", "properties": {
+                   "x": {"$ref": "#/definitions/Ref%20(of%20Bundle)"}}}}}
+    out = _valid(src, version)
+    key = next(k for k in out["components"]["schemas"] if k != "B")
+    assert out["components"]["schemas"]["B"]["properties"]["x"]["$ref"] == (
+        f"#/components/schemas/{key}")

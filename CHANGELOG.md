@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `x-s2o.assumptions` (#61).
 
 ### Fixed
+- Percent-encoded `$ref` tokens (`#/definitions/Ref%20(of%20Bundle)`) are
+  decoded (RFC 6901 + percent-encoding) before the sanitized-key lookup,
+  so the rewritten reference points at the actual component instead of
+  dangling (#74).
 - Component keys are now sanitized across every namespace, not just
   schemas (#72): `securityDefinitions` / global `parameters` / global
   `responses` names with invalid characters (`Basic Auth`,
