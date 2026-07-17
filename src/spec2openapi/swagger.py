@@ -262,6 +262,15 @@ class _Upgrader:
                     "boolean 'required' on properties hoisted to the parent "
                     "schema's required list"
                 )
+        if "$ref" in out and len(out) > 1:
+            # OpenAPI 3.0 ignores siblings next to a schema $ref; wrap in
+            # allOf so the extra keys (e.g. description) stay meaningful
+            ref = {"$ref": out.pop("$ref")}
+            out = {"allOf": [ref], **out}
+            self.assumptions.append(
+                "siblings next to a schema $ref wrapped in allOf so they "
+                "are not ignored in OpenAPI 3.0"
+            )
         return out
 
     def _media_types(self, kind: str, op: dict, ctx: str) -> list[str]:

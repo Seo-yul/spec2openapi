@@ -573,3 +573,21 @@ def test_plain_host_has_no_variables():
            "host": "api.example.com", "paths": {}}
     out = _valid(src)
     assert "variables" not in out["servers"][0]
+
+
+# -- $ref siblings preserved via allOf (#67) -----------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_ref_siblings_wrapped_in_allof(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object"},
+               "B": {"type": "object", "properties": {
+                   "x": {"$ref": "#/definitions/A", "description": "keep me"},
+                   "y": {"$ref": "#/definitions/A"}}}}}
+    out = _valid(src, version)
+    props = out["components"]["schemas"]["B"]["properties"]
+    assert props["x"]["allOf"] == [{"$ref": "#/components/schemas/A"}]
+    assert props["x"]["description"] == "keep me"       # sibling stays alive
+    assert props["y"] == {"$ref": "#/components/schemas/A"}  # bare untouched
+    assert any("allOf" in a for a in out["x-s2o"]["assumptions"])
