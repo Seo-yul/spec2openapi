@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from http import HTTPStatus
+from urllib.parse import unquote
 from typing import Any
 
 from . import __version__ as _version
@@ -175,19 +176,33 @@ class _Upgrader:
             out[k] = self._strip_nulls(v)
         return out
 
+    @staticmethod
+    def _pointer_token(raw: str) -> str:
+        """Decode a JSON-Pointer reference token: percent-encoding first,
+        then the ~1 (/) and ~0 (~) escapes (RFC 6901)."""
+        return unquote(raw).replace("~1", "/").replace("~0", "~")
+
+    def _source_name(self, mapping: dict[str, str], raw: str) -> str:
+        """Resolve a ref token to the source name it addresses: prefer a
+        literal match (a source key may itself contain %xx), else the
+        decoded form."""
+        if raw in mapping:
+            return raw
+        decoded = self._pointer_token(raw)
+        return decoded if decoded in mapping else raw
+
     def _fix_ref(self, ref: str) -> str:
         if ref.startswith("#/definitions/"):
-            name = ref[len("#/definitions/"):]
-            key = self._schema_key.get(name, name)
-            return f"#/components/schemas/{key}"
+            name = self._source_name(self._schema_key, ref[len("#/definitions/"):])
+            return f"#/components/schemas/{self._schema_key.get(name, name)}"
         if ref.startswith("#/parameters/"):
-            name = ref[len("#/parameters/"):]
+            name = self._source_name(self._param_key, ref[len("#/parameters/"):])
             key = self._param_key.get(name, name)
             if name in self._global_body_params:
                 return f"#/components/requestBodies/{key}"
             return f"#/components/parameters/{key}"
         if ref.startswith("#/responses/"):
-            name = ref[len("#/responses/"):]
+            name = self._source_name(self._resp_key, ref[len("#/responses/"):])
             return f"#/components/responses/{self._resp_key.get(name, name)}"
         return ref
 
@@ -451,7 +466,8 @@ class _Upgrader:
                 # a $ref to a global formData parameter must be inlined:
                 # formData fields are fragments of the form requestBody and
                 # have no standalone OpenAPI 3 component equivalent
-                gname = p["$ref"].rsplit("/", 1)[-1]
+                gname = self._source_name(
+                    self._param_key, p["$ref"].rsplit("/", 1)[-1])
                 gparam = (self.src.get("parameters") or {}).get(gname)
                 if isinstance(gparam, dict) and gparam.get("in") == "formData":
                     form.append(gparam)
