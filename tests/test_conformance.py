@@ -695,3 +695,72 @@ def test_items_collectionformat_preserved_as_extension(version):
     assert "collectionFormat" not in items
     assert items["x-collectionFormat"] == "csv"
     assert any("collectionFormat" in m for m in out["x-s2o"]["lossy"])
+
+
+# -- deep local $refs into arbitrary document locations (#75) ------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deep_paths_ref_inlined(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {
+               "/word/{id}": {"get": {
+                   "parameters": [{"in": "path", "name": "id",
+                                   "required": True, "type": "string"}],
+                   "responses": {"200": {"description": "ok", "schema": {
+                       "type": "array", "items": {"type": "object",
+                           "properties": {"word": {"type": "string",
+                                                   "x-nullable": True}}}}}}}},
+               "/lexeme/{id}": {"get": {
+                   "parameters": [{"in": "path", "name": "id",
+                                   "required": True, "type": "string"}],
+                   "responses": {"200": {"description": "ok", "schema": {
+                       "type": "object", "properties": {
+                           "lexeme": {"$ref": "#/paths/~1word~1%7Bid%7D/get"
+                                              "/responses/200/schema/items"
+                                              "/properties/word"},
+                           "annotated": {"$ref": "#/paths/~1word~1%7Bid%7D"
+                                                 "/get/responses/200/schema"
+                                                 "/items/properties/word",
+                                         "description": "kept"}}}}}}}}}
+    out = _valid(src, version)
+    sch = out["paths"]["/lexeme/{id}"]["get"]["responses"]["200"][
+        "content"]["application/json"]["schema"]
+    def is_string(schema):  # 3.0: nullable; 3.1: type ['string', 'null']
+        t = schema["type"]
+        return t == "string" or (isinstance(t, list) and "string" in t)
+
+    lexeme = sch["properties"]["lexeme"]
+    assert "$ref" not in lexeme and is_string(lexeme)
+    annotated = sch["properties"]["annotated"]  # siblings -> allOf wrap
+    assert is_string(annotated["allOf"][0])
+    assert annotated["description"] == "kept"
+    assert any("inlined" in a for a in out["x-s2o"]["assumptions"])
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deep_definitions_ref_inlined(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Foo": {"type": "object",
+                       "properties": {"bar": {"type": "integer"}}},
+               "Uses": {"type": "object", "properties": {
+                   "b": {"$ref": "#/definitions/Foo/properties/bar"}}}}}
+    out = _valid(src, version)
+    assert (out["components"]["schemas"]["Uses"]["properties"]["b"]
+            == {"type": "integer"})
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_cyclic_and_unresolvable_deep_refs_dropped(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object", "properties": {
+                   "self": {"$ref": "#/definitions/A/properties/self"}}},
+               "B": {"properties": {
+                   "gone": {"$ref": "#/paths/~1nope/get"}}}}}
+    out = _valid(src, version)
+    s = out["components"]["schemas"]
+    assert s["A"]["properties"]["self"] == {}
+    assert s["B"]["properties"]["gone"] == {}
+    assert any("cyclic" in m for m in out["x-s2o"]["lossy"])
+    assert any("unresolvable" in m for m in out["x-s2o"]["lossy"])

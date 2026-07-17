@@ -40,6 +40,9 @@ _SCHEMA_FIELDS = (
 _ID_RE = re.compile(r"[^A-Za-z0-9_]+")
 # OpenAPI 3 component keys allow letters, digits, '.', '-', '_'
 _COMPONENT_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
+# a local $ref with a component home in OpenAPI 3: exactly one token after
+# a known namespace — anything else addresses an arbitrary document spot
+_SIMPLE_REF_RE = re.compile(r"^#/(definitions|parameters|responses)/[^/]+$")
 
 
 def is_swagger2(spec: dict[str, Any]) -> bool:
@@ -137,6 +140,8 @@ class _Upgrader:
             src.get("responses") or {}, "response")
         self._sec_key = self._build_key_map(
             src.get("securityDefinitions") or {}, "securityDefinition")
+        # deep local $refs being inlined right now (cycle guard)
+        self._inlining: set[str] = set()
 
     # -- helpers -----------------------------------------------------------
 
@@ -191,6 +196,19 @@ class _Upgrader:
         decoded = self._pointer_token(raw)
         return decoded if decoded in mapping else raw
 
+    def _is_component_ref(self, ref: str) -> bool:
+        """True if the whole remainder after a known namespace is a source
+        name — including names that literally contain '/' (an unescaped
+        but real-world pointer), which _fix_ref maps to a sanitized key."""
+        for prefix, mapping in (("#/definitions/", self._schema_key),
+                                ("#/parameters/", self._param_key),
+                                ("#/responses/", self._resp_key)):
+            if ref.startswith(prefix):
+                name = ref[len(prefix):]
+                return (name in mapping
+                        or self._pointer_token(name) in mapping)
+        return False
+
     def _fix_ref(self, ref: str) -> str:
         if ref.startswith("#/definitions/"):
             name = self._source_name(self._schema_key, ref[len("#/definitions/"):])
@@ -205,6 +223,54 @@ class _Upgrader:
             name = self._source_name(self._resp_key, ref[len("#/responses/"):])
             return f"#/components/responses/{self._resp_key.get(name, name)}"
         return ref
+
+    def _resolve_pointer(self, ref: str) -> tuple[bool, Any]:
+        """Resolve a local JSON Pointer against the source document.
+        Token lookup prefers a literal match, then the decoded form
+        (same policy as _source_name)."""
+        node: Any = self.src
+        for raw in ref[2:].split("/"):
+            token = self._pointer_token(raw)
+            if isinstance(node, dict):
+                if raw in node:
+                    node = node[raw]
+                elif token in node:
+                    node = node[token]
+                else:
+                    return False, None
+            elif isinstance(node, list):
+                try:
+                    node = node[int(token)]
+                except (ValueError, IndexError):
+                    return False, None
+            else:
+                return False, None
+        return True, node
+
+    def _inline_deep_ref(self, ref: str) -> dict:
+        """A local $ref addressing an arbitrary document location (e.g.
+        #/paths/.../responses/200/schema/...) has no component home in
+        OpenAPI 3 and its target moves during conversion, so the pointer
+        would dangle; inline the resolved source subtree instead."""
+        if ref in self._inlining:
+            self.lossy.append(f"cyclic deep local $ref '{ref}' replaced "
+                              "with the empty schema")
+            return {}
+        found, target = self._resolve_pointer(ref)
+        if not found or not isinstance(target, dict):
+            self.lossy.append(f"unresolvable deep local $ref '{ref}' "
+                              "replaced with the empty schema")
+            return {}
+        self._inlining.add(ref)
+        try:
+            out = self._fix_schema(target)
+        finally:
+            self._inlining.discard(ref)
+        self.assumptions.append(
+            f"deep local $ref '{ref}' has no OpenAPI 3 component "
+            "equivalent; target subtree inlined"
+        )
+        return out
 
     def _fix_security(self, reqs: Any) -> list:
         """Rewrite security requirement objects to the sanitized scheme keys."""
@@ -223,6 +289,16 @@ class _Upgrader:
             return [self._fix_schema(v) for v in node]
         if not isinstance(node, dict):
             return node
+        ref = node.get("$ref")
+        if (isinstance(ref, str) and ref.startswith("#/")
+                and not _SIMPLE_REF_RE.match(ref)
+                and not self._is_component_ref(ref)):
+            resolved = self._inline_deep_ref(ref)
+            siblings = {k: v for k, v in node.items() if k != "$ref"}
+            if not siblings:
+                return resolved
+            # keep siblings meaningful, mirroring the $ref+siblings policy
+            return {"allOf": [resolved], **self._fix_schema(siblings)}
         out: dict[str, Any] = {}
         for k, v in node.items():
             if k == "$ref" and isinstance(v, str):
