@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-17
+
+### Fixed
+- Library entry points reject the wrong input type with a clear error
+  instead of crashing downstream (#50): `convert_swagger` requires a
+  mapping and `convert_wsdl` a path/URL string — a mismatch raises
+  `ConversionError` naming the expected and actual type; `is_swagger2`
+  returns `False` for a non-mapping.
+- Format errors are now traceable (#48): JSON/YAML syntax errors are
+  prefixed with the source file path (in addition to the line/column the
+  parser reports), and a malformed WSDL is pre-parsed so the error points
+  at the XML syntax location (`invalid XML in <file>: … line X, column Y`)
+  instead of a misleading "no convertible operations" or a cryptic
+  zeep-internal message.
+
 ## [0.2.1] - 2026-07-14
 
 ### Added
@@ -167,7 +182,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Seo-yul/spec2openapi/releases/tag/v0.1.0

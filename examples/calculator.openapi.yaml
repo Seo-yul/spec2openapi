@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: CalculatorService
   version: 1.0.0
-  description: Generated from WSDL by spec2openapi 0.2.1. Each path is a SOAP operation exposed as a JSON
+  description: Generated from WSDL by spec2openapi 0.2.2. Each path is a SOAP operation exposed as a JSON
     call.
 servers:
 - url: http://localhost:18080
@@ -145,5 +145,5 @@ components:
           type: string
 x-soap:
   wsdl: tests/fixtures/calculator.wsdl
-  generator: spec2openapi/0.2.1
+  generator: spec2openapi/0.2.2
   skippedOperations: []

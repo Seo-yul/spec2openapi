@@ -15,6 +15,8 @@ from lxml import etree
 from zeep import Client, Settings
 from zeep.wsdl.bindings.soap import Soap12Binding, SoapBinding
 
+from .errors import ConversionError
+
 logger = logging.getLogger("spec2openapi")
 
 XSD_NS = "http://www.w3.org/2001/XMLSchema"
@@ -298,6 +300,19 @@ def parse_wsdl(
     relative imports still work). huge_tree=True lifts libxml2 depth/size
     limits for very large WSDLs; leave off for untrusted input.
     """
+    # For local files, surface XML syntax errors with a line/column before
+    # zeep either swallows them (lenient parse -> misleading "no operations")
+    # or reports a cryptic internal error.
+    if os.path.exists(source):
+        with open(source, "rb") as f:
+            _raw = f.read()
+        _check = etree.XMLParser(resolve_entities=False, load_dtd=False,
+                                 no_network=True, huge_tree=huge_tree)
+        try:
+            etree.fromstring(_raw, parser=_check)
+        except etree.XMLSyntaxError as exc:
+            raise ConversionError(f"invalid XML in '{source}': {exc}") from exc
+
     settings = Settings(
         strict=False, xml_huge_tree=huge_tree,
         forbid_dtd=True, forbid_entities=True,
@@ -305,7 +320,7 @@ def parse_wsdl(
     )
     try:
         client = Client(source, settings=settings)
-    except FileNotFoundError:
+    except (FileNotFoundError, ConversionError):
         raise
     except Exception as exc:  # malformed/unfetchable WSDL -> clean error
         raise ValueError(f"could not parse WSDL '{source}': {exc}") from exc
