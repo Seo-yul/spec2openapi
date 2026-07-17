@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opt-in real-world corpus test suite (`python -m pytest -m corpus`): a
+  stratified sample of public Swagger 2.0 definitions from APIs.guru is
+  converted and checked against the 3.0/3.1 validators and a live FastMCP
+  round-trip, with a tracked known-failures allowlist so only regressions
+  fail (#71).
 - `upgrade`/`validate`/`serve` (and `load_spec`) accept http(s) URLs for
   Swagger/OpenAPI sources, matching `convert`'s WSDL-URL support; fetch
   errors are reported with the URL (#69).
