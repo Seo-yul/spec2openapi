@@ -480,3 +480,30 @@ def test_global_formdata_param_inlined(version):
     comp_params = out.get("components", {}).get("parameters", {})
     assert "cb" not in comp_params                      # dropped from components
     assert any("formData parameter" in m for m in out["x-s2o"]["lossy"])
+
+
+# -- status-phrase descriptions (#61) ------------------------------------------
+
+def test_missing_description_filled_with_status_phrase():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {"operationId": "a", "responses": {
+               "200": {"schema": {"type": "string"}},
+               "404": {"schema": {"type": "string"}},
+               "599": {"schema": {"type": "string"}},   # unknown code
+               "default": {"schema": {"type": "string"}},
+           }}}}}
+    out = _valid(src)
+    resps = out["paths"]["/a"]["get"]["responses"]
+    assert resps["200"]["description"] == "OK"
+    assert resps["404"]["description"] == "Not Found"
+    assert resps["599"]["description"] == ""            # unknown -> empty
+    assert resps["default"]["description"] == "Default response"
+    assert any("missing 'description'" in a for a in out["x-s2o"]["assumptions"])
+
+
+def test_existing_description_untouched():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {"operationId": "a", "responses": {
+               "200": {"description": "custom"}}}}}}
+    out = _valid(src)
+    assert out["paths"]["/a"]["get"]["responses"]["200"]["description"] == "custom"
