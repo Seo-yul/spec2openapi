@@ -129,7 +129,7 @@ Upgrading is favorable: OpenAPI 3.x is a superset of Swagger 2.0, so almost noth
 ## Kubernetes: one image, many MCP servers
 
 ```bash
-docker build -t spec2openapi:0.2.1 .
+docker build -t spec2openapi:0.2.2 .
 spec2openapi convert <wsdl> -o openapi.yaml
 kubectl create configmap my-mcp-spec --from-file=openapi.yaml
 kubectl apply -f k8s/example.yaml    # Deployment mounts /config/openapi.yaml
