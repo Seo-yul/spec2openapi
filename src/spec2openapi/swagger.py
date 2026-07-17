@@ -90,9 +90,18 @@ def convert_swagger(
 
 class _Upgrader:
     def __init__(self, src: dict[str, Any]):
-        self.src = src
         self.assumptions: list[str] = []
         self.lossy: list[str] = []
+        # null values are invalid almost everywhere in OpenAPI 3; strip them
+        # up front (x- extensions and example/default/enum data are kept)
+        self._nulls_stripped = 0
+        src = self._strip_nulls(src)
+        if self._nulls_stripped:
+            self.assumptions.append(
+                f"removed {self._nulls_stripped} null value(s) (invalid in "
+                "OpenAPI 3; x- extensions and example/default/enum data kept)"
+            )
+        self.src = src
         # global body-parameters become requestBodies, not parameters
         self._global_body_params: set[str] = {
             name
@@ -119,6 +128,22 @@ class _Upgrader:
                 )
 
     # -- helpers -----------------------------------------------------------
+
+    def _strip_nulls(self, node: Any) -> Any:
+        if isinstance(node, list):
+            return [self._strip_nulls(v) for v in node]
+        if not isinstance(node, dict):
+            return node
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            if (isinstance(k, str) and k.startswith("x-")) or k in _DATA_KEYWORDS:
+                out[k] = v  # null may be meaningful data here
+                continue
+            if v is None:
+                self._nulls_stripped += 1
+                continue
+            out[k] = self._strip_nulls(v)
+        return out
 
     def _fix_ref(self, ref: str) -> str:
         if ref.startswith("#/definitions/"):
@@ -185,6 +210,41 @@ class _Upgrader:
                 self.lossy.append(
                     f"schema type {out.get('type')!r} chosen from multi-type "
                     f"array {node['type']} (OpenAPI 3.0 allows one type)"
+                )
+        if out.get("type") == "null":
+            # JSON-Schema's 'null' type has no OAS 3.0 equivalent
+            out.pop("type")
+            out["nullable"] = True
+            self.assumptions.append(
+                "schema type 'null' converted to nullable: true"
+            )
+        if isinstance(out.get("items"), list):
+            # tuple-style items array; OAS 3 requires a single schema
+            items = out["items"]
+            out["items"] = (items[0] if len(items) == 1
+                            else {"anyOf": items} if items else {})
+            self.assumptions.append(
+                "tuple-style 'items' array collapsed to a single schema "
+                "(OpenAPI 3 requires one items schema)"
+            )
+        props = out.get("properties")
+        if isinstance(props, dict):
+            # draft-4 style boolean `required` on a property: hoist the name
+            # into the parent schema's required array
+            hoisted = []
+            for pname, pschema in props.items():
+                if isinstance(pschema, dict) and isinstance(
+                        pschema.get("required"), bool):
+                    if pschema.pop("required"):
+                        hoisted.append(pname)
+            if hoisted:
+                req = out.get("required")
+                req = list(req) if isinstance(req, list) else []
+                req.extend(n for n in hoisted if n not in req)
+                out["required"] = req
+                self.assumptions.append(
+                    "boolean 'required' on properties hoisted to the parent "
+                    "schema's required list"
                 )
         return out
 
@@ -490,6 +550,15 @@ class _Upgrader:
         # title and version are REQUIRED in OpenAPI 3; fill whichever is
         # missing (a present-but-partial info must still be completed)
         info = dict(self.src.get("info") or {})
+        for field in ("title", "version"):
+            val = info.get(field)
+            if val is not None and not isinstance(val, str):
+                # both MUST be strings in OpenAPI 3
+                info[field] = str(val)
+                self.assumptions.append(
+                    f"info.{field} was not a string; coerced to "
+                    f"'{info[field]}'"
+                )
         if not info.get("title"):
             info["title"] = "API"
             self.assumptions.append("info.title missing; defaulted to 'API'")

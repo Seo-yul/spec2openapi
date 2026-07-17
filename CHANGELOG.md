@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wild) is now wrapped into a list instead of being split into characters,
   which silently corrupted the `content` map keys; recorded in
   `x-s2o.assumptions` (#55).
+- Five more non-conformant inputs are normalized instead of passing
+  through as invalid OpenAPI 3 (#57): a draft-4 boolean `required` on a
+  property is hoisted into the parent's `required` array; a literal
+  `type: 'null'` becomes `nullable: true`; a tuple-style `items` array is
+  collapsed to a single schema (or `anyOf`); a non-string `info.title`/
+  `info.version` is coerced to a string; and `null` values on structural
+  fields are stripped up front (`x-` extensions and `example`/`default`/
+  `enum` data are preserved). All recorded in `x-s2o.assumptions`.
 
 ## [0.2.2] - 2026-07-17
 
