@@ -553,3 +553,23 @@ def test_strict_passes_clean_spec():
                "responses": {"200": {"description": "ok"}}}}}}
     out = convert_swagger(src, strict=True)
     assert out["x-s2o"]["assumptions"] == [] and out["x-s2o"]["lossy"] == []
+
+
+# -- templated server variables (#65) ------------------------------------------
+
+def test_templated_host_declares_server_variables():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "host": "{region}.example.com", "basePath": "/v{apiVersion}",
+           "paths": {}}
+    out = _valid(src)
+    srv = out["servers"][0]
+    assert set(srv["variables"]) == {"region", "apiVersion"}
+    assert all("default" in v for v in srv["variables"].values())
+    assert any("templated" in a for a in out["x-s2o"]["assumptions"])
+
+
+def test_plain_host_has_no_variables():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "host": "api.example.com", "paths": {}}
+    out = _valid(src)
+    assert "variables" not in out["servers"][0]
