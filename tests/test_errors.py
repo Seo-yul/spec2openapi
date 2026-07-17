@@ -147,3 +147,34 @@ def test_is_swagger2_false_for_non_mapping():
     assert is_swagger2("not a dict") is False
     assert is_swagger2(None) is False
     assert is_swagger2({"swagger": "2.0"}) is True
+
+
+# -- URL spec input (#69) ------------------------------------------------------
+
+def test_load_spec_accepts_url(monkeypatch):
+    """load_spec fetches http(s) sources (no real network: urlopen mocked)."""
+    import io
+    import contextlib
+
+    payload = b'{"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {}}'
+
+    @contextlib.contextmanager
+    def fake_urlopen(req, timeout=None):
+        yield io.BytesIO(payload)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    spec = load_spec("https://example.com/swagger.json")
+    assert spec["swagger"] == "2.0"
+
+
+def test_load_spec_url_fetch_error_is_traceable(monkeypatch):
+    from urllib.error import URLError
+
+    def boom(req, timeout=None):
+        raise URLError("no route")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(ConversionError) as exc:
+        load_spec("https://example.com/swagger.json")
+    msg = str(exc.value)
+    assert "example.com" in msg and "could not fetch" in msg

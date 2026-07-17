@@ -51,25 +51,42 @@ def convert_wsdl(
 
 
 def load_spec(path: str | Path) -> dict[str, Any]:
-    """Load an OpenAPI/Swagger spec from a .yaml/.yml/.json file."""
+    """Load an OpenAPI/Swagger spec from a .yaml/.yml/.json file or an
+    http(s) URL (parity with ``convert``, which accepts WSDL URLs)."""
     import yaml
 
-    p = Path(path)
-    text = p.read_text(encoding="utf-8-sig")
-    # parse errors are prefixed with the file path so the location is
+    src = str(path)
+    if src.startswith(("http://", "https://")):
+        from urllib.error import URLError
+        from urllib.request import Request, urlopen
+
+        from . import __version__
+
+        req = Request(src, headers={"User-Agent": f"spec2openapi/{__version__}"})
+        try:
+            with urlopen(req, timeout=30) as resp:  # noqa: S310 (user-supplied URL)
+                text = resp.read().decode("utf-8-sig", "replace")
+        except (URLError, OSError) as exc:
+            raise ConversionError(f"{src}: could not fetch — {exc}") from exc
+        label, is_json = src, src.lower().endswith(".json")
+    else:
+        p = Path(path)
+        text = p.read_text(encoding="utf-8-sig")
+        label, is_json = str(p), p.suffix.lower() == ".json"
+    # parse errors are prefixed with the source so the location is
     # traceable (json/yaml already report the line and column)
     try:
-        if p.suffix.lower() == ".json" or text.lstrip().startswith("{"):
+        if is_json or text.lstrip().startswith("{"):
             spec = json.loads(text)
         else:
             spec = yaml.safe_load(text)
     except json.JSONDecodeError as exc:
-        raise ConversionError(f"{p}: invalid JSON — {exc}") from exc
+        raise ConversionError(f"{label}: invalid JSON — {exc}") from exc
     except yaml.YAMLError as exc:
-        raise ConversionError(f"{p}: invalid YAML — {exc}") from exc
+        raise ConversionError(f"{label}: invalid YAML — {exc}") from exc
     if not isinstance(spec, dict):
         raise ValueError(
-            f"{p}: not a valid OpenAPI/Swagger document "
+            f"{label}: not a valid OpenAPI/Swagger document "
             f"(parsed as {type(spec).__name__}, expected a mapping)"
         )
     return spec
