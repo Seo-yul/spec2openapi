@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `upgrade`/`validate`/`serve` (and `load_spec`) accept http(s) URLs for
+  Swagger/OpenAPI sources, matching `convert`'s WSDL-URL support; fetch
+  errors are reported with the URL (#69).
 - `--strict` on `spec2openapi upgrade` (and `strict=True` on
   `convert_swagger`): fail with the full list of assumption/lossy records
   when the conversion would need any, for pipelines that must not accept

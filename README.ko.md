@@ -43,7 +43,7 @@ spec2openapi convert service.wsdl --openapi-version 3.1 --format json
 
 # Swagger 2.0 -> OpenAPI 3.x 업그레이드 (FastMCP는 3.x만 지원)
 # --strict: 가정/손실 변환이 하나라도 필요하면 목록과 함께 실패
-spec2openapi upgrade swagger2.json -o service.openapi.yaml
+spec2openapi upgrade swagger2.json -o service.openapi.yaml   # 파일 또는 URL
 
 # FastMCP 변환 가능성 검증 (스펙 정적 검사 + openapi-spec-validator
 # + FastMCP.from_openapi 라운드트립으로 tool 생성까지 확인)
