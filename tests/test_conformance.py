@@ -654,3 +654,28 @@ def test_percent_encoded_ref_follows_sanitized_key(version):
     key = next(k for k in out["components"]["schemas"] if k != "B")
     assert out["components"]["schemas"]["B"]["properties"]["x"]["$ref"] == (
         f"#/components/schemas/{key}")
+
+
+# -- default coercion (#73) ----------------------------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_defaults_coerced_or_dropped(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "integer", "default": "1"},
+               "B": {"type": "string", "default": 123456789},
+               "C": {"type": "boolean", "default": "false"},
+               "D": {"type": "string", "pattern": "^[a-z]+$", "default": ""},
+               "E": {"type": "string", "default": "valid"},
+               "F": {"type": "string", "nullable": True, "default": None},
+           }}
+    out = _valid(src, version)
+    s = out["components"]["schemas"]
+    assert s["A"]["default"] == 1                      # str -> int
+    assert s["B"]["default"] == "123456789"            # int -> str
+    assert s["C"]["default"] is False                  # 'false' -> bool
+    assert "default" not in s["D"]                     # pattern-violating: dropped
+    assert s["E"]["default"] == "valid"                # valid: untouched
+    assert "default" in s["F"] and s["F"]["default"] is None  # null kept
+    assert any("coerced" in a for a in out["x-s2o"]["assumptions"])
+    assert any("dropped" in m for m in out["x-s2o"]["lossy"])

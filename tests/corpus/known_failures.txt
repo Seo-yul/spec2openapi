@@ -4,9 +4,5 @@
 # optionally followed by "  # reason / tracking issue".
 # Specs listed here may fail without breaking the sweep; anything NOT
 # listed that fails is treated as a regression.
-setlist.fm  # string default on integer schema — tracked in #73
 bethmardutho.org  # deep /paths/... $ref dangles — #75
 opendatasoft.com  # invalid components.parameters entry — #76
-idtbeyond.com  # numeric default on string schema — #73
-gisgraphy.com  # 'false' default on boolean schema — #73
-image-charts.com  # default violates its own pattern — #73

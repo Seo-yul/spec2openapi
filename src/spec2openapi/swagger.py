@@ -303,6 +303,7 @@ class _Upgrader:
                     "boolean 'required' on properties hoisted to the parent "
                     "schema's required list"
                 )
+        self._fix_default(out)
         if "$ref" in out and len(out) > 1:
             # OpenAPI 3.0 ignores siblings next to a schema $ref; wrap in
             # allOf so the extra keys (e.g. description) stay meaningful
@@ -313,6 +314,64 @@ class _Upgrader:
                 "are not ignored in OpenAPI 3.0"
             )
         return out
+
+    def _fix_default(self, out: dict[str, Any]) -> None:
+        """A `default` must satisfy its own schema; coerce trivially
+        convertible type mismatches, drop what cannot be represented."""
+        d = out.get("default")
+        t = out.get("type")
+        if "default" not in out or d is None or not isinstance(t, str):
+            return
+
+        def coerce(value: Any) -> None:
+            out["default"] = value
+            self.assumptions.append(
+                f"default {d!r} coerced to {value!r} to match schema "
+                f"type '{t}'"
+            )
+
+        def drop(reason: str) -> None:
+            out.pop("default", None)
+            self.lossy.append(f"default {d!r} dropped: {reason}")
+
+        if t == "integer" and isinstance(d, str):
+            try:
+                coerce(int(d))
+            except ValueError:
+                drop("not an integer")
+        elif t == "number" and isinstance(d, str):
+            try:
+                coerce(float(d))
+            except ValueError:
+                drop("not a number")
+        elif t == "boolean" and isinstance(d, str):
+            low = d.strip().lower()
+            if low in ("true", "1"):
+                coerce(True)
+            elif low in ("false", "0"):
+                coerce(False)
+            else:
+                drop("not a boolean")
+        elif t == "string" and isinstance(d, bool):
+            coerce("true" if d else "false")
+        elif t == "string" and isinstance(d, (int, float)):
+            coerce(str(d))
+
+        # a string default must also satisfy its own pattern
+        value = out.get("default")
+        pattern = out.get("pattern")
+        if (t == "string" and isinstance(value, str)
+                and isinstance(pattern, str)):
+            try:
+                matched = re.search(pattern, value) is not None
+            except re.error:
+                matched = True  # non-Python regex: don't judge
+            if not matched:
+                out.pop("default", None)
+                self.lossy.append(
+                    f"default {value!r} dropped: violates its own "
+                    f"pattern {pattern!r}"
+                )
 
     def _media_types(self, kind: str, op: dict, ctx: str) -> list[str]:
         types = op.get(kind) or self.src.get(kind) or []

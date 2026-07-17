@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `x-s2o.assumptions` (#61).
 
 ### Fixed
+- A `default` that does not satisfy its own schema is now coerced when
+  trivially convertible (`"1"` → `1` for integer/number, `"false"` →
+  `false` for boolean, numeric/bool → string for string type; recorded
+  in `x-s2o.assumptions`) and dropped otherwise — including a string
+  default that violates the schema's own `pattern` (recorded in
+  `x-s2o.lossy`) (#73).
 - Percent-encoded `$ref` tokens (`#/definitions/Ref%20(of%20Bundle)`) are
   decoded (RFC 6901 + percent-encoding) before the sanitized-key lookup,
   so the rewritten reference points at the actual component instead of
