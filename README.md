@@ -40,6 +40,10 @@ The fixed-runtime deployment model — build one image, swap the spec via a Kube
 
 ## Installation
 
+Requires **Python 3.10+**. (On an older interpreter, pip reports
+`No matching distribution found` because every release is filtered out
+by the version floor.)
+
 ```bash
 pip install spec2openapi          # converter + CLI (zeep, lxml, PyYAML)
 pip install "spec2openapi[mcp]"   # + SOAP bridge & runtime — required to serve SOAP specs
