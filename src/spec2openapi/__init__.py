@@ -9,11 +9,15 @@ from_wsdl, BridgeOptions, SoapBridgeTransport.
 
 __version__ = "0.2.2"
 
+from typing import TYPE_CHECKING
+
 from .convert import convert_wsdl, load_spec, spec_has_soap  # noqa: E402,F401
 from .errors import ConversionError  # noqa: E402,F401
 from .openapi import build_spec, dump_spec, to_openapi_31  # noqa: E402,F401
-from .parser import parse_wsdl  # noqa: E402,F401
 from .swagger import convert_swagger, is_swagger2  # noqa: E402,F401
+
+if TYPE_CHECKING:  # loaded lazily at runtime (pulls the zeep/lxml stack)
+    from .parser import parse_wsdl  # noqa: F401
 
 _MCP_ATTRS = {
     "from_openapi_spec": "server",
@@ -43,6 +47,12 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name == "parse_wsdl":
+        # SOAP-only entry point: importing it pulls zeep/lxml, which a
+        # Swagger-only consumer should not pay for at import time
+        from .parser import parse_wsdl
+
+        return parse_wsdl
     if name in _MCP_ATTRS:
         import importlib
 

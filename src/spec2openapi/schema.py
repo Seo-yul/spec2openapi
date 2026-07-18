@@ -19,6 +19,7 @@ from typing import Any
 from zeep import xsd as zx
 
 from .errors import ConversionError
+from .openapi import sanitize_name  # noqa: F401  (canonical home; re-export)
 from .parser import XsdMeta
 
 logger = logging.getLogger("spec2openapi")
@@ -32,13 +33,6 @@ _FORMAT_BY_CLS = {
     "AnyURI": "uri",
     "Duration": "duration",
 }
-
-_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]")
-
-
-def sanitize_name(name: str) -> str:
-    out = _NAME_RE.sub("_", name or "unnamed")
-    return out[:64] or "unnamed"
 
 
 def _py_to_json_type(py: type) -> dict[str, Any]:

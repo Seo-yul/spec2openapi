@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response"`; unknown codes stay empty) instead of always an empty
   string — better tool descriptions for LLMs; still recorded in
   `x-s2o.assumptions` (#61).
+- `import spec2openapi` no longer loads the SOAP stack: zeep/lxml (and
+  the httpx they pull in) now load on first SOAP use (`convert_wsdl`,
+  `parse_wsdl`, `build_spec`), cutting a Swagger-only import from
+  ~200 ms to ~15 ms; the public surface is unchanged (#86).
 - `load_spec` no longer silently replaces invalid bytes when fetching a
   spec over http(s): a document that is not valid UTF-8 now fails with a
   labeled `ConversionError` instead of converting with corrupted text

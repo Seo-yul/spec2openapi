@@ -15,18 +15,25 @@ be preserved (do not alphabetize the document).
 """
 from __future__ import annotations
 
-from typing import Any
+import re
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from . import __version__ as _version
 from .errors import ConversionError
-from .parser import ParsedWsdl
-import re
 
-from .schema import SchemaConverter, sanitize_name
+if TYPE_CHECKING:  # the SOAP stack (zeep/lxml) loads only when used
+    from .parser import ParsedWsdl
 
 _TOOL_ID_RE = re.compile(r"[^A-Za-z0-9_]+")
 _MAX_ID_LEN = 64
+_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def sanitize_name(name: str) -> str:
+    """Clamp a raw WSDL/XSD name to a safe schema-name alphabet."""
+    out = _NAME_RE.sub("_", name or "unnamed")
+    return out[:64] or "unnamed"
 
 
 def _tool_id(raw: str) -> str:
@@ -101,6 +108,8 @@ def build_spec(
     base_path: str = "/operations",
     openapi_version: str = "3.0",
 ) -> dict[str, Any]:
+    from .schema import SchemaConverter
+
     openapi_version = _normalize_openapi_version(openapi_version)
     # Paths Object keys must start with '/'
     base_path = base_path or ""
