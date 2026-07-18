@@ -699,8 +699,15 @@ def test_items_collectionformat_preserved_as_extension(version):
 
 # -- deep local $refs into arbitrary document locations (#75) ------------------
 
+def _deref(out, node):
+    """Follow a #/components/schemas/... $ref one hop if present."""
+    if isinstance(node, dict) and set(node) == {"$ref"}:
+        return out["components"]["schemas"][node["$ref"].rsplit("/", 1)[-1]]
+    return node
+
+
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
-def test_deep_paths_ref_inlined(version):
+def test_deep_paths_ref_hoisted(version):
     src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
            "paths": {
                "/word/{id}": {"get": {
@@ -729,16 +736,19 @@ def test_deep_paths_ref_inlined(version):
         t = schema["type"]
         return t == "string" or (isinstance(t, list) and "string" in t)
 
-    lexeme = sch["properties"]["lexeme"]
-    assert "$ref" not in lexeme and is_string(lexeme)
+    lexeme = _deref(out, sch["properties"]["lexeme"])
+    assert is_string(lexeme)
     annotated = sch["properties"]["annotated"]  # siblings -> allOf wrap
-    assert is_string(annotated["allOf"][0])
+    assert is_string(_deref(out, annotated["allOf"][0]))
     assert annotated["description"] == "kept"
-    assert any("inlined" in a for a in out["x-s2o"]["assumptions"])
+    # both use sites share ONE hoisted component (no duplication)
+    assert (sch["properties"]["lexeme"]["$ref"]
+            == annotated["allOf"][0]["$ref"])
+    assert any("hoisted" in a for a in out["x-s2o"]["assumptions"])
 
 
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
-def test_deep_definitions_ref_inlined(version):
+def test_deep_definitions_ref_hoisted(version):
     src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
            "paths": {}, "definitions": {
                "Foo": {"type": "object",
@@ -746,12 +756,12 @@ def test_deep_definitions_ref_inlined(version):
                "Uses": {"type": "object", "properties": {
                    "b": {"$ref": "#/definitions/Foo/properties/bar"}}}}}
     out = _valid(src, version)
-    assert (out["components"]["schemas"]["Uses"]["properties"]["b"]
-            == {"type": "integer"})
+    b = _deref(out, out["components"]["schemas"]["Uses"]["properties"]["b"])
+    assert b == {"type": "integer"}
 
 
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
-def test_cyclic_and_unresolvable_deep_refs_dropped(version):
+def test_cyclic_and_unresolvable_deep_refs_are_neutralized(version):
     src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
            "paths": {}, "definitions": {
                "A": {"type": "object", "properties": {
@@ -760,7 +770,8 @@ def test_cyclic_and_unresolvable_deep_refs_dropped(version):
                    "gone": {"$ref": "#/paths/~1nope/get"}}}}}
     out = _valid(src, version)
     s = out["components"]["schemas"]
-    assert s["A"]["properties"]["self"] == {}
+    # the pure alias cycle is broken to the empty schema
+    assert _deref(out, s["A"]["properties"]["self"]) == {}
     assert s["B"]["properties"]["gone"] == {}
     assert any("cyclic" in m for m in out["x-s2o"]["lossy"])
     assert any("unresolvable" in m for m in out["x-s2o"]["lossy"])
@@ -801,3 +812,74 @@ def test_properties_named_like_keywords_are_schemas(version):
     assert t["discriminator"] == {"type": "string"}
     assert t["collectionFormat"] == {"type": "integer"}
     assert "nullable" in t["enum"] or t["enum"].get("type") == ["string", "null"]
+
+
+# -- parameter-position $refs and duplicates (#97, #101) -----------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_duplicate_component_param_refs_merged(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "parameters": {"sub": {"name": "sub", "in": "query",
+                                  "type": "string"}},
+           "paths": {"/a": {
+               "parameters": [{"$ref": "#/parameters/sub"}],
+               "get": {"parameters": [{"$ref": "#/parameters/sub"}],
+                       "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    plist = out["paths"]["/a"]["get"]["parameters"]
+    assert plist == [{"$ref": "#/components/parameters/sub"}]
+    assert any("merged" in a for a in out["x-s2o"]["assumptions"])
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deep_parameter_ref_inlined_and_deduped(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {
+               "/tgt": {"post": {"parameters": [
+                   {"name": "api-version", "in": "query", "required": True,
+                    "type": "string"}],
+                   "responses": {"200": {"description": "ok"}}}},
+               "/use/{id}": {"get": {"parameters": [
+                   {"$ref": "#/paths/~1tgt/post/parameters/0"},
+                   {"name": "api-version", "in": "query", "required": True,
+                    "type": "string"},
+                   {"name": "id", "in": "path", "required": True,
+                    "type": "string"}],
+                   "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    names = [(p.get("name"), p.get("in"))
+             for p in out["paths"]["/use/{id}"]["get"]["parameters"]]
+    assert names == [("api-version", "query"), ("id", "path")]
+    assert any("target inlined" in a for a in out["x-s2o"]["assumptions"])
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_unresolvable_parameter_ref_dropped(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {"parameters": [
+               {"$ref": "#/paths/~1nope/get/parameters/9"},
+               {"name": "q", "in": "query", "type": "string"}],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    assert [p["name"] for p in out["paths"]["/a"]["get"]["parameters"]] == ["q"]
+    assert any("unresolvable parameter $ref" in m
+               for m in out["x-s2o"]["lossy"])
+
+
+def test_hoisted_output_stays_linear():
+    # 30 use sites of one deep ref must share one hoisted component,
+    # not inline 30 copies (#101)
+    import json as _json
+    big = {"type": "object", "properties": {
+        f"f{i}": {"type": "string"} for i in range(50)}}
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Big": {"type": "object", "properties": {"inner": big}},
+               **{f"U{i}": {"properties": {
+                   "u": {"$ref": "#/definitions/Big/properties/inner"}}}
+                  for i in range(30)}}}
+    out = _valid(src, "3.0")
+    assert len(_json.dumps(out)) < 3 * len(_json.dumps(src))
+    hoisted = [k for k in out["components"]["schemas"]
+               if k.startswith("definitions_Big")]
+    assert len(hoisted) == 1
