@@ -764,3 +764,40 @@ def test_cyclic_and_unresolvable_deep_refs_dropped(version):
     assert s["B"]["properties"]["gone"] == {}
     assert any("cyclic" in m for m in out["x-s2o"]["lossy"])
     assert any("unresolvable" in m for m in out["x-s2o"]["lossy"])
+
+
+# -- dangling simple $refs and keyword-named properties (#96) ------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_dangling_simple_ref_becomes_empty_schema(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object", "properties": {
+                   "x": {"$ref": "#/definitions/Missing"},
+                   "y": {"$ref": "#/parameters/NopeParam"}}}}}
+    out = _valid(src, version)
+    props = out["components"]["schemas"]["A"]["properties"]
+    assert props["x"] == {} and props["y"] == {}
+    assert sum("unresolvable local $ref" in m
+               for m in out["x-s2o"]["lossy"]) == 2
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_properties_named_like_keywords_are_schemas(version):
+    # a property may be literally named default/enum/discriminator/… —
+    # the keyword handling must not fire on the properties map itself
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Ok": {"type": "string"},
+               "T": {"type": "object", "properties": {
+                   "default": {"$ref": "#/definitions/Ok"},
+                   "enum": {"type": "string", "x-nullable": True},
+                   "discriminator": {"type": "string"},
+                   "collectionFormat": {"type": "integer"},
+                   "example": {"$ref": "#/definitions/Ok"}}}}}
+    out = _valid(src, version)
+    t = out["components"]["schemas"]["T"]["properties"]
+    assert t["default"] == {"$ref": "#/components/schemas/Ok"}
+    assert t["discriminator"] == {"type": "string"}
+    assert t["collectionFormat"] == {"type": "integer"}
+    assert "nullable" in t["enum"] or t["enum"].get("type") == ["string", "null"]
