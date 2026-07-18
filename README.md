@@ -34,7 +34,8 @@ The fixed-runtime deployment model — build one image, swap the spec via a Kube
 - **WSDL → OpenAPI 3.0/3.1** — document/literal and rpc/literal bindings, SOAP 1.1/1.2, nested complex types, arrays, attributes, `nillable`, inheritance (flattened `complexContent` extensions), `simpleContent` (text value + attributes), `choice` (members become optional + `x-soap-choice`), default values, recursive types, multi-service/multi-port WSDLs with automatic dedup.
 - **XSD facets & docs carried into tool schemas** — enumerations, `pattern`, length and numeric bounds, `fractionDigits` (→ `multipleOf`), and `xsd:annotation` documentation are extracted (including from `xsd:import`-ed schemas) so LLMs see well-described, well-constrained tool arguments.
 - **`x-soap` contract** — SOAPAction, SOAP version, endpoint, wrapper element QNames, `soap:header` parts and declared faults are embedded as vendor extensions; OpenAPI `xml` annotations carry everything a call layer needs to serialize JSON ↔ literal XML.
-- **Swagger 2.0 → OpenAPI 3.x upgrade** — full mechanical mapping (servers, requestBody, formData/multipart, parameter schema wrapping, `collectionFormat` → `style`/`explode`, `$ref` rewriting, security schemes, `type: file`, `x-nullable`, discriminator). Every assumption made for missing information is recorded in `x-s2o.assumptions`; untranslatable constructs are preserved as `x-` extensions and listed in `x-s2o.lossy`.
+- **Swagger 2.0 → OpenAPI 3.x upgrade** — full mechanical mapping (servers, requestBody, formData/multipart, parameter schema wrapping, `collectionFormat` → `style`/`explode`, `$ref` rewriting, security schemes, `type: file`, `x-nullable`, discriminator), hardened against real-world documents: deep local `$ref`s are hoisted to components, dangling refs and duplicate parameters are neutralized, type-mismatched defaults are coerced, and common vendor extensions (`x-example`, `x-oneOf`, `x-anyOf`) are promoted to native keywords. Every assumption made for missing information is recorded in `x-s2o.assumptions`; untranslatable constructs are preserved as `x-` extensions and listed in `x-s2o.lossy`.
+- **Real OpenAPI 3.1 output** — `--openapi-version 3.1` is a semantic conversion to JSON Schema 2020-12 style (`nullable` → `type` arrays, boolean `exclusiveMinimum`/`exclusiveMaximum` → numeric bounds), not a version-string bump.
 - **FastMCP compatibility, guaranteed and verifiable** — operationIds are generated in FastMCP's tool-name alphabet (`[A-Za-z0-9_]`, unique, ≤64 chars) so *tool name == operationId*. `spec2openapi validate` proves it: static checks, `openapi-spec-validator`, and a real `FastMCP.from_openapi()` round-trip listing the resulting tools.
 - **SOAP bridge — required to *serve* SOAP specs** — `pip install "spec2openapi[mcp]"` adds the bridge (custom httpx transport) that implements the `x-soap` contract, plus FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors. **Swagger-converted (pure REST) specs do not need this** — any OpenAPI runtime serves them. Only SOAP-converted specs require the bridge at runtime.
 
@@ -183,7 +184,7 @@ pip install -e ".[dev]"
 python -m pytest tests/
 ```
 
-The suite (190 tests) covers conversion units, the Swagger upgrader, envelope (de)serialization, end-to-end MCP-tool-call → mock-SOAP-server round-trips (rpc, simpleContent, choice, recursive trees, unqualified forms), FastMCP round-trips for every fixture × OpenAPI 3.0/3.1, and stress patterns (circular `$ref`s, deep nesting, large enums, cross-namespace name collisions, duplicate operation names across services, odd path characters, deep `allOf` chains). Generated samples live in [`examples/`](examples/).
+The suite covers conversion units, the Swagger upgrader, envelope (de)serialization, end-to-end MCP-tool-call → mock-SOAP-server round-trips (rpc, simpleContent, choice, recursive trees, unqualified forms), FastMCP round-trips for every fixture × OpenAPI 3.0/3.1, and stress patterns (circular `$ref`s, deep nesting, large enums, cross-namespace name collisions, duplicate operation names across services, odd path characters, deep `allOf` chains). Generated samples live in [`examples/`](examples/).
 
 An opt-in **corpus sweep** additionally runs the Swagger upgrader over a stratified sample of real-world Swagger 2.0 definitions from the public [APIs.guru](https://apis.guru) directory (fetched at test time, cached locally, never committed), checking every output against openapi-spec-validator (3.0 and 3.1) **and** a live `FastMCP.from_openapi()` round-trip:
 
@@ -191,7 +192,7 @@ An opt-in **corpus sweep** additionally runs the Swagger upgrader over a stratif
 python -m pytest -m corpus     # network required; see tests/corpus/
 ```
 
-Pre-existing upstream findings are tracked in `tests/corpus/known_failures.txt` with issue links, so the sweep only fails on regressions.
+Known failures would be tracked in `tests/corpus/known_failures.txt` with issue links so the sweep only fails on regressions — the list is currently **empty**: the full APIs.guru Swagger 2.0 population (975 testable documents) was swept during the 0.3.0 cycle, every converter defect it surfaced was fixed, and every sampled document passes all three oracles.
 
 ## Project layout
 

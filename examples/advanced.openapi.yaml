@@ -231,5 +231,5 @@ components:
       - message
 x-soap:
   wsdl: tests/fixtures/advanced.wsdl
-  generator: spec2openapi/0.2.2
+  generator: spec2openapi/0.3.0
   skippedOperations: []
