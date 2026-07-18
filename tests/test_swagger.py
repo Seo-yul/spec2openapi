@@ -176,3 +176,28 @@ def test_upgrade_cli(tmp_path, capsys):
     captured = capsys.readouterr()
     assert rc == 0, captured.out
     assert "FastMCP round-trip: OK" in captured.out
+
+
+# -- repeated x-s2o records are aggregated (#99) -------------------------------
+
+def test_repeated_records_aggregated():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Ok": {"type": "string"},
+               "A": {"$ref": "#/definitions/Ok", "description": "d1"},
+               "B": {"$ref": "#/definitions/Ok", "description": "d2"}}}
+    out = convert_swagger(src)
+    hits = [a for a in out["x-s2o"]["assumptions"] if "siblings next to" in a]
+    assert len(hits) == 1 and hits[0].endswith("(×2)")
+
+
+def test_strict_error_lists_aggregated_records():
+    import pytest as _pytest
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Ok": {"type": "string"},
+               "A": {"$ref": "#/definitions/Ok", "description": "d1"},
+               "B": {"$ref": "#/definitions/Ok", "description": "d2"}}}
+    with _pytest.raises(ConversionError) as exc:
+        convert_swagger(src, strict=True)
+    assert "(×2)" in str(exc.value)

@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guessed conversions (#63).
 
 ### Changed
+- Identical `x-s2o` records are aggregated to `<message> (×N)` in
+  first-occurrence order — one real-world document repeated the same
+  assumption 171 times — applied to `assumptions`, `lossy`, and the
+  `strict` failure listing (#99).
 - Two previously-silent auto-fixes are now recorded (#63): dropping
   `allowEmptyValue` from a non-query parameter (`x-s2o.lossy`) and
   renaming a colliding operationId (`same` → `same_2`,
