@@ -50,6 +50,16 @@ def is_swagger2(spec: dict[str, Any]) -> bool:
     return isinstance(spec, dict) and str(spec.get("swagger", "")).startswith("2")
 
 
+def _aggregate(records: list[str]) -> list[str]:
+    """Collapse identical record strings to 'msg (×N)', keeping first-
+    occurrence order — one document can repeat the same record hundreds
+    of times (#99)."""
+    seen: dict[str, int] = {}
+    for r in records:
+        seen[r] = seen.get(r, 0) + 1
+    return [r if n == 1 else f"{r} (×{n})" for r, n in seen.items()]
+
+
 def _compiles(pattern: str) -> bool:
     try:
         re.compile(pattern)
@@ -106,8 +116,8 @@ def convert_swagger(
     up = _Upgrader(spec)
     out = up.convert()
     if strict and (up.assumptions or up.lossy):
-        records = [f"assumption: {a}" for a in up.assumptions]
-        records += [f"lossy: {m}" for m in up.lossy]
+        records = [f"assumption: {a}" for a in _aggregate(up.assumptions)]
+        records += [f"lossy: {m}" for m in _aggregate(up.lossy)]
         shown = "\n  ".join(records[:20])
         more = f"\n  … and {len(records) - 20} more" if len(records) > 20 else ""
         raise ConversionError(
@@ -1156,7 +1166,7 @@ class _Upgrader:
         out["x-s2o"] = {
             "source": "swagger-2.0",
             "generator": f"spec2openapi/{_version}",
-            "assumptions": self.assumptions,
-            "lossy": self.lossy,
+            "assumptions": _aggregate(self.assumptions),
+            "lossy": _aggregate(self.lossy),
         }
         return out
