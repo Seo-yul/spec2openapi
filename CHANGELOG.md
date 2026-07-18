@@ -55,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#84).
 
 ### Fixed
+- A local `$ref` whose target does not exist in the source (e.g.
+  `#/definitions/Missing`) becomes `{}` with an `x-s2o.lossy` record
+  instead of a dangling component reference, and a property literally
+  named `default`/`enum`/`example`/`discriminator`/`collectionFormat` is
+  now treated as a property (schema fixups applied, `$ref`s rewritten)
+  instead of triggering the same-named keyword handling (#96).
 - Library entry points no longer leak exceptions outside the
   `ConversionError` contract (#84): a non-Swagger-2.0 mapping and a
   document that parses to a non-mapping now raise `ConversionError`

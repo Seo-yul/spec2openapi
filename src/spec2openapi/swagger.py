@@ -40,9 +40,6 @@ _SCHEMA_FIELDS = (
 _ID_RE = re.compile(r"[^A-Za-z0-9_]+")
 # OpenAPI 3 component keys allow letters, digits, '.', '-', '_'
 _COMPONENT_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
-# a local $ref with a component home in OpenAPI 3: exactly one token after
-# a known namespace — anything else addresses an arbitrary document spot
-_SIMPLE_REF_RE = re.compile(r"^#/(definitions|parameters|responses)/[^/]+$")
 
 
 def is_swagger2(spec: dict[str, Any]) -> bool:
@@ -264,7 +261,7 @@ class _Upgrader:
             return {}
         found, target = self._resolve_pointer(ref)
         if not found or not isinstance(target, dict):
-            self.lossy.append(f"unresolvable deep local $ref '{ref}' "
+            self.lossy.append(f"unresolvable local $ref '{ref}' "
                               "replaced with the empty schema")
             return {}
         self._inlining.add(ref)
@@ -297,8 +294,9 @@ class _Upgrader:
             return node
         ref = node.get("$ref")
         if (isinstance(ref, str) and ref.startswith("#/")
-                and not _SIMPLE_REF_RE.match(ref)
                 and not self._is_component_ref(ref)):
+            # deep pointer, or a simple ref whose target doesn't exist —
+            # either way _fix_ref would emit a dangling reference
             resolved = self._inline_deep_ref(ref)
             siblings = {k: v for k, v in node.items() if k != "$ref"}
             if not siblings:
@@ -307,7 +305,12 @@ class _Upgrader:
             return {"allOf": [resolved], **self._fix_schema(siblings)}
         out: dict[str, Any] = {}
         for k, v in node.items():
-            if k == "$ref" and isinstance(v, str):
+            if k in ("properties", "patternProperties") and isinstance(v, dict):
+                # name -> schema map: the keys are opaque property names —
+                # a property named 'default'/'discriminator'/… must not
+                # trigger the keyword handling below
+                out[k] = {pn: self._fix_schema(ps) for pn, ps in v.items()}
+            elif k == "$ref" and isinstance(v, str):
                 out[k] = self._fix_ref(v)
             elif k == "x-nullable":
                 out["nullable"] = v
