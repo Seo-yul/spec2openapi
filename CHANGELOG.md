@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `check_fastmcp_ready(spec) -> list[str]`: the static FastMCP-readiness
+  checks behind `spec2openapi validate` (operations present, safe/unique
+  operationIds — including collisions that would only appear after
+  FastMCP's tool-name normalization — and SOAP wrapper elements) are now
+  a public, dependency-free library function; the CLI consumes it so the
+  two paths cannot drift (#87).
 - The package now ships a `py.typed` marker (PEP 561), so mypy/pyright
   pick up the library's type hints in consumer projects (#85).
 - Opt-in real-world corpus test suite (`python -m pytest -m corpus`): a

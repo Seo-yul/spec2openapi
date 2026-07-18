@@ -13,7 +13,12 @@ from typing import TYPE_CHECKING
 
 from .convert import convert_wsdl, load_spec, spec_has_soap  # noqa: E402,F401
 from .errors import ConversionError  # noqa: E402,F401
-from .openapi import build_spec, dump_spec, to_openapi_31  # noqa: E402,F401
+from .openapi import (  # noqa: E402,F401
+    build_spec,
+    check_fastmcp_ready,
+    dump_spec,
+    to_openapi_31,
+)
 from .swagger import convert_swagger, is_swagger2  # noqa: E402,F401
 
 if TYPE_CHECKING:  # loaded lazily at runtime (pulls the zeep/lxml stack)
@@ -37,6 +42,7 @@ __all__ = [
     "to_openapi_31",
     "convert_swagger",
     "is_swagger2",
+    "check_fastmcp_ready",
     "ConversionError",
     # lazily loaded, require the [mcp] extra:
     "from_openapi_spec",

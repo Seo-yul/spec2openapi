@@ -58,6 +58,78 @@ def _normalize_openapi_version(value: Any) -> str:
     )
 
 
+_HTTP_METHODS = frozenset(
+    ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+)
+# a safe MCP tool name before FastMCP normalization ('.'/'-' become '_')
+_SAFE_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+# FastMCP's tool-name normalization (per character, no run collapsing)
+_FASTMCP_NORM_RE = re.compile(r"[^A-Za-z0-9_]")
+
+
+def _operations(spec: dict[str, Any]):
+    """Yield (path, method, operation) for every HTTP operation."""
+    paths = spec.get("paths") if isinstance(spec, dict) else None
+    if not isinstance(paths, dict):
+        return
+    for path, item in paths.items():
+        if not isinstance(item, dict):
+            continue
+        for method, op in item.items():
+            # only HTTP methods are operations; skip parameters/$ref/x- keys
+            if str(method).lower() in _HTTP_METHODS and isinstance(op, dict):
+                yield path, method, op
+
+
+def check_fastmcp_ready(spec: dict[str, Any]) -> list[str]:
+    """Static FastMCP-readiness check; an empty list means ready.
+
+    Verifies the contract behind ``spec2openapi validate`` without
+    importing fastmcp: the document has operations, every operation has
+    an operationId that is a safe MCP tool name and stays unique even
+    after FastMCP's ``[A-Za-z0-9_]`` normalization, and SOAP operations
+    carry their wrapper element. Returns one message per problem."""
+    if not isinstance(spec, dict):
+        return ["not an OpenAPI document (expected a mapping)"]
+    problems: list[str] = []
+    if not spec.get("paths"):
+        problems.append("spec has no paths")
+    op_ids: list[str] = []
+    op_count = 0
+    for path, method, op in _operations(spec):
+        op_count += 1
+        oid = op.get("operationId")
+        if not oid:
+            problems.append(
+                f"{str(method).upper()} {path}: missing operationId"
+            )
+            continue
+        op_ids.append(oid)
+        if not isinstance(oid, str) or not _SAFE_TOOL_RE.fullmatch(oid):
+            problems.append(f"{oid}: not a safe MCP tool name")
+        xsoap = op.get("x-soap")
+        if isinstance(xsoap, dict):
+            inp = xsoap.get("input")
+            if not (isinstance(inp, dict) and inp.get("element")):
+                problems.append(f"{oid}: x-soap.input.element missing")
+    if spec.get("paths") and not op_count:
+        problems.append("spec has no operations")
+    dupes = {o for o in op_ids if op_ids.count(o) > 1}
+    if dupes:
+        problems.append(f"duplicate operationIds: {sorted(dupes)}")
+    by_tool: dict[str, set[str]] = {}
+    for oid in op_ids:
+        if isinstance(oid, str):
+            by_tool.setdefault(_FASTMCP_NORM_RE.sub("_", oid), set()).add(oid)
+    for tool, oids in sorted(by_tool.items()):
+        if len(oids) > 1:  # distinct ids that become the same tool
+            problems.append(
+                "operationIds collide after FastMCP normalization "
+                f"('{tool}'): {sorted(oids)}"
+            )
+    return problems
+
+
 def _unique_id(base: str, used: set[str]) -> str:
     """Make base unique within `used`, keeping the result <= 64 chars."""
     if base not in used:
