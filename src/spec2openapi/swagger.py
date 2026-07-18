@@ -384,6 +384,14 @@ class _Upgrader:
                     f"collectionFormat {v!r} inside a schema has no "
                     "OpenAPI 3 equivalent; preserved as x-collectionFormat"
                 )
+            elif (k in ("x-oneOf", "x-anyOf") and isinstance(v, list)
+                    and k[2:] not in node):
+                # a pre-OpenAPI-3 down-conversion artifact carrying real
+                # composition semantics — promote to the native keyword
+                out[k[2:]] = self._fix_schema(v)
+                self.assumptions.append(
+                    f"{k} promoted to native {k[2:]}"
+                )
             elif k == "pattern" and isinstance(v, str) and not _compiles(v):
                 # ECMA-only syntax (\p{...}, odd class ranges) fails the
                 # validator's regex format check; keep the original text
@@ -567,6 +575,13 @@ class _Upgrader:
                     f"{ctx}: allowEmptyValue on {loc or 'unknown'} parameter "
                     f"'{p.get('name')}' dropped (query-only in OpenAPI 3)"
                 )
+        # Swagger 2.0 parameters have no native example field; OpenAPI 3
+        # does — promote the common x-example vendor extension (#95)
+        if "x-example" in out and "example" not in out:
+            out["example"] = out.pop("x-example")
+            self.assumptions.append(
+                f"{ctx}: parameter x-example promoted to native example"
+            )
         # OpenAPI 3 requires path parameters to be required:true
         if loc == "path" and out["required"] is not True:
             out["required"] = True

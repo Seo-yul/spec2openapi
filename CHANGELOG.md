@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Common vendor extensions carrying recoverable native meaning are
+  promoted to OpenAPI 3 keywords (#95): parameter-level `x-example`
+  becomes `example` (Swagger 2.0 parameters had no native field), and
+  schema-level `x-oneOf`/`x-anyOf` lists become `oneOf`/`anyOf` with all
+  schema fixups applied to their members — skipped when the native
+  keyword is already present, recorded in `x-s2o.assumptions`.
 - `check_fastmcp_ready(spec) -> list[str]`: the static FastMCP-readiness
   checks behind `spec2openapi validate` (operations present, safe/unique
   operationIds — including collisions that would only appear after

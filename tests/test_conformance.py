@@ -901,3 +901,39 @@ def test_uncompilable_pattern_moved_to_extension(version):
     assert s["C"]["pattern"] == "^[a-z]+$"  # a valid pattern is untouched
     assert sum("preserved as x-pattern" in m
                for m in out["x-s2o"]["lossy"]) == 2
+
+
+# -- x-example / x-oneOf / x-anyOf promotion (#95) -----------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_parameter_x_example_promoted(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a/{id}": {"get": {"parameters": [
+               {"name": "id", "in": "path", "required": True,
+                "type": "string", "x-example": "CMUC"}],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    p = out["paths"]["/a/{id}"]["get"]["parameters"][0]
+    assert p["example"] == "CMUC" and "x-example" not in p
+    assert any("x-example promoted" in a for a in out["x-s2o"]["assumptions"])
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_x_oneof_and_x_anyof_promoted(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "common": {"type": "object"},
+               "T": {"type": "object",
+                     "x-oneOf": [{"$ref": "#/definitions/common"},
+                                 {"type": "string"}]},
+               "V": {"type": "object", "oneOf": [{"type": "integer"}],
+                     "x-oneOf": [{"type": "string"}]}}}
+    out = _valid(src, version)
+    s = out["components"]["schemas"]
+    # promoted, members run through the schema fixups ($ref rewritten)
+    assert s["T"]["oneOf"][0] == {"$ref": "#/components/schemas/common"}
+    assert "x-oneOf" not in s["T"]
+    # a native keyword already present wins; the extension is kept as-is
+    assert s["V"]["oneOf"] == [{"type": "integer"}] and "x-oneOf" in s["V"]
+    assert any("promoted to native oneOf" in a
+               for a in out["x-s2o"]["assumptions"])
