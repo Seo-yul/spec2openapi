@@ -59,6 +59,9 @@ spec2openapi = "spec2openapi.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+spec2openapi = ["py.typed"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
