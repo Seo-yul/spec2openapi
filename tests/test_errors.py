@@ -210,3 +210,35 @@ def test_convert_wsdl_rejects_bad_version_before_parsing():
     # the version error must fire before any attempt to read the source
     with pytest.raises(ConversionError, match="unsupported openapi_version"):
         convert_wsdl("/no/such.wsdl", openapi_version="9")
+
+
+# -- library entry points keep the ConversionError contract (#84) --------------
+
+def test_non_swagger2_mapping_is_conversion_error():
+    with pytest.raises(ConversionError, match="not a Swagger 2.0"):
+        convert_swagger({"openapi": "3.0.0"})
+
+
+def test_load_spec_scalar_document_is_conversion_error(tmp_path):
+    f = tmp_path / "scalar.yaml"
+    f.write_text("just a string\n")
+    with pytest.raises(ConversionError, match="expected a mapping") as exc:
+        load_spec(f)
+    assert "scalar.yaml" in str(exc.value)  # traceable source label
+
+
+def test_load_spec_non_utf8_is_labeled_conversion_error(tmp_path):
+    f = tmp_path / "latin1.json"
+    f.write_bytes(b'{"swagger": "2.0", "title": "caf\xe9"}')
+    with pytest.raises(ConversionError, match="not valid UTF-8") as exc:
+        load_spec(f)
+    assert "latin1.json" in str(exc.value)
+
+
+@pytest.mark.parametrize("garbage", [
+    {}, {"paths": None}, {"paths": []}, {"paths": {"/a": None}},
+    {"paths": {"/a": {"get": None}}},
+])
+def test_spec_has_soap_is_false_on_malformed_input(garbage):
+    from spec2openapi import spec_has_soap
+    assert spec_has_soap(garbage) is False

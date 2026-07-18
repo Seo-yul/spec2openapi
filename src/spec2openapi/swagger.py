@@ -92,7 +92,9 @@ def convert_swagger(
             f"got {type(spec).__name__}"
         )
     if not is_swagger2(spec):
-        raise ValueError("not a Swagger 2.0 document (missing swagger: '2.0')")
+        raise ConversionError(
+            "not a Swagger 2.0 document (missing swagger: '2.0')"
+        )
     up = _Upgrader(spec)
     out = up.convert()
     if strict and (up.assumptions or up.lossy):

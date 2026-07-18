@@ -31,8 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response"`; unknown codes stay empty) instead of always an empty
   string — better tool descriptions for LLMs; still recorded in
   `x-s2o.assumptions` (#61).
+- `load_spec` no longer silently replaces invalid bytes when fetching a
+  spec over http(s): a document that is not valid UTF-8 now fails with a
+  labeled `ConversionError` instead of converting with corrupted text
+  (#84).
 
 ### Fixed
+- Library entry points no longer leak exceptions outside the
+  `ConversionError` contract (#84): a non-Swagger-2.0 mapping and a
+  document that parses to a non-mapping now raise `ConversionError`
+  (previously bare `ValueError`), a non-UTF-8 local file raises a
+  labeled `ConversionError` (previously a raw `UnicodeDecodeError`
+  without the file name), and `spec_has_soap` returns `False` on
+  malformed input instead of crashing.
 - `convert_swagger`, `convert_wsdl`, and `build_spec` now validate the
   `openapi_version` argument: unsupported values (`"3.2"`, `"2.0"`) raise
   `ConversionError` naming the accepted forms instead of silently
