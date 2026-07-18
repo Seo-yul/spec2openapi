@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ConversionError
-from .openapi import build_spec, dump_spec  # noqa: F401  (re-exported)
+from .openapi import (  # noqa: F401  (re-exported)
+    _normalize_openapi_version,
+    build_spec,
+    dump_spec,
+)
 from .parser import parse_wsdl
 
 
@@ -39,6 +43,9 @@ def convert_wsdl(
             "convert_wsdl expects a WSDL file path or URL (str), "
             f"got {type(source).__name__}"
         )
+    # reject an unsupported target version before the (possibly remote)
+    # WSDL parse, not after
+    openapi_version = _normalize_openapi_version(openapi_version)
     parsed = parse_wsdl(
         source, service=service, port=port,
         prefer_soap12=prefer_soap12, strict=strict,

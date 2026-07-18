@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `x-s2o.assumptions` (#61).
 
 ### Fixed
+- `convert_swagger`, `convert_wsdl`, and `build_spec` now validate the
+  `openapi_version` argument: unsupported values (`"3.2"`, `"2.0"`) raise
+  `ConversionError` naming the accepted forms instead of silently
+  emitting a 3.0 document, and numeric `3.0`/`3.1` (with or without a
+  patch suffix) are accepted instead of crashing; `convert_wsdl` rejects
+  a bad version before fetching/parsing the WSDL (#83).
 - Deep local `$ref`s that address an arbitrary document location
   (`#/paths/.../responses/200/schema/...`,
   `#/definitions/Foo/properties/bar`) no longer dangle after the

@@ -5,7 +5,8 @@ import logging
 
 import pytest
 
-from spec2openapi import ConversionError, convert_wsdl, load_spec
+from spec2openapi import (ConversionError, convert_swagger, convert_wsdl,
+                          load_spec)
 from spec2openapi.cli import main as cli_main
 from spec2openapi.schema import SchemaConverter
 
@@ -178,3 +179,34 @@ def test_load_spec_url_fetch_error_is_traceable(monkeypatch):
         load_spec("https://example.com/swagger.json")
     msg = str(exc.value)
     assert "example.com" in msg and "could not fetch" in msg
+
+
+# -- openapi_version argument validation (#83) ---------------------------------
+
+@pytest.mark.parametrize("value,expected", [
+    ("3.0", "3.0"), ("3.1", "3.1"), ("3.0.3", "3.0"), ("3.1.0", "3.1"),
+    (3.0, "3.0"), (3.1, "3.1"),
+])
+def test_openapi_version_accepted_forms(value, expected):
+    out = convert_swagger(
+        {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+         "paths": {}},
+        openapi_version=value,
+    )
+    assert out["openapi"].startswith(expected)
+
+
+@pytest.mark.parametrize("value", ["3.2", "2.0", "3", None, [], "three"])
+def test_openapi_version_rejected_loudly(value):
+    with pytest.raises(ConversionError, match="unsupported openapi_version"):
+        convert_swagger(
+            {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+             "paths": {}},
+            openapi_version=value,
+        )
+
+
+def test_convert_wsdl_rejects_bad_version_before_parsing():
+    # the version error must fire before any attempt to read the source
+    with pytest.raises(ConversionError, match="unsupported openapi_version"):
+        convert_wsdl("/no/such.wsdl", openapi_version="9")
