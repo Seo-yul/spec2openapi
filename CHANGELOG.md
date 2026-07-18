@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The package now ships a `py.typed` marker (PEP 561), so mypy/pyright
+  pick up the library's type hints in consumer projects (#85).
 - Opt-in real-world corpus test suite (`python -m pytest -m corpus`): a
   stratified sample of public Swagger 2.0 definitions from APIs.guru is
   converted and checked against the 3.0/3.1 validators and a live FastMCP
