@@ -72,14 +72,19 @@ def load_spec(path: str | Path) -> dict[str, Any]:
         req = Request(src, headers={"User-Agent": f"spec2openapi/{__version__}"})
         try:
             with urlopen(req, timeout=30) as resp:  # noqa: S310 (user-supplied URL)
-                text = resp.read().decode("utf-8-sig", "replace")
+                data = resp.read()
         except (URLError, OSError) as exc:
             raise ConversionError(f"{src}: could not fetch — {exc}") from exc
         label, is_json = src, src.lower().endswith(".json")
     else:
         p = Path(path)
-        text = p.read_text(encoding="utf-8-sig")
+        data = p.read_bytes()
         label, is_json = str(p), p.suffix.lower() == ".json"
+    # decode loudly: replacing invalid bytes would silently corrupt text
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ConversionError(f"{label}: not valid UTF-8 — {exc}") from exc
     # parse errors are prefixed with the source so the location is
     # traceable (json/yaml already report the line and column)
     try:
@@ -92,7 +97,7 @@ def load_spec(path: str | Path) -> dict[str, Any]:
     except yaml.YAMLError as exc:
         raise ConversionError(f"{label}: invalid YAML — {exc}") from exc
     if not isinstance(spec, dict):
-        raise ValueError(
+        raise ConversionError(
             f"{label}: not a valid OpenAPI/Swagger document "
             f"(parsed as {type(spec).__name__}, expected a mapping)"
         )
@@ -100,8 +105,15 @@ def load_spec(path: str | Path) -> dict[str, Any]:
 
 
 def spec_has_soap(spec: dict[str, Any]) -> bool:
-    for item in spec.get("paths", {}).values():
-        for method in (item or {}).values():
+    """True if any operation carries the x-soap extension (i.e. calling
+    it requires the SOAP bridge). A malformed document is simply False."""
+    paths = spec.get("paths") if isinstance(spec, dict) else None
+    if not isinstance(paths, dict):
+        return False
+    for item in paths.values():
+        if not isinstance(item, dict):
+            continue
+        for method in item.values():
             if isinstance(method, dict) and method.get("x-soap"):
                 return True
     return False

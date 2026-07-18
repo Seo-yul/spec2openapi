@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from fastmcp import Client, FastMCP
 
-from spec2openapi import convert_swagger, is_swagger2, load_spec
+from spec2openapi import (ConversionError, convert_swagger, is_swagger2,
+                          load_spec)
 from spec2openapi.cli import main as cli_main
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -26,7 +27,7 @@ def upgraded(legacy):
 def test_detection(legacy, upgraded):
     assert is_swagger2(legacy)
     assert not is_swagger2(upgraded)
-    with pytest.raises(ValueError):
+    with pytest.raises(ConversionError):
         convert_swagger(upgraded)
 
 
