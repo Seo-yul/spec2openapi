@@ -1,0 +1,2 @@
+# Corpus specs allowed to fail, one per line (name from APIs.guru list),
+# with the tracking issue in a trailing comment. Currently empty.

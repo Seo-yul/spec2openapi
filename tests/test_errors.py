@@ -5,7 +5,8 @@ import logging
 
 import pytest
 
-from spec2openapi import ConversionError, convert_wsdl, load_spec
+from spec2openapi import (ConversionError, convert_swagger, convert_wsdl,
+                          load_spec)
 from spec2openapi.cli import main as cli_main
 from spec2openapi.schema import SchemaConverter
 
@@ -147,3 +148,97 @@ def test_is_swagger2_false_for_non_mapping():
     assert is_swagger2("not a dict") is False
     assert is_swagger2(None) is False
     assert is_swagger2({"swagger": "2.0"}) is True
+
+
+# -- URL spec input (#69) ------------------------------------------------------
+
+def test_load_spec_accepts_url(monkeypatch):
+    """load_spec fetches http(s) sources (no real network: urlopen mocked)."""
+    import io
+    import contextlib
+
+    payload = b'{"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {}}'
+
+    @contextlib.contextmanager
+    def fake_urlopen(req, timeout=None):
+        yield io.BytesIO(payload)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    spec = load_spec("https://example.com/swagger.json")
+    assert spec["swagger"] == "2.0"
+
+
+def test_load_spec_url_fetch_error_is_traceable(monkeypatch):
+    from urllib.error import URLError
+
+    def boom(req, timeout=None):
+        raise URLError("no route")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(ConversionError) as exc:
+        load_spec("https://example.com/swagger.json")
+    msg = str(exc.value)
+    assert "example.com" in msg and "could not fetch" in msg
+
+
+# -- openapi_version argument validation (#83) ---------------------------------
+
+@pytest.mark.parametrize("value,expected", [
+    ("3.0", "3.0"), ("3.1", "3.1"), ("3.0.3", "3.0"), ("3.1.0", "3.1"),
+    (3.0, "3.0"), (3.1, "3.1"),
+])
+def test_openapi_version_accepted_forms(value, expected):
+    out = convert_swagger(
+        {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+         "paths": {}},
+        openapi_version=value,
+    )
+    assert out["openapi"].startswith(expected)
+
+
+@pytest.mark.parametrize("value", ["3.2", "2.0", "3", None, [], "three"])
+def test_openapi_version_rejected_loudly(value):
+    with pytest.raises(ConversionError, match="unsupported openapi_version"):
+        convert_swagger(
+            {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+             "paths": {}},
+            openapi_version=value,
+        )
+
+
+def test_convert_wsdl_rejects_bad_version_before_parsing():
+    # the version error must fire before any attempt to read the source
+    with pytest.raises(ConversionError, match="unsupported openapi_version"):
+        convert_wsdl("/no/such.wsdl", openapi_version="9")
+
+
+# -- library entry points keep the ConversionError contract (#84) --------------
+
+def test_non_swagger2_mapping_is_conversion_error():
+    with pytest.raises(ConversionError, match="not a Swagger 2.0"):
+        convert_swagger({"openapi": "3.0.0"})
+
+
+def test_load_spec_scalar_document_is_conversion_error(tmp_path):
+    f = tmp_path / "scalar.yaml"
+    f.write_text("just a string\n")
+    with pytest.raises(ConversionError, match="expected a mapping") as exc:
+        load_spec(f)
+    assert "scalar.yaml" in str(exc.value)  # traceable source label
+
+
+def test_load_spec_non_utf8_is_labeled_conversion_error(tmp_path):
+    f = tmp_path / "latin1.json"
+    f.write_bytes(b'{"swagger": "2.0", "title": "caf\xe9"}')
+    with pytest.raises(ConversionError, match="not valid UTF-8") as exc:
+        load_spec(f)
+    assert "latin1.json" in str(exc.value)
+
+
+@pytest.mark.parametrize("garbage", [
+    {}, {"paths": None}, {"paths": []}, {"paths": {"/a": None}},
+    {"paths": {"/a": {"get": None}}},
+])
+def test_spec_has_soap_is_false_on_malformed_input(garbage):
+    from spec2openapi import spec_has_soap
+    assert spec_has_soap(garbage) is False

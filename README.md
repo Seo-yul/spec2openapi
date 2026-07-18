@@ -84,20 +84,43 @@ OK: spec is FastMCP-convertible
 
 ```python
 import spec2openapi
+from spec2openapi import ConversionError
 
-# WSDL -> OpenAPI dict
-spec = spec2openapi.convert_wsdl("https://legacy-host/OrderService?wsdl")
+# Swagger 2.0 -> OpenAPI dict (input may be a path or an http(s) URL)
+try:
+    legacy = spec2openapi.load_spec("swagger2.json")
+    spec = spec2openapi.convert_swagger(legacy, openapi_version="3.1")
+except ConversionError as exc:      # every failure path raises this
+    raise SystemExit(f"conversion failed: {exc}")
 
-# Swagger 2.0 -> OpenAPI dict
-legacy = spec2openapi.load_spec("swagger2.json")
-spec = spec2openapi.convert_swagger(legacy, openapi_version="3.1")
+# everything the converter assumed or could not translate, per document
+report = spec.get("x-s2o", {})
+report.get("assumptions", [])       # e.g. "missing consumes -> application/json"
+report.get("lossy", [])             # e.g. "collectionFormat 'tsv' preserved as x-"
+# pipelines that must not accept guesses: convert_swagger(legacy, strict=True)
 
-print(spec2openapi.dump_spec(spec))            # YAML text
+# the FastMCP-readiness contract as a function (empty list == ready)
+problems = spec2openapi.check_fastmcp_ready(spec)
+
+# WSDL -> OpenAPI dict (zeep loads on first SOAP use, not at import)
+spec = spec2openapi.convert_wsdl(
+    "https://legacy-host/OrderService?wsdl",
+    forbid_external=True,           # refuse remote imports from untrusted WSDLs
+)
+
+print(spec2openapi.dump_spec(spec))            # YAML text (fmt="json" for JSON)
 
 # Optional [mcp] extra: run it as an MCP server right away
 mcp = spec2openapi.from_openapi_spec(spec)
 mcp.run(transport="http", host="0.0.0.0", port=8000)
 ```
+
+The public API is exactly `spec2openapi.__all__` (typed, PEP 561); anything
+else is internal and may change without notice. All entry points report
+failures as `ConversionError` (a `ValueError` subclass). Returned documents
+may share substructures with the input mapping (`example`/`default`/`enum`
+and `x-*` values are not deep-copied) — `copy.deepcopy` the result before
+mutating it if you keep using the input.
 
 ## How SOAP calls work (the `x-soap` contract)
 
@@ -125,6 +148,8 @@ Upgrading is favorable: OpenAPI 3.x is a superset of Swagger 2.0, so almost noth
 1. **Deterministic, documented defaults** — missing `consumes`/`produces` → `application/json`; missing `operationId` → `{method}_{path}`; missing `host` → relative server `/`; missing `schemes` → `https`. All recorded in `x-s2o.assumptions`.
 2. **Preserve, never drop** — constructs with no OpenAPI 3 equivalent (e.g. `collectionFormat: tsv`) are kept as `x-` extensions and listed in `x-s2o.lossy`.
 3. **Verify the outcome** — `spec2openapi validate` runs the actual FastMCP round-trip; assumptions never block tool generation because tools only need paths and schemas.
+
+Pipelines that must not accept guessed conversions can pass `--strict` to `upgrade` (or `strict=True` to `convert_swagger`): the conversion then fails with the full list of assumption/lossy records instead of applying them.
 
 ## Kubernetes: one image, many MCP servers
 
@@ -154,7 +179,15 @@ pip install -e ".[dev]"
 python -m pytest tests/
 ```
 
-The suite (104 tests) covers conversion units, the Swagger upgrader, envelope (de)serialization, end-to-end MCP-tool-call → mock-SOAP-server round-trips (rpc, simpleContent, choice, recursive trees, unqualified forms), FastMCP round-trips for every fixture × OpenAPI 3.0/3.1, and stress patterns (circular `$ref`s, deep nesting, large enums, cross-namespace name collisions, duplicate operation names across services, odd path characters, deep `allOf` chains). Generated samples live in [`examples/`](examples/).
+The suite (190 tests) covers conversion units, the Swagger upgrader, envelope (de)serialization, end-to-end MCP-tool-call → mock-SOAP-server round-trips (rpc, simpleContent, choice, recursive trees, unqualified forms), FastMCP round-trips for every fixture × OpenAPI 3.0/3.1, and stress patterns (circular `$ref`s, deep nesting, large enums, cross-namespace name collisions, duplicate operation names across services, odd path characters, deep `allOf` chains). Generated samples live in [`examples/`](examples/).
+
+An opt-in **corpus sweep** additionally runs the Swagger upgrader over a stratified sample of real-world Swagger 2.0 definitions from the public [APIs.guru](https://apis.guru) directory (fetched at test time, cached locally, never committed), checking every output against openapi-spec-validator (3.0 and 3.1) **and** a live `FastMCP.from_openapi()` round-trip:
+
+```bash
+python -m pytest -m corpus     # network required; see tests/corpus/
+```
+
+Pre-existing upstream findings are tracked in `tests/corpus/known_failures.txt` with issue links, so the sweep only fails on regressions.
 
 ## Project layout
 

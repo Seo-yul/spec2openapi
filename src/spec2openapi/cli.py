@@ -17,10 +17,6 @@ from . import __version__
 
 _MCP_HINT = "install the MCP runtime extras first: pip install 'spec2openapi[mcp]'"
 
-_HTTP_METHODS = frozenset(
-    ("get", "put", "post", "delete", "options", "head", "patch", "trace")
-)
-
 
 def _is_wsdl_source(src: str) -> bool:
     low = src.lower()
@@ -139,7 +135,8 @@ def cmd_upgrade(args) -> int:
     from .swagger import convert_swagger
 
     spec = load_spec(args.source)
-    upgraded = convert_swagger(spec, openapi_version=args.openapi_version)
+    upgraded = convert_swagger(spec, openapi_version=args.openapi_version,
+                               strict=args.strict)
 
     report = upgraded.get("x-s2o", {})
     for kind in ("assumptions", "lossy"):
@@ -162,35 +159,12 @@ def cmd_upgrade(args) -> int:
 
 def cmd_validate(args) -> int:
     """Static checks + optional FastMCP round-trip on a spec (or WSDL)."""
-    import re
+    from .openapi import _FASTMCP_NORM_RE, _operations, check_fastmcp_ready
 
     spec = _load_or_convert(args.source)
-    problems: list[str] = []
-
-    paths = spec.get("paths", {})
-    if not paths:
-        problems.append("spec has no paths")
-    op_ids: list[str] = []
-    for path, item in paths.items():
-        if not isinstance(item, dict):
-            continue
-        for method, op in item.items():
-            # only HTTP methods are operations; skip parameters/$ref/x- keys
-            if method.lower() not in _HTTP_METHODS or not isinstance(op, dict):
-                continue
-            oid = op.get("operationId")
-            if not oid:
-                problems.append(f"{method.upper()} {path}: missing operationId")
-                continue
-            op_ids.append(oid)
-            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", oid):
-                problems.append(f"{oid}: not a safe MCP tool name")
-            xsoap = op.get("x-soap")
-            if isinstance(xsoap, dict) and not xsoap.get("input", {}).get("element"):
-                problems.append(f"{oid}: x-soap.input.element missing")
-    dupes = {o for o in op_ids if op_ids.count(o) > 1}
-    if dupes:
-        problems.append(f"duplicate operationIds: {sorted(dupes)}")
+    problems = check_fastmcp_ready(spec)
+    op_ids = [op.get("operationId")
+              for _, _, op in _operations(spec) if op.get("operationId")]
 
     print(f"operations        : {len(op_ids)}")
     print(f"component schemas : {len(spec.get('components', {}).get('schemas', {}))}")
@@ -230,7 +204,7 @@ def cmd_validate(args) -> int:
         tool_names = {t.name for t in tools}
 
         def _norm(s: str) -> str:  # FastMCP tool-name normalization
-            return re.sub(r"[^A-Za-z0-9_]", "_", s)
+            return _FASTMCP_NORM_RE.sub("_", s)
 
         renamed = {o for o in op_ids
                    if o not in tool_names and _norm(o) in tool_names}
@@ -323,6 +297,9 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("-o", "--output", help="output file (default: stdout)")
     u.add_argument("--format", choices=["yaml", "json"])
     u.add_argument("--openapi-version", choices=["3.0", "3.1"], default="3.0")
+    u.add_argument("--strict", action="store_true",
+                   help="fail when the conversion would need any assumption "
+                        "or lossy transformation")
     u.set_defaults(fn=cmd_upgrade)
 
     v = sub.add_parser("validate",

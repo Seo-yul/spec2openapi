@@ -42,7 +42,8 @@ spec2openapi convert https://legacy-host/OrderService?wsdl -o orders.openapi.yam
 spec2openapi convert service.wsdl --openapi-version 3.1 --format json
 
 # Swagger 2.0 -> OpenAPI 3.x 업그레이드 (FastMCP는 3.x만 지원)
-spec2openapi upgrade swagger2.json -o service.openapi.yaml
+# --strict: 가정/손실 변환이 하나라도 필요하면 목록과 함께 실패
+spec2openapi upgrade swagger2.json -o service.openapi.yaml   # 파일 또는 URL
 
 # FastMCP 변환 가능성 검증 (스펙 정적 검사 + openapi-spec-validator
 # + FastMCP.from_openapi 라운드트립으로 tool 생성까지 확인)
@@ -60,15 +61,43 @@ convert 옵션: `--openapi-version 3.0|3.1`(기본값 `3.0`, 출력 스펙에는
 
 ```python
 import spec2openapi
+from spec2openapi import ConversionError
 
-spec = spec2openapi.convert_wsdl("https://legacy-host/OrderService?wsdl")
+# Swagger 2.0 -> OpenAPI dict (입력은 파일 경로 또는 http(s) URL)
+try:
+    legacy = spec2openapi.load_spec("swagger2.json")
+    spec = spec2openapi.convert_swagger(legacy, openapi_version="3.1")
+except ConversionError as exc:      # 모든 실패 경로가 이 예외를 던진다
+    raise SystemExit(f"변환 실패: {exc}")
+
+# 변환기가 가정했거나 번역하지 못한 내용은 문서마다 기록된다
+report = spec.get("x-s2o", {})
+report.get("assumptions", [])       # 예: "missing consumes -> application/json"
+report.get("lossy", [])             # 예: "collectionFormat 'tsv' preserved as x-"
+# 추측을 허용하면 안 되는 파이프라인: convert_swagger(legacy, strict=True)
+
+# FastMCP 호환 계약을 함수로 검사 (빈 리스트 == 준비 완료)
+problems = spec2openapi.check_fastmcp_ready(spec)
+
+# WSDL -> OpenAPI dict (zeep은 import 시점이 아니라 첫 SOAP 사용 때 로드)
+spec = spec2openapi.convert_wsdl(
+    "https://legacy-host/OrderService?wsdl",
+    forbid_external=True,           # 신뢰할 수 없는 WSDL의 원격 import 차단
+)
+
 text = spec2openapi.dump_spec(spec)              # yaml (또는 fmt="json")
-spec31 = spec2openapi.to_openapi_31(spec)        # 3.0 -> 3.1
 
 # [mcp] extra 설치 시: 참조 런타임
 mcp = spec2openapi.from_openapi_spec(spec)       # x-soap 감지 시 SOAP 브리지 장착
 mcp.run(transport="http", host="0.0.0.0", port=8000)
 ```
+
+공개 API는 정확히 `spec2openapi.__all__`이며(타입 힌트 제공, PEP 561), 그 밖의
+이름은 내부 구현으로 예고 없이 바뀔 수 있다. 모든 진입점은 실패를
+`ConversionError`(`ValueError`의 서브클래스)로 보고한다. 반환된 문서는 입력
+매핑과 하위 구조를 공유할 수 있으므로(`example`/`default`/`enum`, `x-*` 값은
+deep copy하지 않음), 입력을 계속 쓰면서 결과를 수정하려면 `copy.deepcopy`를
+먼저 적용한다.
 
 ## 지원 범위
 
@@ -147,6 +176,8 @@ python -m pytest tests/
 ```
 
 테스트 스위트는 다음으로 구성된다. 변환 단위 테스트, Swagger 업그레이드 테스트, envelope 직렬화/역직렬화 테스트, 목 SOAP 서버를 상대로 한 e2e 테스트(MCP tool 호출→SOAP 왕복이며 rpc·simpleContent·choice·재귀 타입·unqualified form을 포함), 전체 픽스처에 대한 OpenAPI 3.0/3.1 FastMCP 라운드트립, 그리고 실전 난제 패턴을 다룬 스트레스 테스트(재귀·순환 $ref, 4단 중첩, 대형 enum, 네임스페이스 간 타입명 충돌, 서비스 간 동명 오퍼레이션, 특수문자 경로, 깊은 allOf 체인). 생성된 스펙 샘플은 `examples/`에 있다.
+
+추가로 opt-in **코퍼스 스윕**이 있다: 공개 [APIs.guru](https://apis.guru) 디렉터리의 실전 Swagger 2.0 문서를 층화 표본으로 받아(테스트 시 다운로드·로컬 캐시, 저장소에는 커밋하지 않음) 모든 출력에 openapi-spec-validator(3.0/3.1)와 실제 `FastMCP.from_openapi()` 라운드트립을 적용한다. `python -m pytest -m corpus`로 실행하며(네트워크 필요), 기존에 알려진 실패는 `tests/corpus/known_failures.txt`에 이슈 링크와 함께 관리되어 회귀만 실패로 잡힌다.
 
 참고: FastMCP는 tool 이름을 `[A-Za-z0-9_]`로 정규화하므로, 이 라이브러리는 operationId를 처음부터 그 알파벳으로 생성/정규화해 "tool 이름 == operationId"가 항상 성립하게 한다(정규화 발생 시 `x-s2o.assumptions`에 기록, `validate`가 리네임을 감지해 안내).
 

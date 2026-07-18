@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spec2openapi"
-version = "0.2.2"
+version = "0.3.0"
 description = "Convert legacy API specs (SOAP/WSDL, Swagger 2.0) into FastMCP-ready OpenAPI 3.x documents"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -59,6 +59,13 @@ spec2openapi = "spec2openapi.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+spec2openapi = ["py.typed"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "corpus: opt-in sweep over real-world specs (network; run with -m corpus)",
+]
+addopts = "-m 'not corpus'"

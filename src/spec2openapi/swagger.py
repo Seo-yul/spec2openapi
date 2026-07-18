@@ -14,11 +14,13 @@ Design principles for information gaps (2.0 documents often omit things):
 from __future__ import annotations
 
 import re
+from http import HTTPStatus
+from urllib.parse import unquote
 from typing import Any
 
 from . import __version__ as _version
 from .errors import ConversionError
-from .openapi import _unique_id, to_openapi_31
+from .openapi import _normalize_openapi_version, _unique_id, to_openapi_31
 
 _METHODS = ("get", "put", "post", "delete", "options", "head", "patch")
 
@@ -41,8 +43,29 @@ _COMPONENT_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def is_swagger2(spec: dict[str, Any]) -> bool:
-    # predicate: a non-mapping simply isn't a Swagger 2.0 document
+    """True if the mapping declares itself a Swagger 2.x document.
+
+    A non-mapping is simply False, so the predicate is safe to call on
+    whatever load_spec returned."""
     return isinstance(spec, dict) and str(spec.get("swagger", "")).startswith("2")
+
+
+def _aggregate(records: list[str]) -> list[str]:
+    """Collapse identical record strings to 'msg (×N)', keeping first-
+    occurrence order — one document can repeat the same record hundreds
+    of times (#99)."""
+    seen: dict[str, int] = {}
+    for r in records:
+        seen[r] = seen.get(r, 0) + 1
+    return [r if n == 1 else f"{r} (×{n})" for r, n in seen.items()]
+
+
+def _compiles(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+        return True
+    except re.error:
+        return False
 
 
 def _as_bool(v: Any) -> bool:
@@ -71,18 +94,36 @@ def _merge_params(shared: list, op_level: list) -> list:
 
 
 def convert_swagger(
-    spec: dict[str, Any], *, openapi_version: str = "3.0"
+    spec: dict[str, Any], *, openapi_version: str = "3.0",
+    strict: bool = False,
 ) -> dict[str, Any]:
-    """Upgrade a Swagger 2.0 dict to OpenAPI 3.0 (or 3.1)."""
+    """Upgrade a Swagger 2.0 dict to OpenAPI 3.0 (or 3.1).
+
+    strict=True fails (ConversionError) when the conversion would need any
+    assumption or lossy transformation — for pipelines that must not accept
+    guessed conversions. The records are listed in the error message.
+    """
+    openapi_version = _normalize_openapi_version(openapi_version)
     if not isinstance(spec, dict):
         raise ConversionError(
             "convert_swagger expects an OpenAPI/Swagger mapping (dict), "
             f"got {type(spec).__name__}"
         )
     if not is_swagger2(spec):
-        raise ValueError("not a Swagger 2.0 document (missing swagger: '2.0')")
+        raise ConversionError(
+            "not a Swagger 2.0 document (missing swagger: '2.0')"
+        )
     up = _Upgrader(spec)
     out = up.convert()
+    if strict and (up.assumptions or up.lossy):
+        records = [f"assumption: {a}" for a in _aggregate(up.assumptions)]
+        records += [f"lossy: {m}" for m in _aggregate(up.lossy)]
+        shown = "\n  ".join(records[:20])
+        more = f"\n  … and {len(records) - 20} more" if len(records) > 20 else ""
+        raise ConversionError(
+            f"strict mode: conversion required {len(records)} "
+            f"assumption(s)/lossy transformation(s):\n  {shown}{more}"
+        )
     if openapi_version.startswith("3.1"):
         out = to_openapi_31(out)
     return out
@@ -90,49 +131,221 @@ def convert_swagger(
 
 class _Upgrader:
     def __init__(self, src: dict[str, Any]):
-        self.src = src
         self.assumptions: list[str] = []
         self.lossy: list[str] = []
+        # null values are invalid almost everywhere in OpenAPI 3; strip them
+        # up front (x- extensions and example/default/enum data are kept)
+        self._nulls_stripped = 0
+        src = self._strip_nulls(src)
+        if self._nulls_stripped:
+            self.assumptions.append(
+                f"removed {self._nulls_stripped} null value(s) (invalid in "
+                "OpenAPI 3; x- extensions and example/default/enum data kept)"
+            )
+        self.src = src
         # global body-parameters become requestBodies, not parameters
         self._global_body_params: set[str] = {
             name
             for name, p in (src.get("parameters") or {}).items()
             if isinstance(p, dict) and p.get("in") == "body"
         }
-        # OpenAPI 3 component keys must match ^[a-zA-Z0-9.\-_]+$; map each
-        # definition name to a valid, unique component key
-        self._schema_key: dict[str, str] = {}
+        # OpenAPI 3 component keys must match ^[a-zA-Z0-9.\-_]+$; map every
+        # source name (definitions, global parameters/responses,
+        # securityDefinitions) to a valid, unique component key
+        self._schema_key = self._build_key_map(
+            src.get("definitions") or {}, "definition")
+        self._param_key = self._build_key_map(
+            src.get("parameters") or {}, "parameter")
+        self._param_key_rev = {v: k for k, v in self._param_key.items()}
+        self._resp_key = self._build_key_map(
+            src.get("responses") or {}, "response")
+        self._sec_key = self._build_key_map(
+            src.get("securityDefinitions") or {}, "securityDefinition")
+        # deep local $refs are hoisted once per unique pointer (#101):
+        # inlining explodes exponentially when targets reference each other
+        self._hoisted: dict[str, str] = {}
+        self._hoisted_schemas: dict[str, dict] = {}
+        self._used_hoist_keys: set[str] = set(self._schema_key.values())
+
+    # -- helpers -----------------------------------------------------------
+
+    def _build_key_map(self, names: Any, kind: str) -> dict[str, str]:
+        """Map source names to valid, unique OpenAPI 3 component keys."""
+        mapping: dict[str, str] = {}
         used: set[str] = set()
-        for name in (src.get("definitions") or {}):
-            key = _COMPONENT_KEY_RE.sub("_", name).strip("_") or "schema"
+        for name in names:
+            key = _COMPONENT_KEY_RE.sub("_", str(name)).strip("_") or kind
             if key in used:
                 i = 2
                 while f"{key}_{i}" in used:
                     i += 1
                 key = f"{key}_{i}"
             used.add(key)
-            self._schema_key[name] = key
+            mapping[name] = key
             if key != name:
                 self.assumptions.append(
-                    f"definition '{name}' renamed to component schema "
-                    f"'{key}' (OpenAPI 3 component-key charset)"
+                    f"{kind} '{name}' renamed to component key '{key}' "
+                    "(OpenAPI 3 component-key charset)"
                 )
+        return mapping
 
-    # -- helpers -----------------------------------------------------------
+    def _strip_nulls(self, node: Any) -> Any:
+        if isinstance(node, list):
+            return [self._strip_nulls(v) for v in node]
+        if not isinstance(node, dict):
+            return node
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            if (isinstance(k, str) and k.startswith("x-")) or k in _DATA_KEYWORDS:
+                out[k] = v  # null may be meaningful data here
+                continue
+            if v is None:
+                self._nulls_stripped += 1
+                continue
+            out[k] = self._strip_nulls(v)
+        return out
+
+    @staticmethod
+    def _pointer_token(raw: str) -> str:
+        """Decode a JSON-Pointer reference token: percent-encoding first,
+        then the ~1 (/) and ~0 (~) escapes (RFC 6901)."""
+        return unquote(raw).replace("~1", "/").replace("~0", "~")
+
+    def _source_name(self, mapping: dict[str, str], raw: str) -> str:
+        """Resolve a ref token to the source name it addresses: prefer a
+        literal match (a source key may itself contain %xx), else the
+        decoded form."""
+        if raw in mapping:
+            return raw
+        decoded = self._pointer_token(raw)
+        return decoded if decoded in mapping else raw
+
+    def _is_component_ref(self, ref: str) -> bool:
+        """True if the whole remainder after a known namespace is a source
+        name — including names that literally contain '/' (an unescaped
+        but real-world pointer), which _fix_ref maps to a sanitized key."""
+        for prefix, mapping in (("#/definitions/", self._schema_key),
+                                ("#/parameters/", self._param_key),
+                                ("#/responses/", self._resp_key)):
+            if ref.startswith(prefix):
+                name = ref[len(prefix):]
+                return (name in mapping
+                        or self._pointer_token(name) in mapping)
+        return False
 
     def _fix_ref(self, ref: str) -> str:
         if ref.startswith("#/definitions/"):
-            name = ref[len("#/definitions/"):]
-            key = self._schema_key.get(name, name)
-            return f"#/components/schemas/{key}"
+            name = self._source_name(self._schema_key, ref[len("#/definitions/"):])
+            return f"#/components/schemas/{self._schema_key.get(name, name)}"
         if ref.startswith("#/parameters/"):
-            name = ref.rsplit("/", 1)[-1]
+            name = self._source_name(self._param_key, ref[len("#/parameters/"):])
+            key = self._param_key.get(name, name)
             if name in self._global_body_params:
-                return f"#/components/requestBodies/{name}"
-            return ref.replace("#/parameters/", "#/components/parameters/", 1)
+                return f"#/components/requestBodies/{key}"
+            return f"#/components/parameters/{key}"
         if ref.startswith("#/responses/"):
-            return ref.replace("#/responses/", "#/components/responses/", 1)
+            name = self._source_name(self._resp_key, ref[len("#/responses/"):])
+            return f"#/components/responses/{self._resp_key.get(name, name)}"
         return ref
+
+    def _resolve_pointer(self, ref: str) -> tuple[bool, Any]:
+        """Resolve a local JSON Pointer against the source document.
+        Token lookup prefers a literal match, then the decoded form
+        (same policy as _source_name)."""
+        node: Any = self.src
+        for raw in ref[2:].split("/"):
+            token = self._pointer_token(raw)
+            if isinstance(node, dict):
+                if raw in node:
+                    node = node[raw]
+                elif token in node:
+                    node = node[token]
+                else:
+                    return False, None
+            elif isinstance(node, list):
+                try:
+                    node = node[int(token)]
+                except (ValueError, IndexError):
+                    return False, None
+            else:
+                return False, None
+        return True, node
+
+    def _alloc_hoist_key(self, norm: str) -> str:
+        base = _COMPONENT_KEY_RE.sub("_", norm).strip("_")[:64] or "inlined"
+        key, i = base, 2
+        while key in self._used_hoist_keys:
+            key = f"{base[:60]}_{i}"
+            i += 1
+        self._used_hoist_keys.add(key)
+        return key
+
+    def _hoist_deep_ref(self, ref: str) -> dict:
+        """A local $ref addressing an arbitrary document location (e.g.
+        #/paths/.../responses/200/schema/...) has no component home in
+        OpenAPI 3 and its target moves during conversion, so the pointer
+        would dangle. The resolved target is hoisted to components.schemas
+        once per unique pointer and the use site becomes a normal $ref —
+        inlining instead can explode exponentially when hoist targets
+        reference each other (#101)."""
+        norm = "/".join(self._pointer_token(t) for t in ref[2:].split("/"))
+        key = self._hoisted.get(norm)
+        if key is None:
+            found, target = self._resolve_pointer(ref)
+            if not found or not isinstance(target, dict):
+                self.lossy.append(f"unresolvable local $ref '{ref}' "
+                                  "replaced with the empty schema")
+                return {}
+            key = self._alloc_hoist_key(norm)
+            # allocate before expanding: a reference cycle then resolves
+            # to the key and becomes a legal recursive schema
+            self._hoisted[norm] = key
+            self._hoisted_schemas[key] = {}
+            self._hoisted_schemas[key] = self._fix_schema(target)
+            self.assumptions.append(
+                f"deep local $ref '{ref}' has no OpenAPI 3 component "
+                f"equivalent; target hoisted to components.schemas '{key}'"
+            )
+        return {"$ref": f"#/components/schemas/{key}"}
+
+    def _break_alias_cycles(self) -> None:
+        """A hoisted entry that is nothing but a $ref can form a pure
+        alias cycle (A -> B -> A) that no resolver can terminate; break
+        one member to the empty schema."""
+        prefix = "#/components/schemas/"
+
+        def lone_ref_target(k: str):
+            node = self._hoisted_schemas.get(k)
+            if (isinstance(node, dict) and set(node) == {"$ref"}
+                    and str(node["$ref"]).startswith(prefix)):
+                nxt = node["$ref"][len(prefix):]
+                if nxt in self._hoisted_schemas:
+                    return nxt
+            return None
+
+        for start in list(self._hoisted_schemas):
+            seen: set[str] = set()
+            key = start
+            while lone_ref_target(key) is not None:
+                if key in seen:
+                    self._hoisted_schemas[key] = {}
+                    self.lossy.append(
+                        f"cyclic $ref alias chain at components.schemas "
+                        f"'{key}' replaced with the empty schema"
+                    )
+                    break
+                seen.add(key)
+                key = lone_ref_target(key)
+
+    def _fix_security(self, reqs: Any) -> list:
+        """Rewrite security requirement objects to the sanitized scheme keys."""
+        fixed = []
+        for req in reqs if isinstance(reqs, list) else []:
+            if isinstance(req, dict):
+                fixed.append({self._sec_key.get(k, k): v for k, v in req.items()})
+            else:
+                fixed.append(req)
+        return fixed
 
     def _fix_schema(self, node: Any) -> Any:
         """Recursive schema fixups: $refs, type:file, x-nullable,
@@ -141,9 +354,25 @@ class _Upgrader:
             return [self._fix_schema(v) for v in node]
         if not isinstance(node, dict):
             return node
+        ref = node.get("$ref")
+        if (isinstance(ref, str) and ref.startswith("#/")
+                and not self._is_component_ref(ref)):
+            # deep pointer, or a simple ref whose target doesn't exist —
+            # either way _fix_ref would emit a dangling reference
+            resolved = self._hoist_deep_ref(ref)
+            siblings = {k: v for k, v in node.items() if k != "$ref"}
+            if not siblings:
+                return resolved
+            # keep siblings meaningful, mirroring the $ref+siblings policy
+            return {"allOf": [resolved], **self._fix_schema(siblings)}
         out: dict[str, Any] = {}
         for k, v in node.items():
-            if k == "$ref" and isinstance(v, str):
+            if k in ("properties", "patternProperties") and isinstance(v, dict):
+                # name -> schema map: the keys are opaque property names —
+                # a property named 'default'/'discriminator'/… must not
+                # trigger the keyword handling below
+                out[k] = {pn: self._fix_schema(ps) for pn, ps in v.items()}
+            elif k == "$ref" and isinstance(v, str):
                 out[k] = self._fix_ref(v)
             elif k == "x-nullable":
                 out["nullable"] = v
@@ -156,6 +385,32 @@ class _Upgrader:
                     self.lossy.append(
                         "discriminator without 'propertyName' dropped"
                     )
+            elif k == "collectionFormat":
+                # legal in a Swagger 2.0 Items Object, but OpenAPI 3 has no
+                # serialization keyword inside schemas (style/explode exist
+                # only at the parameter level)
+                out["x-collectionFormat"] = v
+                self.lossy.append(
+                    f"collectionFormat {v!r} inside a schema has no "
+                    "OpenAPI 3 equivalent; preserved as x-collectionFormat"
+                )
+            elif (k in ("x-oneOf", "x-anyOf") and isinstance(v, list)
+                    and k[2:] not in node):
+                # a pre-OpenAPI-3 down-conversion artifact carrying real
+                # composition semantics — promote to the native keyword
+                out[k[2:]] = self._fix_schema(v)
+                self.assumptions.append(
+                    f"{k} promoted to native {k[2:]}"
+                )
+            elif k == "pattern" and isinstance(v, str) and not _compiles(v):
+                # ECMA-only syntax (\p{...}, odd class ranges) fails the
+                # validator's regex format check; keep the original text
+                # where ECMA consumers can still find it
+                out["x-pattern"] = v
+                self.lossy.append(
+                    f"pattern {v!r} is not a valid regex for the "
+                    "validation toolchain; preserved as x-pattern"
+                )
             elif k in _DATA_KEYWORDS:
                 out[k] = v  # data value: pass through verbatim
             else:
@@ -186,16 +441,126 @@ class _Upgrader:
                     f"schema type {out.get('type')!r} chosen from multi-type "
                     f"array {node['type']} (OpenAPI 3.0 allows one type)"
                 )
+        if out.get("type") == "null":
+            # JSON-Schema's 'null' type has no OAS 3.0 equivalent
+            out.pop("type")
+            out["nullable"] = True
+            self.assumptions.append(
+                "schema type 'null' converted to nullable: true"
+            )
+        if isinstance(out.get("items"), list):
+            # tuple-style items array; OAS 3 requires a single schema
+            items = out["items"]
+            out["items"] = (items[0] if len(items) == 1
+                            else {"anyOf": items} if items else {})
+            self.assumptions.append(
+                "tuple-style 'items' array collapsed to a single schema "
+                "(OpenAPI 3 requires one items schema)"
+            )
+        props = out.get("properties")
+        if isinstance(props, dict):
+            # draft-4 style boolean `required` on a property: hoist the name
+            # into the parent schema's required array
+            hoisted = []
+            for pname, pschema in props.items():
+                if isinstance(pschema, dict) and isinstance(
+                        pschema.get("required"), bool):
+                    if pschema.pop("required"):
+                        hoisted.append(pname)
+            if hoisted:
+                req = out.get("required")
+                req = list(req) if isinstance(req, list) else []
+                req.extend(n for n in hoisted if n not in req)
+                out["required"] = req
+                self.assumptions.append(
+                    "boolean 'required' on properties hoisted to the parent "
+                    "schema's required list"
+                )
+        self._fix_default(out)
+        if "$ref" in out and len(out) > 1:
+            # OpenAPI 3.0 ignores siblings next to a schema $ref; wrap in
+            # allOf so the extra keys (e.g. description) stay meaningful
+            ref = {"$ref": out.pop("$ref")}
+            out = {"allOf": [ref], **out}
+            self.assumptions.append(
+                "siblings next to a schema $ref wrapped in allOf so they "
+                "are not ignored in OpenAPI 3.0"
+            )
         return out
+
+    def _fix_default(self, out: dict[str, Any]) -> None:
+        """A `default` must satisfy its own schema; coerce trivially
+        convertible type mismatches, drop what cannot be represented."""
+        d = out.get("default")
+        t = out.get("type")
+        if "default" not in out or d is None or not isinstance(t, str):
+            return
+
+        def coerce(value: Any) -> None:
+            out["default"] = value
+            self.assumptions.append(
+                f"default {d!r} coerced to {value!r} to match schema "
+                f"type '{t}'"
+            )
+
+        def drop(reason: str) -> None:
+            out.pop("default", None)
+            self.lossy.append(f"default {d!r} dropped: {reason}")
+
+        if t == "integer" and isinstance(d, str):
+            try:
+                coerce(int(d))
+            except ValueError:
+                drop("not an integer")
+        elif t == "number" and isinstance(d, str):
+            try:
+                coerce(float(d))
+            except ValueError:
+                drop("not a number")
+        elif t == "boolean" and isinstance(d, str):
+            low = d.strip().lower()
+            if low in ("true", "1"):
+                coerce(True)
+            elif low in ("false", "0"):
+                coerce(False)
+            else:
+                drop("not a boolean")
+        elif t == "string" and isinstance(d, bool):
+            coerce("true" if d else "false")
+        elif t == "string" and isinstance(d, (int, float)):
+            coerce(str(d))
+
+        # a string default must also satisfy its own pattern
+        value = out.get("default")
+        pattern = out.get("pattern")
+        if (t == "string" and isinstance(value, str)
+                and isinstance(pattern, str)):
+            try:
+                matched = re.search(pattern, value) is not None
+            except re.error:
+                matched = True  # non-Python regex: don't judge
+            if not matched:
+                out.pop("default", None)
+                self.lossy.append(
+                    f"default {value!r} dropped: violates its own "
+                    f"pattern {pattern!r}"
+                )
 
     def _media_types(self, kind: str, op: dict, ctx: str) -> list[str]:
         types = op.get(kind) or self.src.get(kind) or []
+        if isinstance(types, str):
+            # spec violation seen in the wild: a bare string instead of an
+            # array — list(str) would split it into characters
+            self.assumptions.append(
+                f"{ctx}: '{kind}' was a string; wrapped in a list"
+            )
+            types = [types]
         if not types:
             self.assumptions.append(
                 f"{ctx}: no '{kind}' declared; assumed application/json"
             )
             return ["application/json"]
-        return list(types)
+        return [str(t) for t in types]
 
     # -- parameters --------------------------------------------------------
 
@@ -212,8 +577,21 @@ class _Upgrader:
         # OpenAPI 3, but we make it explicit for unambiguous output)
         out["required"] = _as_bool(p.get("required", False))
         # allowEmptyValue is valid only for query parameters in OpenAPI 3
-        if loc == "query" and "allowEmptyValue" in p:
-            out["allowEmptyValue"] = _as_bool(p["allowEmptyValue"])
+        if "allowEmptyValue" in p:
+            if loc == "query":
+                out["allowEmptyValue"] = _as_bool(p["allowEmptyValue"])
+            else:
+                self.lossy.append(
+                    f"{ctx}: allowEmptyValue on {loc or 'unknown'} parameter "
+                    f"'{p.get('name')}' dropped (query-only in OpenAPI 3)"
+                )
+        # Swagger 2.0 parameters have no native example field; OpenAPI 3
+        # does — promote the common x-example vendor extension (#95)
+        if "x-example" in out and "example" not in out:
+            out["example"] = out.pop("x-example")
+            self.assumptions.append(
+                f"{ctx}: parameter x-example promoted to native example"
+            )
         # OpenAPI 3 requires path parameters to be required:true
         if loc == "path" and out["required"] is not True:
             out["required"] = True
@@ -319,12 +697,49 @@ class _Upgrader:
                     f"{ctx}: a non-object parameter entry was dropped"
                 )
                 continue
+            # a parameter $ref without a component home (deep pointer like
+            # #/paths/.../parameters/N, or a dangling name) would dangle
+            # after conversion — inline the resolved source entry instead
+            seen: set[str] = set()
+            while (isinstance(p.get("$ref"), str)
+                   and p["$ref"].startswith("#/")
+                   and not self._is_component_ref(p["$ref"])):
+                rr = p["$ref"]
+                found, target = (False, None) if rr in seen \
+                    else self._resolve_pointer(rr)
+                if not found or not isinstance(target, dict):
+                    self.lossy.append(
+                        f"{ctx}: unresolvable parameter $ref '{rr}' dropped"
+                    )
+                    p = None
+                    break
+                seen.add(rr)
+                self.assumptions.append(
+                    f"{ctx}: parameter $ref '{rr}' has no component "
+                    "equivalent; target inlined"
+                )
+                p = target
+            if p is None:
+                continue
             if "$ref" in p:
                 ref = self._fix_ref(p["$ref"])
                 if "/requestBodies/" in ref:
                     body = {"$ref": ref}
-                else:
-                    params.append({"$ref": ref})
+                    continue
+                # a $ref to a global formData parameter must be inlined:
+                # formData fields are fragments of the form requestBody and
+                # have no standalone OpenAPI 3 component equivalent
+                gname = self._source_name(
+                    self._param_key, p["$ref"].rsplit("/", 1)[-1])
+                gparam = (self.src.get("parameters") or {}).get(gname)
+                if isinstance(gparam, dict) and gparam.get("in") == "formData":
+                    form.append(gparam)
+                    self.assumptions.append(
+                        f"{ctx}: $ref to global formData parameter "
+                        f"'{gname}' inlined into the form requestBody"
+                    )
+                    continue
+                params.append({"$ref": ref})
                 continue
             loc = p.get("in")
             if loc == "body":
@@ -352,19 +767,61 @@ class _Upgrader:
                 )
             else:
                 body = self._form_to_request_body(form, op, ctx)
-        return params, body
+        return self._dedupe_params(params, ctx), body
+
+    def _dedupe_params(self, params: list, ctx: str) -> list:
+        """OpenAPI 3 forbids two parameters with the same (name, in); the
+        later definition wins (spec semantics: operation-level overrides
+        path-item-level). Component $refs are resolved for the key."""
+        def key(p: dict) -> tuple:
+            ref = p.get("$ref")
+            if isinstance(ref, str):
+                tail = ref.rsplit("/", 1)[-1]
+                g = (self.src.get("parameters") or {}).get(
+                    self._param_key_rev.get(tail, tail))
+                if isinstance(g, dict) and g.get("name") and g.get("in"):
+                    return (g["name"], g["in"])
+                return ("$ref", ref)
+            return (p.get("name"), p.get("in"))
+
+        out: list = []
+        index: dict[tuple, int] = {}
+        for p in params:
+            k = key(p)
+            if k in index:
+                out[index[k]] = p
+                self.assumptions.append(
+                    f"{ctx}: duplicate parameter {k[0]!r} merged "
+                    "(kept the later definition)"
+                )
+            else:
+                index[k] = len(out)
+                out.append(p)
+        return out
 
     # -- responses ----------------------------------------------------------
 
-    def _convert_response(self, resp: dict, op: dict, ctx: str) -> dict:
+    @staticmethod
+    def _status_phrase(code: Any) -> str:
+        """Deterministic default description for a status code."""
+        if code == "default":
+            return "Default response"
+        try:
+            return HTTPStatus(int(code)).phrase
+        except (ValueError, TypeError):
+            return ""
+
+    def _convert_response(self, resp: dict, op: dict, ctx: str,
+                          code: Any = None) -> dict:
         if "$ref" in resp:
             return {"$ref": self._fix_ref(resp["$ref"])}
         description = resp.get("description")
         if not description:  # required on the OA3 Response Object
-            description = ""
+            description = self._status_phrase(code)
+            filled = f"'{description}'" if description else "an empty string"
             self.assumptions.append(
                 f"{ctx}: response missing 'description' (required in "
-                "OpenAPI 3); used an empty string"
+                f"OpenAPI 3); used {filled}"
             )
         out: dict[str, Any] = {"description": description}
         for k, v in resp.items():
@@ -408,7 +865,7 @@ class _Upgrader:
             t = sd.get("type")
             entry = self._one_security_scheme(name, t, sd)
             if entry is not None:
-                out[name] = entry
+                out[self._sec_key.get(name, name)] = entry
         return out
 
     def _one_security_scheme(self, name: str, t: str, sd: dict):
@@ -472,7 +929,22 @@ class _Upgrader:
             self.assumptions.append(
                 "no 'schemes' declared; assumed https"
             )
-        return [{"url": f"{s}://{host}{base}"} for s in schemes]
+        servers = []
+        for s in schemes:
+            url = f"{s}://{host}{base}"
+            server: dict[str, Any] = {"url": url}
+            # OpenAPI 3 requires every {variable} in a server URL to be
+            # declared under `variables` (with a default)
+            tvars = re.findall(r"{([^}]+)}", url)
+            if tvars:
+                server["variables"] = {v: {"default": ""} for v in tvars}
+                self.assumptions.append(
+                    f"server url '{url}' is templated; declared "
+                    f"variables {tvars} with empty defaults (supply values "
+                    "at runtime)"
+                )
+            servers.append(server)
+        return servers
 
     def _gen_operation_id(self, method: str, path: str) -> str:
         raw = f"{method}_{path.strip('/') or 'root'}"
@@ -483,6 +955,15 @@ class _Upgrader:
         # title and version are REQUIRED in OpenAPI 3; fill whichever is
         # missing (a present-but-partial info must still be completed)
         info = dict(self.src.get("info") or {})
+        for field in ("title", "version"):
+            val = info.get(field)
+            if val is not None and not isinstance(val, str):
+                # both MUST be strings in OpenAPI 3
+                info[field] = str(val)
+                self.assumptions.append(
+                    f"info.{field} was not a string; coerced to "
+                    f"'{info[field]}'"
+                )
         if not info.get("title"):
             info["title"] = "API"
             self.assumptions.append("info.title missing; defaulted to 'API'")
@@ -503,7 +984,10 @@ class _Upgrader:
             if p.get("in") == "path" and p.get("name"):
                 present.add(p["name"])
             elif "$ref" in p:  # resolve to the referenced global parameter
-                ref = global_params.get(p["$ref"].rsplit("/", 1)[-1])
+                tail = p["$ref"].rsplit("/", 1)[-1]
+                # rewritten refs carry the sanitized key; map back
+                orig = self._param_key_rev.get(tail, tail)
+                ref = global_params.get(orig)
                 if isinstance(ref, dict) and ref.get("in") == "path":
                     present.add(ref.get("name"))
         for name in re.findall(r"{([^}]+)}", path):
@@ -528,9 +1012,10 @@ class _Upgrader:
             "servers": self._servers(),
             "paths": {},
         }
-        for k in ("externalDocs", "security"):
-            if k in src:
-                out[k] = src[k]
+        if "externalDocs" in src:
+            out["externalDocs"] = src["externalDocs"]
+        if "security" in src:  # requirement keys follow sanitized scheme keys
+            out["security"] = self._fix_security(src["security"])
         if "tags" in src:  # Tag Object requires a name
             tags = []
             for tag in src["tags"]:
@@ -577,9 +1062,11 @@ class _Upgrader:
                 ctx = f"{method.upper()} {path}"
                 new_op: dict[str, Any] = {}
                 for k in ("summary", "description", "tags", "deprecated",
-                          "externalDocs", "security"):
+                          "externalDocs"):
                     if k in op:
                         new_op[k] = op[k]
+                if "security" in op:
+                    new_op["security"] = self._fix_security(op["security"])
                 for k, v in op.items():
                     if k.startswith("x-"):
                         new_op[k] = v
@@ -601,7 +1088,13 @@ class _Upgrader:
                         )
                         op_id = normalized
                 # dedup after normalization/truncation, staying <= 64 chars
-                op_id = _unique_id(op_id, used_ids)
+                deduped = _unique_id(op_id, used_ids)
+                if deduped != op_id:
+                    self.assumptions.append(
+                        f"{ctx}: operationId '{op_id}' already used; "
+                        f"renamed to '{deduped}'"
+                    )
+                op_id = deduped
                 new_op["operationId"] = op_id
 
                 raw_params = _merge_params(shared_raw, op.get("parameters", []))
@@ -613,7 +1106,7 @@ class _Upgrader:
                     new_op["requestBody"] = request_body
 
                 responses = {
-                    str(code): self._convert_response(resp, op, ctx)
+                    str(code): self._convert_response(resp, op, ctx, code)
                     for code, resp in (op.get("responses") or {}).items()
                 }
                 if not responses:  # Responses Object requires >= 1 response
@@ -638,28 +1131,42 @@ class _Upgrader:
         request_bodies = {}
         for name, p in global_params.items():
             if name in self._global_body_params:
-                request_bodies[name] = self._body_to_request_body(p, {}, name)
+                request_bodies[self._param_key.get(name, name)] = (
+                    self._body_to_request_body(p, {}, name))
+            elif isinstance(p, dict) and p.get("in") == "formData":
+                # inlined at each use site by _split_params; a standalone
+                # formData parameter cannot exist in OpenAPI 3 components
+                self.lossy.append(
+                    f"parameters.{name}: global formData parameter has no "
+                    "OpenAPI 3 component equivalent; inlined at use sites "
+                    "and dropped from components"
+                )
             else:
-                conv_params[name] = self._convert_param(p, f"parameters.{name}")
+                conv_params[self._param_key.get(name, name)] = (
+                    self._convert_param(p, f"parameters.{name}"))
         if conv_params:
             components["parameters"] = conv_params
         if request_bodies:
             components["requestBodies"] = request_bodies
         if src.get("responses"):
             components["responses"] = {
-                name: self._convert_response(r, {}, f"responses.{name}")
+                self._resp_key.get(name, name):
+                    self._convert_response(r, {}, f"responses.{name}")
                 for name, r in src["responses"].items()
             }
         schemes = self._convert_security_schemes()
         if schemes:
             components["securitySchemes"] = schemes
+        if self._hoisted_schemas:
+            self._break_alias_cycles()
+            components.setdefault("schemas", {}).update(self._hoisted_schemas)
         if components:
             out["components"] = components
 
         out["x-s2o"] = {
             "source": "swagger-2.0",
             "generator": f"spec2openapi/{_version}",
-            "assumptions": self.assumptions,
-            "lossy": self.lossy,
+            "assumptions": _aggregate(self.assumptions),
+            "lossy": _aggregate(self.lossy),
         }
         return out

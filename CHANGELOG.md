@@ -7,6 +7,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-19
+
+### Added
+- Common vendor extensions carrying recoverable native meaning are
+  promoted to OpenAPI 3 keywords (#95): parameter-level `x-example`
+  becomes `example` (Swagger 2.0 parameters had no native field), and
+  schema-level `x-oneOf`/`x-anyOf` lists become `oneOf`/`anyOf` with all
+  schema fixups applied to their members — skipped when the native
+  keyword is already present, recorded in `x-s2o.assumptions`.
+- `check_fastmcp_ready(spec) -> list[str]`: the static FastMCP-readiness
+  checks behind `spec2openapi validate` (operations present, safe/unique
+  operationIds — including collisions that would only appear after
+  FastMCP's tool-name normalization — and SOAP wrapper elements) are now
+  a public, dependency-free library function; the CLI consumes it so the
+  two paths cannot drift (#87).
+- The package now ships a `py.typed` marker (PEP 561), so mypy/pyright
+  pick up the library's type hints in consumer projects (#85).
+- Opt-in real-world corpus test suite (`python -m pytest -m corpus`): a
+  stratified sample of public Swagger 2.0 definitions from APIs.guru is
+  converted and checked against the 3.0/3.1 validators and a live FastMCP
+  round-trip, with a tracked known-failures allowlist so only regressions
+  fail (#71).
+- `upgrade`/`validate`/`serve` (and `load_spec`) accept http(s) URLs for
+  Swagger/OpenAPI sources, matching `convert`'s WSDL-URL support; fetch
+  errors are reported with the URL (#69).
+- `--strict` on `spec2openapi upgrade` (and `strict=True` on
+  `convert_swagger`): fail with the full list of assumption/lossy records
+  when the conversion would need any, for pipelines that must not accept
+  guessed conversions (#63).
+
+### Changed
+- Identical `x-s2o` records are aggregated to `<message> (×N)` in
+  first-occurrence order — one real-world document repeated the same
+  assumption 171 times — applied to `assumptions`, `lossy`, and the
+  `strict` failure listing (#99).
+- Two previously-silent auto-fixes are now recorded (#63): dropping
+  `allowEmptyValue` from a non-query parameter (`x-s2o.lossy`) and
+  renaming a colliding operationId (`same` → `same_2`,
+  `x-s2o.assumptions`).
+- A missing response `description` is now filled with the standard HTTP
+  status phrase (`200 → "OK"`, `404 → "Not Found"`, `default → "Default
+  response"`; unknown codes stay empty) instead of always an empty
+  string — better tool descriptions for LLMs; still recorded in
+  `x-s2o.assumptions` (#61).
+- Library-first documentation (#88): the package docstring now lists the
+  full core API, `dump_spec`/`build_spec`/`is_swagger2` gained
+  docstrings, and the README Library sections (en/ko) document
+  `ConversionError` handling, programmatic `x-s2o` access, `strict`,
+  `forbid_external`, `check_fastmcp_ready`, the public-API boundary
+  (`__all__`, PEP 561), and input/output substructure sharing.
+- `import spec2openapi` no longer loads the SOAP stack: zeep/lxml (and
+  the httpx they pull in) now load on first SOAP use (`convert_wsdl`,
+  `parse_wsdl`, `build_spec`), cutting a Swagger-only import from
+  ~200 ms to ~15 ms; the public surface is unchanged (#86).
+- `load_spec` no longer silently replaces invalid bytes when fetching a
+  spec over http(s): a document that is not valid UTF-8 now fails with a
+  labeled `ConversionError` instead of converting with corrupted text
+  (#84).
+
+### Fixed
+- A local `$ref` whose target does not exist in the source (e.g.
+  `#/definitions/Missing`) becomes `{}` with an `x-s2o.lossy` record
+  instead of a dangling component reference, and a property literally
+  named `default`/`enum`/`example`/`discriminator`/`collectionFormat` is
+  now treated as a property (schema fixups applied, `$ref`s rewritten)
+  instead of triggering the same-named keyword handling (#96).
+- Library entry points no longer leak exceptions outside the
+  `ConversionError` contract (#84): a non-Swagger-2.0 mapping and a
+  document that parses to a non-mapping now raise `ConversionError`
+  (previously bare `ValueError`), a non-UTF-8 local file raises a
+  labeled `ConversionError` (previously a raw `UnicodeDecodeError`
+  without the file name), and `spec_has_soap` returns `False` on
+  malformed input instead of crashing.
+- `convert_swagger`, `convert_wsdl`, and `build_spec` now validate the
+  `openapi_version` argument: unsupported values (`"3.2"`, `"2.0"`) raise
+  `ConversionError` naming the accepted forms instead of silently
+  emitting a 3.0 document, and numeric `3.0`/`3.1` (with or without a
+  patch suffix) are accepted instead of crashing; `convert_wsdl` rejects
+  a bad version before fetching/parsing the WSDL (#83).
+- Deep local `$ref`s that address an arbitrary document location
+  (`#/paths/.../responses/200/schema/...`,
+  `#/definitions/Foo/properties/bar`) no longer dangle after the
+  conversion moves their target: each unique pointer is resolved once and
+  its target hoisted to a synthesized `components.schemas` entry, with
+  every use site becoming a normal `$ref` — keeping the output linear in
+  the source size even when hoisted targets reference each other —
+  recorded in `x-s2o.assumptions`; reference cycles become legal
+  recursive schemas (a degenerate pure-alias cycle is broken to `{}`)
+  and unresolvable pointers become `{}`, recorded in `x-s2o.lossy`
+  (#75, #101).
+- A schema `pattern` that is not a compilable regex (ECMA-only syntax
+  such as `\p{...}` property escapes or malformed class ranges) is
+  preserved as `x-pattern` and recorded in `x-s2o.lossy` instead of
+  producing a document the validation toolchain rejects; compilable
+  patterns are untouched (#98).
+- Duplicate parameters no longer survive conversion (#97): a parameter
+  `$ref` with no component home (a deep `#/paths/.../parameters/N`
+  pointer or a dangling name) is resolved against the source and inlined
+  (unresolvable → dropped, `x-s2o.lossy`), and the assembled parameter
+  list is deduplicated by resolved (name, in) with the later definition
+  winning (spec semantics: operation-level overrides path-item-level),
+  recorded in `x-s2o.assumptions`.
+- `collectionFormat` inside an Items Object (legal in Swagger 2.0 for
+  nested-array serialization) no longer leaks into the OpenAPI 3 schema:
+  it is preserved as `x-collectionFormat` and recorded in `x-s2o.lossy`,
+  since OpenAPI 3 has no serialization keyword inside schemas (#76).
+- A `default` that does not satisfy its own schema is now coerced when
+  trivially convertible (`"1"` → `1` for integer/number, `"false"` →
+  `false` for boolean, numeric/bool → string for string type; recorded
+  in `x-s2o.assumptions`) and dropped otherwise — including a string
+  default that violates the schema's own `pattern` (recorded in
+  `x-s2o.lossy`) (#73).
+- Percent-encoded `$ref` tokens (`#/definitions/Ref%20(of%20Bundle)`) are
+  decoded (RFC 6901 + percent-encoding) before the sanitized-key lookup,
+  so the rewritten reference points at the actual component instead of
+  dangling (#74).
+- Component keys are now sanitized across every namespace, not just
+  schemas (#72): `securityDefinitions` / global `parameters` / global
+  `responses` names with invalid characters (`Basic Auth`,
+  `filter[code]`) map to valid `securitySchemes`/`parameters`/
+  `requestBodies`/`responses` keys, with every reference rewritten —
+  security requirement objects (root and operation) and `$ref`s.
+  Renames recorded in `x-s2o.assumptions`.
+- Siblings next to a schema `$ref` (commonly a `description`) are now
+  wrapped in `allOf` so OpenAPI 3.0 consumers no longer silently ignore
+  them; recorded in `x-s2o.assumptions` (#67).
+- A templated `host`/`basePath` (`{region}.example.com`) now declares the
+  template names under `servers[].variables` (empty defaults, recorded in
+  `x-s2o.assumptions`) instead of emitting an unusable URL with undeclared
+  variables (#65).
+- A `$ref` to a global `formData` parameter is now dereferenced and merged
+  into the operation's form `requestBody`, and the global entry (which has
+  no standalone OpenAPI 3 equivalent) is dropped from components with an
+  `x-s2o` record — previously the output carried an invalid
+  `in: formData` component and an unresolved `$ref` (#59).
+- A string-valued `consumes`/`produces` (a spec violation seen in the
+  wild) is now wrapped into a list instead of being split into characters,
+  which silently corrupted the `content` map keys; recorded in
+  `x-s2o.assumptions` (#55).
+- Five more non-conformant inputs are normalized instead of passing
+  through as invalid OpenAPI 3 (#57): a draft-4 boolean `required` on a
+  property is hoisted into the parent's `required` array; a literal
+  `type: 'null'` becomes `nullable: true`; a tuple-style `items` array is
+  collapsed to a single schema (or `anyOf`); a non-string `info.title`/
+  `info.version` is coerced to a string; and `null` values on structural
+  fields are stripped up front (`x-` extensions and `example`/`default`/
+  `enum` data are preserved). All recorded in `x-s2o.assumptions`.
+
 ## [0.2.2] - 2026-07-17
 
 ### Fixed
@@ -182,7 +330,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.1.0...v0.2.0

@@ -11,8 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ConversionError
-from .openapi import build_spec, dump_spec  # noqa: F401  (re-exported)
-from .parser import parse_wsdl
+from .openapi import (  # noqa: F401  (re-exported)
+    _normalize_openapi_version,
+    build_spec,
+    dump_spec,
+)
 
 
 def convert_wsdl(
@@ -39,6 +42,11 @@ def convert_wsdl(
             "convert_wsdl expects a WSDL file path or URL (str), "
             f"got {type(source).__name__}"
         )
+    # reject an unsupported target version before the (possibly remote)
+    # WSDL parse, not after
+    openapi_version = _normalize_openapi_version(openapi_version)
+    from .parser import parse_wsdl  # defers zeep/lxml to first SOAP use
+
     parsed = parse_wsdl(
         source, service=service, port=port,
         prefer_soap12=prefer_soap12, strict=strict,
@@ -51,33 +59,62 @@ def convert_wsdl(
 
 
 def load_spec(path: str | Path) -> dict[str, Any]:
-    """Load an OpenAPI/Swagger spec from a .yaml/.yml/.json file."""
+    """Load an OpenAPI/Swagger spec from a .yaml/.yml/.json file or an
+    http(s) URL (parity with ``convert``, which accepts WSDL URLs)."""
     import yaml
 
-    p = Path(path)
-    text = p.read_text(encoding="utf-8-sig")
-    # parse errors are prefixed with the file path so the location is
+    src = str(path)
+    if src.startswith(("http://", "https://")):
+        from urllib.error import URLError
+        from urllib.request import Request, urlopen
+
+        from . import __version__
+
+        req = Request(src, headers={"User-Agent": f"spec2openapi/{__version__}"})
+        try:
+            with urlopen(req, timeout=30) as resp:  # noqa: S310 (user-supplied URL)
+                data = resp.read()
+        except (URLError, OSError) as exc:
+            raise ConversionError(f"{src}: could not fetch — {exc}") from exc
+        label, is_json = src, src.lower().endswith(".json")
+    else:
+        p = Path(path)
+        data = p.read_bytes()
+        label, is_json = str(p), p.suffix.lower() == ".json"
+    # decode loudly: replacing invalid bytes would silently corrupt text
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ConversionError(f"{label}: not valid UTF-8 — {exc}") from exc
+    # parse errors are prefixed with the source so the location is
     # traceable (json/yaml already report the line and column)
     try:
-        if p.suffix.lower() == ".json" or text.lstrip().startswith("{"):
+        if is_json or text.lstrip().startswith("{"):
             spec = json.loads(text)
         else:
             spec = yaml.safe_load(text)
     except json.JSONDecodeError as exc:
-        raise ConversionError(f"{p}: invalid JSON — {exc}") from exc
+        raise ConversionError(f"{label}: invalid JSON — {exc}") from exc
     except yaml.YAMLError as exc:
-        raise ConversionError(f"{p}: invalid YAML — {exc}") from exc
+        raise ConversionError(f"{label}: invalid YAML — {exc}") from exc
     if not isinstance(spec, dict):
-        raise ValueError(
-            f"{p}: not a valid OpenAPI/Swagger document "
+        raise ConversionError(
+            f"{label}: not a valid OpenAPI/Swagger document "
             f"(parsed as {type(spec).__name__}, expected a mapping)"
         )
     return spec
 
 
 def spec_has_soap(spec: dict[str, Any]) -> bool:
-    for item in spec.get("paths", {}).values():
-        for method in (item or {}).values():
+    """True if any operation carries the x-soap extension (i.e. calling
+    it requires the SOAP bridge). A malformed document is simply False."""
+    paths = spec.get("paths") if isinstance(spec, dict) else None
+    if not isinstance(paths, dict):
+        return False
+    for item in paths.values():
+        if not isinstance(item, dict):
+            continue
+        for method in item.values():
             if isinstance(method, dict) and method.get("x-soap"):
                 return True
     return False

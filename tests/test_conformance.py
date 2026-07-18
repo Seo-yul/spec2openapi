@@ -377,3 +377,563 @@ def test_valid_security_preserved(version):
     schemes = out["components"]["securitySchemes"]
     assert set(schemes) == {"b", "k", "o"}
     assert schemes["b"] == {"type": "http", "scheme": "basic"}
+
+
+# -- string-valued consumes/produces (#55) ------------------------------------
+
+@pytest.mark.parametrize("kind,where", [("consumes", "op"), ("produces", "op"),
+                                        ("consumes", "root"), ("produces", "root")])
+def test_string_media_types_wrapped_not_split(kind, where):
+    op = {"operationId": "a",
+          "parameters": [{"name": "b", "in": "body", "schema": {"type": "object"}}],
+          "responses": {"200": {"description": "ok", "schema": {"type": "string"}}}}
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"post": op}}}
+    (op if where == "op" else src)[kind] = "application/json"  # bare string
+    out = _valid(src)
+    post = out["paths"]["/a"]["post"]
+    content = (post["requestBody"]["content"] if kind == "consumes"
+               else post["responses"]["200"]["content"])
+    assert list(content.keys()) == ["application/json"]  # not ['a','p','l',…]
+    assert any("was a string" in a for a in out["x-s2o"]["assumptions"])
+
+
+# -- more GIGO hardening (#57) -------------------------------------------------
+
+def test_boolean_required_hoisted_to_parent():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {},
+           "definitions": {"T": {"type": "object", "properties": {
+               "a": {"type": "string", "required": True},
+               "b": {"type": "string", "required": False}}}}}
+    out = _valid(src)
+    t = out["components"]["schemas"]["T"]
+    assert t["required"] == ["a"]
+    assert "required" not in t["properties"]["a"]
+    assert "required" not in t["properties"]["b"]
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_type_null_literal_becomes_nullable(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {},
+           "definitions": {"T": {"type": "null"}}}
+    out = _valid(src, version)
+    assert out["components"]["schemas"]["T"].get("type") != "null"
+
+
+def test_tuple_items_collapsed():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {},
+           "definitions": {
+               "One": {"type": "array", "items": [{"type": "string"}]},
+               "Two": {"type": "array",
+                       "items": [{"type": "string"}, {"type": "integer"}]}}}
+    out = _valid(src)
+    assert out["components"]["schemas"]["One"]["items"] == {"type": "string"}
+    assert "anyOf" in out["components"]["schemas"]["Two"]["items"]
+
+
+def test_non_string_info_coerced():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": 2}, "paths": {}}
+    out = _valid(src)
+    assert out["info"]["version"] == "2"
+
+
+def test_null_values_stripped_but_data_nulls_kept():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a", "summary": None,
+               "responses": {"200": {"description": "ok",
+                                     "schema": {"type": "string", "format": None}}}}}},
+           "definitions": {"T": {"type": "string", "nullable": True,
+                                 "enum": ["a", None], "default": None}}}
+    out = _valid(src)
+    assert "summary" not in out["paths"]["/a"]["get"]          # structural null gone
+    t = out["components"]["schemas"]["T"]
+    assert t["enum"] == ["a", None] and "default" in t          # data nulls kept
+    assert any("null value" in a for a in out["x-s2o"]["assumptions"])
+
+
+# -- global formData parameters (#59) ------------------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_global_formdata_param_inlined(version):
+    """A $ref to a global formData parameter is merged into the form
+    requestBody; the global entry is dropped from components (found on a
+    real-world corpus spec)."""
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "paths": {"/a": {"post": {
+            "operationId": "a",
+            "parameters": [{"$ref": "#/parameters/cb"},
+                           {"name": "q", "in": "query", "type": "string"}],
+            "responses": {"200": {"description": "ok"}},
+        }}},
+        "parameters": {"cb": {"name": "callback", "in": "formData",
+                              "type": "string"}},
+    }
+    out = _valid(src, version)
+    post = out["paths"]["/a"]["post"]
+    schema = post["requestBody"]["content"][
+        "application/x-www-form-urlencoded"]["schema"]
+    assert "callback" in schema["properties"]           # inlined
+    names = [p.get("name") for p in post.get("parameters", [])]
+    assert names == ["q"]                               # no leftover $ref
+    comp_params = out.get("components", {}).get("parameters", {})
+    assert "cb" not in comp_params                      # dropped from components
+    assert any("formData parameter" in m for m in out["x-s2o"]["lossy"])
+
+
+# -- status-phrase descriptions (#61) ------------------------------------------
+
+def test_missing_description_filled_with_status_phrase():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {"operationId": "a", "responses": {
+               "200": {"schema": {"type": "string"}},
+               "404": {"schema": {"type": "string"}},
+               "599": {"schema": {"type": "string"}},   # unknown code
+               "default": {"schema": {"type": "string"}},
+           }}}}}
+    out = _valid(src)
+    resps = out["paths"]["/a"]["get"]["responses"]
+    assert resps["200"]["description"] == "OK"
+    assert resps["404"]["description"] == "Not Found"
+    assert resps["599"]["description"] == ""            # unknown -> empty
+    assert resps["default"]["description"] == "Default response"
+    assert any("missing 'description'" in a for a in out["x-s2o"]["assumptions"])
+
+
+def test_existing_description_untouched():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {"operationId": "a", "responses": {
+               "200": {"description": "custom"}}}}}}
+    out = _valid(src)
+    assert out["paths"]["/a"]["get"]["responses"]["200"]["description"] == "custom"
+
+
+# -- strict mode + recording completeness (#63) --------------------------------
+
+def test_allow_empty_value_drop_recorded():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a/{id}": {"get": {
+               "operationId": "a",
+               "parameters": [{"name": "id", "in": "path", "required": True,
+                               "type": "string", "allowEmptyValue": True}],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src)
+    assert any("allowEmptyValue" in m for m in out["x-s2o"]["lossy"])
+
+
+def test_operationid_dedup_recorded():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {
+               "/a": {"get": {"operationId": "same",
+                              "responses": {"200": {"description": "ok"}}}},
+               "/b": {"get": {"operationId": "same",
+                              "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src)
+    assert any("renamed to 'same_2'" in a for a in out["x-s2o"]["assumptions"])
+
+
+def test_strict_raises_with_records_listed():
+    from spec2openapi import ConversionError
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {  # no operationId, no host -> assumptions
+               "responses": {"200": {"description": "ok"}}}}}}
+    with pytest.raises(ConversionError) as exc:
+        convert_swagger(src, strict=True)
+    msg = str(exc.value)
+    assert "strict mode" in msg
+    assert "operationId" in msg  # the actual records are listed
+
+
+def test_strict_passes_clean_spec():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "host": "api.example.com", "schemes": ["https"],
+           "paths": {"/a": {"get": {
+               "operationId": "a", "produces": ["application/json"],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = convert_swagger(src, strict=True)
+    assert out["x-s2o"]["assumptions"] == [] and out["x-s2o"]["lossy"] == []
+
+
+# -- templated server variables (#65) ------------------------------------------
+
+def test_templated_host_declares_server_variables():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "host": "{region}.example.com", "basePath": "/v{apiVersion}",
+           "paths": {}}
+    out = _valid(src)
+    srv = out["servers"][0]
+    assert set(srv["variables"]) == {"region", "apiVersion"}
+    assert all("default" in v for v in srv["variables"].values())
+    assert any("templated" in a for a in out["x-s2o"]["assumptions"])
+
+
+def test_plain_host_has_no_variables():
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "host": "api.example.com", "paths": {}}
+    out = _valid(src)
+    assert "variables" not in out["servers"][0]
+
+
+# -- $ref siblings preserved via allOf (#67) -----------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_ref_siblings_wrapped_in_allof(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object"},
+               "B": {"type": "object", "properties": {
+                   "x": {"$ref": "#/definitions/A", "description": "keep me"},
+                   "y": {"$ref": "#/definitions/A"}}}}}
+    out = _valid(src, version)
+    props = out["components"]["schemas"]["B"]["properties"]
+    assert props["x"]["allOf"] == [{"$ref": "#/components/schemas/A"}]
+    assert props["x"]["description"] == "keep me"       # sibling stays alive
+    assert props["y"] == {"$ref": "#/components/schemas/A"}  # bare untouched
+    assert any("allOf" in a for a in out["x-s2o"]["assumptions"])
+
+
+# -- component-key sanitization beyond schemas (#72) ---------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_all_component_namespaces_sanitized(version):
+    """securityDefinitions / global parameters / responses names with
+    invalid characters get valid component keys, with every reference
+    (security requirements, $refs) rewritten to match."""
+    src = {
+        "swagger": "2.0", "info": {"title": "t", "version": "1"},
+        "securityDefinitions": {"Basic Auth": {"type": "basic"}},
+        "security": [{"Basic Auth": []}],
+        "parameters": {
+            "filter[code]": {"name": "code", "in": "query", "type": "string"},
+            "the body!": {"name": "b", "in": "body",
+                          "schema": {"type": "object"}},
+        },
+        "responses": {"Not Found!": {"description": "nf"}},
+        "paths": {"/a": {
+            "get": {
+                "operationId": "a",
+                "security": [{"Basic Auth": []}],
+                "parameters": [{"$ref": "#/parameters/filter[code]"}],
+                "responses": {"404": {"$ref": "#/responses/Not Found!"},
+                              "200": {"description": "ok"}},
+            },
+            "post": {
+                "operationId": "b",
+                "parameters": [{"$ref": "#/parameters/the body!"}],
+                "responses": {"200": {"description": "ok"}},
+            },
+        }},
+    }
+    out = _valid(src, version)
+    c = out["components"]
+    key_re = __import__("re").compile(r"^[a-zA-Z0-9._-]+$")
+    for ns in ("securitySchemes", "parameters", "requestBodies", "responses"):
+        assert all(key_re.match(k) for k in c.get(ns, {})), ns
+    # references follow the sanitized keys
+    assert out["security"] == [{"Basic_Auth": []}]
+    get_op = out["paths"]["/a"]["get"]
+    assert get_op["security"] == [{"Basic_Auth": []}]
+    assert get_op["parameters"][0]["$ref"].endswith("/filter_code")
+    assert get_op["responses"]["404"]["$ref"].endswith("/Not_Found")
+    assert out["paths"]["/a"]["post"]["requestBody"]["$ref"].endswith("/the_body")
+    assert any("renamed to component key" in a
+               for a in out["x-s2o"]["assumptions"])
+
+
+# -- percent-encoded $ref tokens (#74) -----------------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_percent_encoded_ref_follows_sanitized_key(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Ref (of Bundle)": {"type": "object"},
+               "B": {"type": "object", "properties": {
+                   "x": {"$ref": "#/definitions/Ref%20(of%20Bundle)"}}}}}
+    out = _valid(src, version)
+    key = next(k for k in out["components"]["schemas"] if k != "B")
+    assert out["components"]["schemas"]["B"]["properties"]["x"]["$ref"] == (
+        f"#/components/schemas/{key}")
+
+
+# -- default coercion (#73) ----------------------------------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_defaults_coerced_or_dropped(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "integer", "default": "1"},
+               "B": {"type": "string", "default": 123456789},
+               "C": {"type": "boolean", "default": "false"},
+               "D": {"type": "string", "pattern": "^[a-z]+$", "default": ""},
+               "E": {"type": "string", "default": "valid"},
+               "F": {"type": "string", "nullable": True, "default": None},
+           }}
+    out = _valid(src, version)
+    s = out["components"]["schemas"]
+    assert s["A"]["default"] == 1                      # str -> int
+    assert s["B"]["default"] == "123456789"            # int -> str
+    assert s["C"]["default"] is False                  # 'false' -> bool
+    assert "default" not in s["D"]                     # pattern-violating: dropped
+    assert s["E"]["default"] == "valid"                # valid: untouched
+    assert "default" in s["F"] and s["F"]["default"] is None  # null kept
+    assert any("coerced" in a for a in out["x-s2o"]["assumptions"])
+    assert any("dropped" in m for m in out["x-s2o"]["lossy"])
+
+
+# -- collectionFormat inside an Items Object (#76) -----------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_items_collectionformat_preserved_as_extension(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {"parameters": [
+               {"in": "query", "name": "order_by", "type": "array",
+                "items": {"type": "string", "collectionFormat": "csv"}}],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    items = out["paths"]["/a"]["get"]["parameters"][0]["schema"]["items"]
+    assert "collectionFormat" not in items
+    assert items["x-collectionFormat"] == "csv"
+    assert any("collectionFormat" in m for m in out["x-s2o"]["lossy"])
+
+
+# -- deep local $refs into arbitrary document locations (#75) ------------------
+
+def _deref(out, node):
+    """Follow a #/components/schemas/... $ref one hop if present."""
+    if isinstance(node, dict) and set(node) == {"$ref"}:
+        return out["components"]["schemas"][node["$ref"].rsplit("/", 1)[-1]]
+    return node
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deep_paths_ref_hoisted(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {
+               "/word/{id}": {"get": {
+                   "parameters": [{"in": "path", "name": "id",
+                                   "required": True, "type": "string"}],
+                   "responses": {"200": {"description": "ok", "schema": {
+                       "type": "array", "items": {"type": "object",
+                           "properties": {"word": {"type": "string",
+                                                   "x-nullable": True}}}}}}}},
+               "/lexeme/{id}": {"get": {
+                   "parameters": [{"in": "path", "name": "id",
+                                   "required": True, "type": "string"}],
+                   "responses": {"200": {"description": "ok", "schema": {
+                       "type": "object", "properties": {
+                           "lexeme": {"$ref": "#/paths/~1word~1%7Bid%7D/get"
+                                              "/responses/200/schema/items"
+                                              "/properties/word"},
+                           "annotated": {"$ref": "#/paths/~1word~1%7Bid%7D"
+                                                 "/get/responses/200/schema"
+                                                 "/items/properties/word",
+                                         "description": "kept"}}}}}}}}}
+    out = _valid(src, version)
+    sch = out["paths"]["/lexeme/{id}"]["get"]["responses"]["200"][
+        "content"]["application/json"]["schema"]
+    def is_string(schema):  # 3.0: nullable; 3.1: type ['string', 'null']
+        t = schema["type"]
+        return t == "string" or (isinstance(t, list) and "string" in t)
+
+    lexeme = _deref(out, sch["properties"]["lexeme"])
+    assert is_string(lexeme)
+    annotated = sch["properties"]["annotated"]  # siblings -> allOf wrap
+    assert is_string(_deref(out, annotated["allOf"][0]))
+    assert annotated["description"] == "kept"
+    # both use sites share ONE hoisted component (no duplication)
+    assert (sch["properties"]["lexeme"]["$ref"]
+            == annotated["allOf"][0]["$ref"])
+    assert any("hoisted" in a for a in out["x-s2o"]["assumptions"])
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deep_definitions_ref_hoisted(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Foo": {"type": "object",
+                       "properties": {"bar": {"type": "integer"}}},
+               "Uses": {"type": "object", "properties": {
+                   "b": {"$ref": "#/definitions/Foo/properties/bar"}}}}}
+    out = _valid(src, version)
+    b = _deref(out, out["components"]["schemas"]["Uses"]["properties"]["b"])
+    assert b == {"type": "integer"}
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_cyclic_and_unresolvable_deep_refs_are_neutralized(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object", "properties": {
+                   "self": {"$ref": "#/definitions/A/properties/self"}}},
+               "B": {"properties": {
+                   "gone": {"$ref": "#/paths/~1nope/get"}}}}}
+    out = _valid(src, version)
+    s = out["components"]["schemas"]
+    # the pure alias cycle is broken to the empty schema
+    assert _deref(out, s["A"]["properties"]["self"]) == {}
+    assert s["B"]["properties"]["gone"] == {}
+    assert any("cyclic" in m for m in out["x-s2o"]["lossy"])
+    assert any("unresolvable" in m for m in out["x-s2o"]["lossy"])
+
+
+# -- dangling simple $refs and keyword-named properties (#96) ------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_dangling_simple_ref_becomes_empty_schema(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object", "properties": {
+                   "x": {"$ref": "#/definitions/Missing"},
+                   "y": {"$ref": "#/parameters/NopeParam"}}}}}
+    out = _valid(src, version)
+    props = out["components"]["schemas"]["A"]["properties"]
+    assert props["x"] == {} and props["y"] == {}
+    assert sum("unresolvable local $ref" in m
+               for m in out["x-s2o"]["lossy"]) == 2
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_properties_named_like_keywords_are_schemas(version):
+    # a property may be literally named default/enum/discriminator/… —
+    # the keyword handling must not fire on the properties map itself
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Ok": {"type": "string"},
+               "T": {"type": "object", "properties": {
+                   "default": {"$ref": "#/definitions/Ok"},
+                   "enum": {"type": "string", "x-nullable": True},
+                   "discriminator": {"type": "string"},
+                   "collectionFormat": {"type": "integer"},
+                   "example": {"$ref": "#/definitions/Ok"}}}}}
+    out = _valid(src, version)
+    t = out["components"]["schemas"]["T"]["properties"]
+    assert t["default"] == {"$ref": "#/components/schemas/Ok"}
+    assert t["discriminator"] == {"type": "string"}
+    assert t["collectionFormat"] == {"type": "integer"}
+    assert "nullable" in t["enum"] or t["enum"].get("type") == ["string", "null"]
+
+
+# -- parameter-position $refs and duplicates (#97, #101) -----------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_duplicate_component_param_refs_merged(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "parameters": {"sub": {"name": "sub", "in": "query",
+                                  "type": "string"}},
+           "paths": {"/a": {
+               "parameters": [{"$ref": "#/parameters/sub"}],
+               "get": {"parameters": [{"$ref": "#/parameters/sub"}],
+                       "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    plist = out["paths"]["/a"]["get"]["parameters"]
+    assert plist == [{"$ref": "#/components/parameters/sub"}]
+    assert any("merged" in a for a in out["x-s2o"]["assumptions"])
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deep_parameter_ref_inlined_and_deduped(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {
+               "/tgt": {"post": {"parameters": [
+                   {"name": "api-version", "in": "query", "required": True,
+                    "type": "string"}],
+                   "responses": {"200": {"description": "ok"}}}},
+               "/use/{id}": {"get": {"parameters": [
+                   {"$ref": "#/paths/~1tgt/post/parameters/0"},
+                   {"name": "api-version", "in": "query", "required": True,
+                    "type": "string"},
+                   {"name": "id", "in": "path", "required": True,
+                    "type": "string"}],
+                   "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    names = [(p.get("name"), p.get("in"))
+             for p in out["paths"]["/use/{id}"]["get"]["parameters"]]
+    assert names == [("api-version", "query"), ("id", "path")]
+    assert any("target inlined" in a for a in out["x-s2o"]["assumptions"])
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_unresolvable_parameter_ref_dropped(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {"parameters": [
+               {"$ref": "#/paths/~1nope/get/parameters/9"},
+               {"name": "q", "in": "query", "type": "string"}],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    assert [p["name"] for p in out["paths"]["/a"]["get"]["parameters"]] == ["q"]
+    assert any("unresolvable parameter $ref" in m
+               for m in out["x-s2o"]["lossy"])
+
+
+def test_hoisted_output_stays_linear():
+    # 30 use sites of one deep ref must share one hoisted component,
+    # not inline 30 copies (#101)
+    import json as _json
+    big = {"type": "object", "properties": {
+        f"f{i}": {"type": "string"} for i in range(50)}}
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "Big": {"type": "object", "properties": {"inner": big}},
+               **{f"U{i}": {"properties": {
+                   "u": {"$ref": "#/definitions/Big/properties/inner"}}}
+                  for i in range(30)}}}
+    out = _valid(src, "3.0")
+    assert len(_json.dumps(out)) < 3 * len(_json.dumps(src))
+    hoisted = [k for k in out["components"]["schemas"]
+               if k.startswith("definitions_Big")]
+    assert len(hoisted) == 1
+
+
+# -- uncompilable pattern preserved as x-pattern (#98) -------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_uncompilable_pattern_moved_to_extension(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "string", "pattern": "^[\\p{Han}]*$"},
+               "B": {"type": "string", "pattern": "^[A-Za-z0-9][\\w-\\.]*$"},
+               "C": {"type": "string", "pattern": "^[a-z]+$"}}}
+    out = _valid(src, version)
+    s = out["components"]["schemas"]
+    assert "pattern" not in s["A"] and s["A"]["x-pattern"] == "^[\\p{Han}]*$"
+    assert "pattern" not in s["B"] and "x-pattern" in s["B"]
+    assert s["C"]["pattern"] == "^[a-z]+$"  # a valid pattern is untouched
+    assert sum("preserved as x-pattern" in m
+               for m in out["x-s2o"]["lossy"]) == 2
+
+
+# -- x-example / x-oneOf / x-anyOf promotion (#95) -----------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_parameter_x_example_promoted(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a/{id}": {"get": {"parameters": [
+               {"name": "id", "in": "path", "required": True,
+                "type": "string", "x-example": "CMUC"}],
+               "responses": {"200": {"description": "ok"}}}}}}
+    out = _valid(src, version)
+    p = out["paths"]["/a/{id}"]["get"]["parameters"][0]
+    assert p["example"] == "CMUC" and "x-example" not in p
+    assert any("x-example promoted" in a for a in out["x-s2o"]["assumptions"])
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_x_oneof_and_x_anyof_promoted(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "common": {"type": "object"},
+               "T": {"type": "object",
+                     "x-oneOf": [{"$ref": "#/definitions/common"},
+                                 {"type": "string"}]},
+               "V": {"type": "object", "oneOf": [{"type": "integer"}],
+                     "x-oneOf": [{"type": "string"}]}}}
+    out = _valid(src, version)
+    s = out["components"]["schemas"]
+    # promoted, members run through the schema fixups ($ref rewritten)
+    assert s["T"]["oneOf"][0] == {"$ref": "#/components/schemas/common"}
+    assert "x-oneOf" not in s["T"]
+    # a native keyword already present wins; the extension is kept as-is
+    assert s["V"]["oneOf"] == [{"type": "integer"}] and "x-oneOf" in s["V"]
+    assert any("promoted to native oneOf" in a
+               for a in out["x-s2o"]["assumptions"])
