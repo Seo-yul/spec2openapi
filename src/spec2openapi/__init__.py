@@ -1,7 +1,18 @@
-"""spec2openapi: SOAP/WSDL -> FastMCP-ready OpenAPI specs.
+"""spec2openapi: legacy API specs (SOAP/WSDL, Swagger 2.0) ->
+FastMCP-ready OpenAPI 3.x documents.
 
-Core API (no MCP dependencies): convert_wsdl, load_spec, dump_spec,
-spec_has_soap, parse_wsdl, build_spec.
+Core API (the zeep/lxml SOAP stack loads only on first SOAP use):
+
+    convert_swagger     Swagger 2.0 dict -> OpenAPI 3.0/3.1 dict
+    convert_wsdl        WSDL path/URL -> OpenAPI dict with x-soap
+    load_spec           read a spec from a path or http(s) URL
+    dump_spec           serialize a spec to YAML/JSON text
+    check_fastmcp_ready static FastMCP-readiness problems ([] == ready)
+    is_swagger2 / spec_has_soap / to_openapi_31 / parse_wsdl / build_spec
+
+Everything the converters assume or cannot translate is recorded in the
+output's `x-s2o` block; failures raise ConversionError (a ValueError).
+The public API is exactly `__all__`.
 
 Optional MCP runtime (pip install 'spec2openapi[mcp]'): from_openapi_spec,
 from_wsdl, BridgeOptions, SoapBridgeTransport.
