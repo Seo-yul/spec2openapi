@@ -20,7 +20,7 @@ from typing import Any
 
 from . import __version__ as _version
 from .errors import ConversionError
-from .openapi import _unique_id, to_openapi_31
+from .openapi import _normalize_openapi_version, _unique_id, to_openapi_31
 
 _METHODS = ("get", "put", "post", "delete", "options", "head", "patch")
 
@@ -85,6 +85,7 @@ def convert_swagger(
     assumption or lossy transformation — for pipelines that must not accept
     guessed conversions. The records are listed in the error message.
     """
+    openapi_version = _normalize_openapi_version(openapi_version)
     if not isinstance(spec, dict):
         raise ConversionError(
             "convert_swagger expects an OpenAPI/Swagger mapping (dict), "

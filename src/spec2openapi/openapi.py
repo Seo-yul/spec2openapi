@@ -35,6 +35,22 @@ def _tool_id(raw: str) -> str:
     return tid[:_MAX_ID_LEN] if tid else "op"
 
 
+def _normalize_openapi_version(value: Any) -> str:
+    """Validate a requested output version, returning '3.0' or '3.1'.
+
+    Accepts the minor version with or without a patch suffix ('3.1',
+    '3.1.0') and numeric 3.0/3.1; anything else raises ConversionError
+    instead of silently emitting a different version than requested."""
+    v = str(value).strip()
+    if v == "3.0" or v.startswith("3.0."):
+        return "3.0"
+    if v == "3.1" or v.startswith("3.1."):
+        return "3.1"
+    raise ConversionError(
+        f"unsupported openapi_version {value!r}: pass '3.0' or '3.1'"
+    )
+
+
 def _unique_id(base: str, used: set[str]) -> str:
     """Make base unique within `used`, keeping the result <= 64 chars."""
     if base not in used:
@@ -85,6 +101,7 @@ def build_spec(
     base_path: str = "/operations",
     openapi_version: str = "3.0",
 ) -> dict[str, Any]:
+    openapi_version = _normalize_openapi_version(openapi_version)
     # Paths Object keys must start with '/'
     base_path = base_path or ""
     if not base_path.startswith("/"):
