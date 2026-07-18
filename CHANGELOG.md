@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response"`; unknown codes stay empty) instead of always an empty
   string — better tool descriptions for LLMs; still recorded in
   `x-s2o.assumptions` (#61).
+- Library-first documentation (#88): the package docstring now lists the
+  full core API, `dump_spec`/`build_spec`/`is_swagger2` gained
+  docstrings, and the README Library sections (en/ko) document
+  `ConversionError` handling, programmatic `x-s2o` access, `strict`,
+  `forbid_external`, `check_fastmcp_ready`, the public-API boundary
+  (`__all__`, PEP 561), and input/output substructure sharing.
 - `import spec2openapi` no longer loads the SOAP stack: zeep/lxml (and
   the httpx they pull in) now load on first SOAP use (`convert_wsdl`,
   `parse_wsdl`, `build_spec`), cutting a Swagger-only import from

@@ -46,7 +46,10 @@ _SIMPLE_REF_RE = re.compile(r"^#/(definitions|parameters|responses)/[^/]+$")
 
 
 def is_swagger2(spec: dict[str, Any]) -> bool:
-    # predicate: a non-mapping simply isn't a Swagger 2.0 document
+    """True if the mapping declares itself a Swagger 2.x document.
+
+    A non-mapping is simply False, so the predicate is safe to call on
+    whatever load_spec returned."""
     return isinstance(spec, dict) and str(spec.get("swagger", "")).startswith("2")
 
 

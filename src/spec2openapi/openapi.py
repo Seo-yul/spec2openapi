@@ -180,6 +180,8 @@ def build_spec(
     base_path: str = "/operations",
     openapi_version: str = "3.0",
 ) -> dict[str, Any]:
+    """Assemble a parse_wsdl model into an OpenAPI dict with x-soap
+    extensions (the second half of convert_wsdl)."""
     from .schema import SchemaConverter
 
     openapi_version = _normalize_openapi_version(openapi_version)
@@ -379,6 +381,10 @@ def to_openapi_31(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def dump_spec(spec: dict[str, Any], fmt: str = "yaml") -> str:
+    """Serialize a spec to YAML (default) or JSON (`fmt="json"`) text.
+
+    Key order is preserved — property order mirrors the XSD sequence and
+    is significant for SOAP serialization."""
     if fmt == "json":
         import json
 
