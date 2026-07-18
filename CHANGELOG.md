@@ -77,10 +77,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deep local `$ref`s that address an arbitrary document location
   (`#/paths/.../responses/200/schema/...`,
   `#/definitions/Foo/properties/bar`) no longer dangle after the
-  conversion moves their target: the referenced source subtree is
-  resolved and inlined (with all schema fixups applied), recorded in
-  `x-s2o.assumptions`; cyclic or unresolvable pointers become `{}` and
-  are recorded in `x-s2o.lossy` (#75).
+  conversion moves their target: each unique pointer is resolved once and
+  its target hoisted to a synthesized `components.schemas` entry, with
+  every use site becoming a normal `$ref` — keeping the output linear in
+  the source size even when hoisted targets reference each other —
+  recorded in `x-s2o.assumptions`; reference cycles become legal
+  recursive schemas (a degenerate pure-alias cycle is broken to `{}`)
+  and unresolvable pointers become `{}`, recorded in `x-s2o.lossy`
+  (#75, #101).
+- Duplicate parameters no longer survive conversion (#97): a parameter
+  `$ref` with no component home (a deep `#/paths/.../parameters/N`
+  pointer or a dangling name) is resolved against the source and inlined
+  (unresolvable → dropped, `x-s2o.lossy`), and the assembled parameter
+  list is deduplicated by resolved (name, in) with the later definition
+  winning (spec semantics: operation-level overrides path-item-level),
+  recorded in `x-s2o.assumptions`.
 - `collectionFormat` inside an Items Object (legal in Swagger 2.0 for
   nested-array serialization) no longer leaks into the OpenAPI 3 schema:
   it is preserved as `x-collectionFormat` and recorded in `x-s2o.lossy`,

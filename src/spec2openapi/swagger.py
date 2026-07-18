@@ -143,8 +143,11 @@ class _Upgrader:
             src.get("responses") or {}, "response")
         self._sec_key = self._build_key_map(
             src.get("securityDefinitions") or {}, "securityDefinition")
-        # deep local $refs being inlined right now (cycle guard)
-        self._inlining: set[str] = set()
+        # deep local $refs are hoisted once per unique pointer (#101):
+        # inlining explodes exponentially when targets reference each other
+        self._hoisted: dict[str, str] = {}
+        self._hoisted_schemas: dict[str, dict] = {}
+        self._used_hoist_keys: set[str] = set(self._schema_key.values())
 
     # -- helpers -----------------------------------------------------------
 
@@ -250,30 +253,71 @@ class _Upgrader:
                 return False, None
         return True, node
 
-    def _inline_deep_ref(self, ref: str) -> dict:
+    def _alloc_hoist_key(self, norm: str) -> str:
+        base = _COMPONENT_KEY_RE.sub("_", norm).strip("_")[:64] or "inlined"
+        key, i = base, 2
+        while key in self._used_hoist_keys:
+            key = f"{base[:60]}_{i}"
+            i += 1
+        self._used_hoist_keys.add(key)
+        return key
+
+    def _hoist_deep_ref(self, ref: str) -> dict:
         """A local $ref addressing an arbitrary document location (e.g.
         #/paths/.../responses/200/schema/...) has no component home in
         OpenAPI 3 and its target moves during conversion, so the pointer
-        would dangle; inline the resolved source subtree instead."""
-        if ref in self._inlining:
-            self.lossy.append(f"cyclic deep local $ref '{ref}' replaced "
-                              "with the empty schema")
-            return {}
-        found, target = self._resolve_pointer(ref)
-        if not found or not isinstance(target, dict):
-            self.lossy.append(f"unresolvable local $ref '{ref}' "
-                              "replaced with the empty schema")
-            return {}
-        self._inlining.add(ref)
-        try:
-            out = self._fix_schema(target)
-        finally:
-            self._inlining.discard(ref)
-        self.assumptions.append(
-            f"deep local $ref '{ref}' has no OpenAPI 3 component "
-            "equivalent; target subtree inlined"
-        )
-        return out
+        would dangle. The resolved target is hoisted to components.schemas
+        once per unique pointer and the use site becomes a normal $ref —
+        inlining instead can explode exponentially when hoist targets
+        reference each other (#101)."""
+        norm = "/".join(self._pointer_token(t) for t in ref[2:].split("/"))
+        key = self._hoisted.get(norm)
+        if key is None:
+            found, target = self._resolve_pointer(ref)
+            if not found or not isinstance(target, dict):
+                self.lossy.append(f"unresolvable local $ref '{ref}' "
+                                  "replaced with the empty schema")
+                return {}
+            key = self._alloc_hoist_key(norm)
+            # allocate before expanding: a reference cycle then resolves
+            # to the key and becomes a legal recursive schema
+            self._hoisted[norm] = key
+            self._hoisted_schemas[key] = {}
+            self._hoisted_schemas[key] = self._fix_schema(target)
+            self.assumptions.append(
+                f"deep local $ref '{ref}' has no OpenAPI 3 component "
+                f"equivalent; target hoisted to components.schemas '{key}'"
+            )
+        return {"$ref": f"#/components/schemas/{key}"}
+
+    def _break_alias_cycles(self) -> None:
+        """A hoisted entry that is nothing but a $ref can form a pure
+        alias cycle (A -> B -> A) that no resolver can terminate; break
+        one member to the empty schema."""
+        prefix = "#/components/schemas/"
+
+        def lone_ref_target(k: str):
+            node = self._hoisted_schemas.get(k)
+            if (isinstance(node, dict) and set(node) == {"$ref"}
+                    and str(node["$ref"]).startswith(prefix)):
+                nxt = node["$ref"][len(prefix):]
+                if nxt in self._hoisted_schemas:
+                    return nxt
+            return None
+
+        for start in list(self._hoisted_schemas):
+            seen: set[str] = set()
+            key = start
+            while lone_ref_target(key) is not None:
+                if key in seen:
+                    self._hoisted_schemas[key] = {}
+                    self.lossy.append(
+                        f"cyclic $ref alias chain at components.schemas "
+                        f"'{key}' replaced with the empty schema"
+                    )
+                    break
+                seen.add(key)
+                key = lone_ref_target(key)
 
     def _fix_security(self, reqs: Any) -> list:
         """Rewrite security requirement objects to the sanitized scheme keys."""
@@ -297,7 +341,7 @@ class _Upgrader:
                 and not self._is_component_ref(ref)):
             # deep pointer, or a simple ref whose target doesn't exist —
             # either way _fix_ref would emit a dangling reference
-            resolved = self._inline_deep_ref(ref)
+            resolved = self._hoist_deep_ref(ref)
             siblings = {k: v for k, v in node.items() if k != "$ref"}
             if not siblings:
                 return resolved
@@ -611,6 +655,30 @@ class _Upgrader:
                     f"{ctx}: a non-object parameter entry was dropped"
                 )
                 continue
+            # a parameter $ref without a component home (deep pointer like
+            # #/paths/.../parameters/N, or a dangling name) would dangle
+            # after conversion — inline the resolved source entry instead
+            seen: set[str] = set()
+            while (isinstance(p.get("$ref"), str)
+                   and p["$ref"].startswith("#/")
+                   and not self._is_component_ref(p["$ref"])):
+                rr = p["$ref"]
+                found, target = (False, None) if rr in seen \
+                    else self._resolve_pointer(rr)
+                if not found or not isinstance(target, dict):
+                    self.lossy.append(
+                        f"{ctx}: unresolvable parameter $ref '{rr}' dropped"
+                    )
+                    p = None
+                    break
+                seen.add(rr)
+                self.assumptions.append(
+                    f"{ctx}: parameter $ref '{rr}' has no component "
+                    "equivalent; target inlined"
+                )
+                p = target
+            if p is None:
+                continue
             if "$ref" in p:
                 ref = self._fix_ref(p["$ref"])
                 if "/requestBodies/" in ref:
@@ -657,7 +725,37 @@ class _Upgrader:
                 )
             else:
                 body = self._form_to_request_body(form, op, ctx)
-        return params, body
+        return self._dedupe_params(params, ctx), body
+
+    def _dedupe_params(self, params: list, ctx: str) -> list:
+        """OpenAPI 3 forbids two parameters with the same (name, in); the
+        later definition wins (spec semantics: operation-level overrides
+        path-item-level). Component $refs are resolved for the key."""
+        def key(p: dict) -> tuple:
+            ref = p.get("$ref")
+            if isinstance(ref, str):
+                tail = ref.rsplit("/", 1)[-1]
+                g = (self.src.get("parameters") or {}).get(
+                    self._param_key_rev.get(tail, tail))
+                if isinstance(g, dict) and g.get("name") and g.get("in"):
+                    return (g["name"], g["in"])
+                return ("$ref", ref)
+            return (p.get("name"), p.get("in"))
+
+        out: list = []
+        index: dict[tuple, int] = {}
+        for p in params:
+            k = key(p)
+            if k in index:
+                out[index[k]] = p
+                self.assumptions.append(
+                    f"{ctx}: duplicate parameter {k[0]!r} merged "
+                    "(kept the later definition)"
+                )
+            else:
+                index[k] = len(out)
+                out.append(p)
+        return out
 
     # -- responses ----------------------------------------------------------
 
@@ -1017,6 +1115,9 @@ class _Upgrader:
         schemes = self._convert_security_schemes()
         if schemes:
             components["securitySchemes"] = schemes
+        if self._hoisted_schemas:
+            self._break_alias_cycles()
+            components.setdefault("schemas", {}).update(self._hoisted_schemas)
         if components:
             out["components"] = components
 
