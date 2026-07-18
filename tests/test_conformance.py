@@ -883,3 +883,21 @@ def test_hoisted_output_stays_linear():
     hoisted = [k for k in out["components"]["schemas"]
                if k.startswith("definitions_Big")]
     assert len(hoisted) == 1
+
+
+# -- uncompilable pattern preserved as x-pattern (#98) -------------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_uncompilable_pattern_moved_to_extension(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "string", "pattern": "^[\\p{Han}]*$"},
+               "B": {"type": "string", "pattern": "^[A-Za-z0-9][\\w-\\.]*$"},
+               "C": {"type": "string", "pattern": "^[a-z]+$"}}}
+    out = _valid(src, version)
+    s = out["components"]["schemas"]
+    assert "pattern" not in s["A"] and s["A"]["x-pattern"] == "^[\\p{Han}]*$"
+    assert "pattern" not in s["B"] and "x-pattern" in s["B"]
+    assert s["C"]["pattern"] == "^[a-z]+$"  # a valid pattern is untouched
+    assert sum("preserved as x-pattern" in m
+               for m in out["x-s2o"]["lossy"]) == 2

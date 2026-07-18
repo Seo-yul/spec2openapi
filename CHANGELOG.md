@@ -85,6 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recursive schemas (a degenerate pure-alias cycle is broken to `{}`)
   and unresolvable pointers become `{}`, recorded in `x-s2o.lossy`
   (#75, #101).
+- A schema `pattern` that is not a compilable regex (ECMA-only syntax
+  such as `\p{...}` property escapes or malformed class ranges) is
+  preserved as `x-pattern` and recorded in `x-s2o.lossy` instead of
+  producing a document the validation toolchain rejects; compilable
+  patterns are untouched (#98).
 - Duplicate parameters no longer survive conversion (#97): a parameter
   `$ref` with no component home (a deep `#/paths/.../parameters/N`
   pointer or a dangling name) is resolved against the source and inlined

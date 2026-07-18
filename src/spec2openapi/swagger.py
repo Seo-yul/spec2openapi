@@ -50,6 +50,14 @@ def is_swagger2(spec: dict[str, Any]) -> bool:
     return isinstance(spec, dict) and str(spec.get("swagger", "")).startswith("2")
 
 
+def _compiles(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+        return True
+    except re.error:
+        return False
+
+
 def _as_bool(v: Any) -> bool:
     if isinstance(v, bool):
         return v
@@ -375,6 +383,15 @@ class _Upgrader:
                 self.lossy.append(
                     f"collectionFormat {v!r} inside a schema has no "
                     "OpenAPI 3 equivalent; preserved as x-collectionFormat"
+                )
+            elif k == "pattern" and isinstance(v, str) and not _compiles(v):
+                # ECMA-only syntax (\p{...}, odd class ranges) fails the
+                # validator's regex format check; keep the original text
+                # where ECMA consumers can still find it
+                out["x-pattern"] = v
+                self.lossy.append(
+                    f"pattern {v!r} is not a valid regex for the "
+                    "validation toolchain; preserved as x-pattern"
                 )
             elif k in _DATA_KEYWORDS:
                 out[k] = v  # data value: pass through verbatim
