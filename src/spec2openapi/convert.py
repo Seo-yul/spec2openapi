@@ -16,7 +16,6 @@ from .openapi import (  # noqa: F401  (re-exported)
     build_spec,
     dump_spec,
 )
-from .parser import parse_wsdl
 
 
 def convert_wsdl(
@@ -46,6 +45,8 @@ def convert_wsdl(
     # reject an unsupported target version before the (possibly remote)
     # WSDL parse, not after
     openapi_version = _normalize_openapi_version(openapi_version)
+    from .parser import parse_wsdl  # defers zeep/lxml to first SOAP use
+
     parsed = parse_wsdl(
         source, service=service, port=port,
         prefer_soap12=prefer_soap12, strict=strict,
