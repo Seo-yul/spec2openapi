@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions name="PaySvc"
+    targetNamespace="http://example.com/pay"
+    xmlns:tns="http://example.com/pay"
+    xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <wsdl:types>
+    <xsd:schema targetNamespace="http://example.com/pay" elementFormDefault="qualified">
+      <!-- abstract substitution head -->
+      <xsd:element name="payment" type="tns:PaymentType" abstract="true"/>
+      <xsd:complexType name="PaymentType">
+        <xsd:sequence><xsd:element name="amount" type="xsd:decimal"/></xsd:sequence>
+      </xsd:complexType>
+      <!-- direct members -->
+      <xsd:element name="creditCard" substitutionGroup="tns:payment">
+        <xsd:complexType><xsd:complexContent><xsd:extension base="tns:PaymentType">
+          <xsd:sequence><xsd:element name="cardNumber" type="xsd:string"/></xsd:sequence>
+        </xsd:extension></xsd:complexContent></xsd:complexType>
+      </xsd:element>
+      <xsd:element name="bankTransfer" substitutionGroup="tns:payment">
+        <xsd:complexType><xsd:complexContent><xsd:extension base="tns:PaymentType">
+          <xsd:sequence><xsd:element name="iban" type="xsd:string"/></xsd:sequence>
+        </xsd:extension></xsd:complexContent></xsd:complexType>
+      </xsd:element>
+      <!-- transitive member: substitutes creditCard, hence payment too -->
+      <xsd:element name="visaCard" substitutionGroup="tns:creditCard">
+        <xsd:complexType><xsd:complexContent><xsd:extension base="tns:PaymentType">
+          <xsd:sequence><xsd:element name="visaId" type="xsd:string"/></xsd:sequence>
+        </xsd:extension></xsd:complexContent></xsd:complexType>
+      </xsd:element>
+      <!-- concrete (non-abstract) head used in the response -->
+      <xsd:element name="notice" type="tns:NoticeType"/>
+      <xsd:complexType name="NoticeType">
+        <xsd:sequence><xsd:element name="text" type="xsd:string"/></xsd:sequence>
+      </xsd:complexType>
+      <xsd:element name="urgentNotice" substitutionGroup="tns:notice">
+        <xsd:complexType><xsd:complexContent><xsd:extension base="tns:NoticeType">
+          <xsd:sequence><xsd:element name="deadline" type="xsd:string"/></xsd:sequence>
+        </xsd:extension></xsd:complexContent></xsd:complexType>
+      </xsd:element>
+      <!-- wrappers -->
+      <xsd:element name="PayRequest">
+        <xsd:complexType><xsd:sequence>
+          <xsd:element name="orderId" type="xsd:string"/>
+          <xsd:element ref="tns:payment"/>
+        </xsd:sequence></xsd:complexType>
+      </xsd:element>
+      <xsd:element name="PayResponse">
+        <xsd:complexType><xsd:sequence>
+          <xsd:element name="ok" type="xsd:boolean"/>
+          <xsd:element ref="tns:notice" minOccurs="0"/>
+        </xsd:sequence></xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </wsdl:types>
+  <wsdl:message name="PayIn"><wsdl:part name="parameters" element="tns:PayRequest"/></wsdl:message>
+  <wsdl:message name="PayOut"><wsdl:part name="parameters" element="tns:PayResponse"/></wsdl:message>
+  <wsdl:portType name="PayPort">
+    <wsdl:operation name="Pay">
+      <wsdl:documentation>Submit a payment (any substitutable payment kind).</wsdl:documentation>
+      <wsdl:input message="tns:PayIn"/><wsdl:output message="tns:PayOut"/>
+    </wsdl:operation>
+  </wsdl:portType>
+  <wsdl:binding name="PayBinding" type="tns:PayPort">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="Pay">
+      <soap:operation soapAction="urn:pay"/>
+      <wsdl:input><soap:body use="literal"/></wsdl:input>
+      <wsdl:output><soap:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+  <wsdl:service name="PayService">
+    <wsdl:port name="PayPort" binding="tns:PayBinding">
+      <soap:address location="http://example.com/pay"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

@@ -31,7 +31,7 @@ The fixed-runtime deployment model — build one image, swap the spec via a Kube
 
 ## Features
 
-- **WSDL → OpenAPI 3.0/3.1** — document/literal and rpc/literal bindings, SOAP 1.1/1.2, nested complex types, arrays, attributes, `nillable`, inheritance (flattened `complexContent` extensions), `simpleContent` (text value + attributes), `choice` (members become optional + `x-soap-choice`), default values, recursive types, multi-service/multi-port WSDLs with automatic dedup.
+- **WSDL → OpenAPI 3.0/3.1** — document/literal and rpc/literal bindings, SOAP 1.1/1.2, nested complex types, arrays, attributes, `nillable`, inheritance (flattened `complexContent` extensions), `simpleContent` (text value + attributes), `choice` (members become optional + `x-soap-choice`), substitution groups (a head reference becomes a `oneOf` of self-describing member branches + `x-soap-substitution`), default values, recursive types, multi-service/multi-port WSDLs with automatic dedup.
 - **XSD facets & docs carried into tool schemas** — enumerations, `pattern`, length and numeric bounds, `fractionDigits` (→ `multipleOf`), and `xsd:annotation` documentation are extracted (including from `xsd:import`-ed schemas) so LLMs see well-described, well-constrained tool arguments.
 - **`x-soap` contract** — SOAPAction, SOAP version, endpoint, wrapper element QNames, `soap:header` parts and declared faults are embedded as vendor extensions; OpenAPI `xml` annotations carry everything a call layer needs to serialize JSON ↔ literal XML.
 - **Swagger 2.0 → OpenAPI 3.x upgrade** — full mechanical mapping (servers, requestBody, formData/multipart, parameter schema wrapping, `collectionFormat` → `style`/`explode`, `$ref` rewriting, security schemes, `type: file`, `x-nullable`, discriminator), hardened against real-world documents: deep local `$ref`s are hoisted to components, dangling refs and duplicate parameters are neutralized, type-mismatched defaults are coerced, and common vendor extensions (`x-example`, `x-oneOf`, `x-anyOf`) are promoted to native keywords. Every assumption made for missing information is recorded in `x-s2o.assumptions`; untranslatable constructs are preserved as `x-` extensions and listed in `x-s2o.lossy`.
@@ -169,7 +169,7 @@ Only the ConfigMap changes per service; credentials live in a Secret (`SPEC2OPEN
 
 ## Limitations
 
-rpc/encoded (skipped and recorded in `x-soap.skippedOperations`), MTOM/attachments, WS-Policy/WS-Addressing, and substitution groups are not supported. WS-Security support in the reference runtime is UsernameToken (PasswordText).
+rpc/encoded (skipped and recorded in `x-soap.skippedOperations`), MTOM/attachments, and WS-Policy/WS-Addressing are not supported. Substitution-group `blocking`/`final` constraints are ignored. WS-Security support in the reference runtime is UsernameToken (PasswordText).
 
 ## Security
 

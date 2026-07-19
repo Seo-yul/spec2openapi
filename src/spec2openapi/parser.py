@@ -66,6 +66,13 @@ class XsdMeta:
     type_docs: dict[tuple[str, str], str]
     # (namespace, container name, child element name) -> documentation
     child_docs: dict[tuple[str, str, str], str]
+    # (namespace, head element) -> [(namespace, member element), ...]
+    # (zeep drops @substitutionGroup entirely)
+    substitutions: dict[tuple[str, str], list[tuple[str, str]]] = (
+        dataclasses.field(default_factory=dict))
+    # global elements declared abstract="true" (zeep drops @abstract too)
+    abstract_elements: set[tuple[str, str]] = (
+        dataclasses.field(default_factory=set))
 
 
 @dataclasses.dataclass
@@ -76,6 +83,8 @@ class ParsedWsdl:
     operations: list[ParsedOperation]
     xsd_meta: XsdMeta
     skipped: list[tuple[str, str]]  # (operation, reason)
+    # zeep Schema — lets the generator resolve substitution-group members
+    schema: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +178,34 @@ def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
     return out
 
 
+def _resolve_qname_ref(value: str, node: etree._Element
+                       ) -> tuple[str, str] | None:
+    """Resolve a QName attribute value ('tns:payment') via the node's
+    in-scope namespace map."""
+    prefix, sep, local = value.rpartition(":")
+    if not sep:
+        return (node.nsmap.get(None) or "", value)
+    ns = node.nsmap.get(prefix)
+    return None if ns is None else (ns, local)
+
+
 def _scan_schema_root(root: etree._Element, meta: XsdMeta) -> None:
     for schema in root.iter(f"{{{XSD_NS}}}schema"):
         tns = schema.get("targetNamespace", "")
+        # global elements: substitution-group membership + abstract flags
+        for el in schema.findall(f"{{{XSD_NS}}}element"):
+            ename = el.get("name")
+            if not ename:
+                continue
+            if el.get("abstract") in ("true", "1"):
+                meta.abstract_elements.add((tns, ename))
+            sg = el.get("substitutionGroup")
+            if sg:
+                head = _resolve_qname_ref(sg, el)
+                if head:
+                    members = meta.substitutions.setdefault(head, [])
+                    if (tns, ename) not in members:
+                        members.append((tns, ename))
         # named simple types: facets + docs
         for st in schema.findall(f"{{{XSD_NS}}}simpleType[@name]"):
             key = (tns, st.get("name"))
@@ -224,6 +258,16 @@ def _collect_xsd_meta(client: Client, source: str,
         except Exception:
             continue
         _scan_schema_root(root, meta)
+    # transitive closure: a member of a member substitutes the outer head
+    changed = True
+    while changed:
+        changed = False
+        for head, members in meta.substitutions.items():
+            for m in list(members):
+                for mm in meta.substitutions.get(m, ()):
+                    if mm != head and mm not in members:
+                        members.append(mm)
+                        changed = True
     return meta
 
 
@@ -433,4 +477,5 @@ def parse_wsdl(
         operations=operations,
         xsd_meta=xsd_meta,
         skipped=skipped,
+        schema=client.wsdl.types,
     )

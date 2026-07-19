@@ -175,6 +175,28 @@ def _write_value(parent: etree._Element, tag: etree.QName | str, schema: dict,
         el.text = _to_text(value)
 
 
+def _write_substitution(parent: etree._Element, sub: dict, value: Any,
+                        prop: str, index: _SpecIndex) -> None:
+    """Serialize a substitution-group value: {"creditCard": {...}} names
+    the wire element itself; the head element never appears."""
+    entries = {m["element"]: m for m in sub.get("members", [])}
+    if not (isinstance(value, dict) and len(value) == 1):
+        raise ValueError(
+            f"property '{prop}' expects exactly one of "
+            f"{sorted(entries)} as its single key"
+        )
+    (member, inner), = value.items()
+    entry = entries.get(member)
+    if entry is None:
+        raise ValueError(
+            f"property '{prop}': unknown substitution element '{member}' "
+            f"(expected one of {sorted(entries)})"
+        )
+    ns = entry.get("namespace")
+    tag = etree.QName(ns, entry["element"]) if ns else entry["element"]
+    _write_value(parent, tag, {"$ref": entry["schema"]}, inner, index)
+
+
 def _write_object(parent: etree._Element, schema: dict, data: Any,
                   index: _SpecIndex) -> None:
     schema = index.deref(schema)
@@ -207,8 +229,16 @@ def _write_object(parent: etree._Element, schema: dict, data: Any,
         tag = etree.QName(ns, local) if ns else local
         if pd.get("type") == "array":
             items_schema = pd.get("items", {})
+            items_sub = index.deref(items_schema).get("x-soap-substitution")
             for item in value if isinstance(value, list) else [value]:
-                _write_value(parent, tag, items_schema, item, index)
+                if items_sub:
+                    _write_substitution(parent, items_sub, item, name, index)
+                else:
+                    _write_value(parent, tag, items_schema, item, index)
+        elif pd.get("x-soap-substitution"):
+            _write_substitution(
+                parent, pd["x-soap-substitution"], value, name, index
+            )
         else:
             _write_value(parent, tag, pd, value, index)
 
@@ -343,9 +373,30 @@ def _read_object(el: etree._Element, schema: dict[str, Any],
         if xml.get("x-text"):  # xsd:simpleContent text value
             result[name] = _coerce(el.text, pd)
             continue
-        nodes = by_name.get(local, [])
+        sub = pd.get("x-soap-substitution")
+        items_schema = None
         if pd.get("type") == "array":
             items_schema = index.deref(pd.get("items", {}))
+            sub = items_schema.get("x-soap-substitution") or sub
+        if sub:
+            # the wire carries the member element's own name; wrap it back
+            # into the self-describing {"member": {...}} form
+            entries = {m["element"]: m for m in sub.get("members", [])}
+            found = [
+                (_localname(c), c) for c in children
+                if _localname(c) in entries
+            ]
+            wrapped = [
+                {ln: _read_node(c, {"$ref": entries[ln]["schema"]}, index)}
+                for ln, c in found
+            ]
+            if pd.get("type") == "array":
+                result[name] = wrapped
+            elif wrapped:
+                result[name] = wrapped[0]
+            continue
+        nodes = by_name.get(local, [])
+        if pd.get("type") == "array":
             result[name] = [_read_node(n, items_schema, index) for n in nodes]
         elif nodes:
             result[name] = _read_node(nodes[0], pd, index)
@@ -534,7 +585,14 @@ class SoapBridgeTransport(httpx.AsyncBaseTransport):
                  "faultstring": "; ".join(violations), "detail": ""},
             )
 
-        envelope = build_envelope(op, payload, self.index, self.options)
+        try:
+            envelope = build_envelope(op, payload, self.index, self.options)
+        except ValueError as exc:  # e.g. malformed substitution wrapper
+            return self._json_response(
+                request, 400,
+                {"faultcode": "spec2openapi.BadRequest",
+                 "faultstring": str(exc), "detail": ""},
+            )
         action = xsoap.get("soapAction", "")
         if xsoap.get("soapVersion") == "1.2":
             ct = "application/soap+xml; charset=utf-8"

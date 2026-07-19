@@ -199,7 +199,7 @@ def build_spec(
             f"{detail} Nothing to generate — check that the WSDL exposes "
             "document/literal or rpc/literal SOAP bindings."
         )
-    conv = SchemaConverter(parsed.xsd_meta)
+    conv = SchemaConverter(parsed.xsd_meta, zschema=parsed.schema)
     paths: dict[str, Any] = {}
     used_ids: set[str] = set()
 

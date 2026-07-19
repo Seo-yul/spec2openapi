@@ -126,8 +126,10 @@ def _choice_groups(t: Any) -> list[dict[str, Any]]:
 class SchemaConverter:
     """Stateful converter that accumulates shared component schemas."""
 
-    def __init__(self, meta: XsdMeta | None = None):
+    def __init__(self, meta: XsdMeta | None = None, zschema: Any = None):
         self.meta = meta or XsdMeta(facets={}, type_docs={}, child_docs={})
+        # zeep Schema for resolving substitution-group member elements
+        self.zschema = zschema
         self.components: dict[str, dict[str, Any]] = {}
         self._registered: dict[int, str] = {}  # id(zeep type) -> component name
         self._in_progress: dict[int, str] = {}
@@ -325,6 +327,101 @@ class SchemaConverter:
             )
         return schema
 
+    def _substitution_property(
+        self, el: Any, el_name: str, qkey: tuple[str, str] | None
+    ) -> dict | None:
+        """A ref to a substitution-group head becomes a oneOf of
+        self-describing single-property branches ({"creditCard": {...}}),
+        so the JSON itself names the wire element. Returns None when the
+        element is not a substitution head."""
+        qname = getattr(el, "qname", None)
+        if qname is None:
+            return None
+        key = (qname.namespace or "", qname.localname)
+        member_keys = self.meta.substitutions.get(key)
+        if member_keys is None or self.zschema is None:
+            return None
+
+        candidates = list(member_keys)
+        if key not in self.meta.abstract_elements:
+            candidates.insert(0, key)  # a concrete head substitutes itself
+
+        branches: list[dict[str, Any]] = []
+        members_meta: list[dict[str, Any]] = []
+        for ns, local in candidates:
+            if (ns, local) in self.meta.abstract_elements:
+                continue  # abstract members cannot appear on the wire
+            try:
+                member = self.zschema.get_element(f"{{{ns}}}{local}")
+            except Exception:
+                logger.warning(
+                    "substitution member {%s}%s could not be resolved; "
+                    "branch omitted", ns, local,
+                )
+                continue
+            comp = self.register_element_component(member, hint=local)
+            ref = f"#/components/schemas/{comp}"
+            branches.append({
+                "type": "object",
+                "properties": {
+                    local: {
+                        "allOf": [{"$ref": ref}],
+                        "xml": {"name": local, "namespace": ns},
+                    }
+                },
+                "required": [local],
+            })
+            members_meta.append(
+                {"element": local, "namespace": ns, "schema": ref}
+            )
+
+        marker = {
+            "head": key[1],
+            "namespace": key[0],
+            "members": members_meta,
+        }
+        doc = self._child_doc(qkey, el_name)
+        if not branches:
+            return {
+                "description": (
+                    f"substitution head '{key[1]}' is abstract and has no "
+                    "known concrete members; no representable value"
+                ),
+                "x-soap-substitution": marker,
+            }
+        names = ", ".join(m["element"] for m in members_meta)
+        inner: dict[str, Any] = {
+            "oneOf": branches,
+            "description": doc or (
+                f"One of the substitutable elements for '{key[1]}': {names}. "
+                "Pass exactly one key naming the chosen element."
+            ),
+            "x-soap-substitution": marker,
+        }
+
+        max_occurs = getattr(el, "max_occurs", 1)
+        is_array = max_occurs == "unbounded"
+        if not is_array:
+            try:
+                is_array = int(max_occurs) > 1
+            except (TypeError, ValueError):
+                is_array = False
+        if not is_array:
+            return inner
+        arr: dict[str, Any] = {"type": "array", "items": inner}
+        try:
+            mn = int(getattr(el, "min_occurs", 0))
+            if mn > 0:
+                arr["minItems"] = mn
+        except (TypeError, ValueError):
+            pass
+        if max_occurs != "unbounded":
+            try:
+                arr["maxItems"] = int(max_occurs)
+            except (TypeError, ValueError):
+                pass
+        return arr
+
     def _element_to_property(
         self,
         el_name: str,
@@ -341,6 +438,10 @@ class SchemaConverter:
                 "not supported. Fix the source schema, or exclude the "
                 "operation."
             )
+
+        sub = self._substitution_property(el, el_name, qkey)
+        if sub is not None:
+            return sub
 
         base = self._type_to_schema(el_type, hint=f"{parent_hint}_{el_name}")
 
