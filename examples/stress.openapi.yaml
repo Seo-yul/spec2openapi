@@ -138,6 +138,7 @@ paths:
                   - NZ
                   - RU
                   x-soap-simple-type: RegionCode
+                  example: KR
                   xml:
                     name: code
                     namespace: http://example.com/stress

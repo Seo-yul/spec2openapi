@@ -34,6 +34,15 @@ _FORMAT_BY_CLS = {
     "Duration": "duration",
 }
 
+# canonical formatting illustrations (non-normative `example` values) for
+# formats whose lexical shape is not obvious from the type alone
+_FORMAT_EXAMPLES = {
+    "date-time": "2024-01-15T10:30:00Z",
+    "date": "2024-01-15",
+    "time": "10:30:00",
+    "duration": "P1DT2H",
+}
+
 
 def _py_to_json_type(py: type) -> dict[str, Any]:
     if py is bool:
@@ -458,6 +467,8 @@ class SchemaConverter:
         default = getattr(el, "default", None)
         if default is not None and "$ref" not in base:
             base["default"] = _coerce_default(default, base)
+            # a real source value already illustrates the shape
+            base.pop("example", None)
 
         max_occurs = getattr(el, "max_occurs", 1)
         is_array = max_occurs == "unbounded"
@@ -532,4 +543,13 @@ class SchemaConverter:
             if doc:
                 schema.setdefault("description", doc)
             schema["x-soap-simple-type"] = tname
+        # deterministic, source-derived example values only (no synthesis):
+        # the first enumeration value, or a fixed formatting illustration
+        if "example" not in schema:
+            enum = schema.get("enum")
+            if isinstance(enum, list) and enum:
+                schema["example"] = enum[0]
+            elif (schema.get("type") == "string"
+                    and schema.get("format") in _FORMAT_EXAMPLES):
+                schema["example"] = _FORMAT_EXAMPLES[schema["format"]]
         return schema

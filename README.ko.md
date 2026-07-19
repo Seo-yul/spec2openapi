@@ -109,7 +109,7 @@ deep copy하지 않음), 입력을 계속 쓰면서 결과를 수정하려면 `c
 | 바인딩 스타일 | document/literal(wrapped), rpc/literal. rpc/encoded는 스킵 후 `x-soap.skippedOperations`에 기록 |
 | SOAP 버전 | 1.1, 1.2 (듀얼 포트 자동 중복 제거, `--prefer-soap12`) |
 | 타입 | 중첩 complexType($ref), 배열(maxOccurs→array/minItems/maxItems), attribute, nillable, anyType, 상속(complexContent extension은 평탄화), simpleContent(값+attribute), choice(멤버를 optional로 처리 + `x-soap-choice`), substitution group(head 참조를 멤버별 자기서술 branch의 `oneOf`로 전개 + `x-soap-substitution`), default 값 |
-| XSD 파셋 | enumeration, pattern, length/minLength/maxLength, min/maxInclusive, min/maxExclusive, fractionDigits(→multipleOf). xsd:import/include된 외부 스키마 포함 |
+| XSD 파셋 | enumeration, pattern, length/minLength/maxLength, min/maxInclusive, min/maxExclusive, fractionDigits(→multipleOf). xsd:import/include된 외부 스키마 포함. 결정적 `example` 값 부여(첫 enumeration 값, 날짜/시간 표기 예시 상수 — 합성 없음) |
 | 문서화 | wsdl:documentation(서비스/오퍼레이션), xsd:annotation/documentation(타입/엘리먼트) → description으로 이관 (LLM tool 설명 품질에 직결) |
 | WSDL 구조 | 다중 service/port, operationId 충돌 시 서비스명 접두 부여, soap:header(`x-soap.headers` + 스키마 컴포넌트), wsdl:fault(`x-soap.faults` + 스키마 컴포넌트), one-way 오퍼레이션 |
 | 미지원 | rpc/encoded, MTOM/첨부, WS-Policy/WS-Addressing (substitution group의 blocking/final 제약은 무시) |

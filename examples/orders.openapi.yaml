@@ -77,12 +77,14 @@ paths:
                     - SHIPPED
                     - CANCELLED
                     x-soap-simple-type: OrderStatus
+                    example: NEW
                     xml:
                       name: status
                       namespace: http://example.com/orders
                   createdAt:
                     type: string
                     format: date-time
+                    example: '2024-01-15T10:30:00Z'
                     xml:
                       name: createdAt
                       namespace: http://example.com/orders
@@ -161,6 +163,7 @@ paths:
                     type: string
                     enum: *id001
                     x-soap-simple-type: OrderStatus
+                    example: NEW
                     xml:
                       name: status
                       namespace: http://example.com/orders

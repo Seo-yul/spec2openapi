@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- WSDL-converted schemas carry deterministic, source-derived `example`
+  values (#117): the first enumeration value, or a fixed canonical
+  formatting illustration for date/time/duration formats — no value
+  synthesis, and a property with an XSD `default` keeps only the
+  default. Helps LLMs produce correctly-formatted tool arguments.
 - XSD substitution groups are supported (#115): a reference to a
   substitution-group head converts to a `oneOf` of self-describing
   single-property branches (`{"creditCard": {…}}` names the wire
