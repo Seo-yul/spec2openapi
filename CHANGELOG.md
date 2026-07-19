@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- XSD substitution groups are supported (#115): a reference to a
+  substitution-group head converts to a `oneOf` of self-describing
+  single-property branches (`{"creditCard": {…}}` names the wire
+  element), with member schemas as components, transitive membership,
+  abstract heads/members excluded, and an `x-soap-substitution` marker
+  the SOAP bridge uses to serialize the chosen member element (and to
+  wrap the wire element back symmetrically on responses). Previously
+  the head's base type was emitted and the members silently vanished.
+  `blocking`/`final` constraints are ignored.
+
 ### Fixed
 - WSDL parse failures now stay inside the `ConversionError` contract
   (#113): a malformed/unfetchable WSDL raises `ConversionError`
