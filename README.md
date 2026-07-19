@@ -113,6 +113,12 @@ spec = spec2openapi.convert_wsdl(
     forbid_external=True,           # refuse remote imports from untrusted WSDLs
 )
 
+# WSDL input is flexible: a path/URL, a zip bundle, the document itself,
+# or an in-memory multi-file bundle whose relative imports resolve locally
+spec = spec2openapi.convert_wsdl(content=wsdl_bytes)
+spec = spec2openapi.convert_wsdl(files={"service.wsdl": wsdl_bytes,
+                                        "types.xsd": xsd_bytes})
+
 print(spec2openapi.dump_spec(spec))            # YAML text (fmt="json" for JSON)
 
 # Optional [mcp] extra: run it as an MCP server right away

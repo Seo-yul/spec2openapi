@@ -86,8 +86,12 @@ def _bridge_options(args):
 def cmd_convert(args) -> int:
     from .convert import convert_wsdl, dump_spec
 
+    src, content = args.wsdl, None
+    if args.wsdl == "-":
+        src, content = None, sys.stdin.buffer.read()
     spec = convert_wsdl(
-        args.wsdl, title=args.title, version=args.spec_version,
+        src, content=content,
+        title=args.title, version=args.spec_version,
         base_path=args.base_path, service=args.service, port=args.port_name,
         prefer_soap12=args.prefer_soap12, strict=args.strict,
         openapi_version=args.openapi_version,
@@ -264,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("convert", help="WSDL -> OpenAPI spec with x-soap extensions")
-    c.add_argument("wsdl", help="WSDL path or URL")
+    c.add_argument("wsdl", help="WSDL path, URL, zip bundle, or '-' for stdin")
     c.add_argument("-o", "--output", help="output file (default: stdout)")
     c.add_argument("--format", choices=["yaml", "json"])
     c.add_argument("--title", help="override info.title")

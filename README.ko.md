@@ -88,6 +88,12 @@ spec = spec2openapi.convert_wsdl(
     forbid_external=True,           # 신뢰할 수 없는 WSDL의 원격 import 차단
 )
 
+# WSDL 입력은 유연하다: 경로/URL, zip 번들, 문서 본문 자체,
+# 상대 import를 내부에서 해소하는 인메모리 멀티파일 번들 전부 가능
+spec = spec2openapi.convert_wsdl(content=wsdl_bytes)
+spec = spec2openapi.convert_wsdl(files={"service.wsdl": wsdl_bytes,
+                                        "types.xsd": xsd_bytes})
+
 text = spec2openapi.dump_spec(spec)              # yaml (또는 fmt="json")
 
 # [mcp] extra 설치 시: 참조 런타임

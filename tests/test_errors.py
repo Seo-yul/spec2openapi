@@ -136,11 +136,17 @@ def test_convert_swagger_rejects_non_mapping(bad):
     assert "mapping" in msg and type(bad).__name__ in msg
 
 
-@pytest.mark.parametrize("bad", [{"not": "a path"}, None, 42, ["x"]])
+@pytest.mark.parametrize("bad", [{"not": "a path"}, 42, ["x"]])
 def test_convert_wsdl_rejects_non_path(bad):
     with pytest.raises(ConversionError) as exc:
         convert_wsdl(bad)
     assert type(bad).__name__ in str(exc.value)
+
+
+def test_convert_wsdl_without_any_input_names_the_choices():
+    # source=None now means "not given": the error lists the input kinds
+    with pytest.raises(ConversionError, match="exactly one of"):
+        convert_wsdl(None)
 
 
 def test_is_swagger2_false_for_non_mapping():
