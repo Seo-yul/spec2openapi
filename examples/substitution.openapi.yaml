@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: PayService
   version: 1.0.0
-  description: Generated from WSDL by spec2openapi 0.3.0. Each path is a SOAP operation exposed as a JSON
+  description: Generated from WSDL by spec2openapi 0.4.0. Each path is a SOAP operation exposed as a JSON
     call.
 servers:
 - url: http://example.com
@@ -233,5 +233,5 @@ components:
       - deadline
 x-soap:
   wsdl: tests/fixtures/substitution.wsdl
-  generator: spec2openapi/0.3.0
+  generator: spec2openapi/0.4.0
   skippedOperations: []

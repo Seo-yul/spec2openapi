@@ -19,7 +19,7 @@ Optional MCP runtime (pip install 'spec2openapi[mcp]'): from_openapi_spec,
 from_wsdl, BridgeOptions, SoapBridgeTransport.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from typing import TYPE_CHECKING
 

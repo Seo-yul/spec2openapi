@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-19
+
 ### Added
 - `convert_wsdl`/`parse_wsdl` accept in-memory and multi-file input
   (#119): `content=` takes the document itself as str/bytes (zip bytes
@@ -364,7 +366,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.0...v0.2.1
