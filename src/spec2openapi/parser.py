@@ -23,7 +23,7 @@ XSD_NS = "http://www.w3.org/2001/XMLSchema"
 WSDL_NS = "http://schemas.xmlsoap.org/wsdl/"
 
 
-class UnsupportedWsdlError(Exception):
+class UnsupportedWsdlError(ConversionError):
     """Raised in strict mode when an operation cannot be converted."""
 
 
@@ -300,6 +300,14 @@ def parse_wsdl(
     relative imports still work). huge_tree=True lifts libxml2 depth/size
     limits for very large WSDLs; leave off for untrusted input.
     """
+    # A source that starts with '<' is document content, not a location —
+    # catching it here beats the misleading not-a-file error zeep gives
+    if isinstance(source, str) and source.lstrip().startswith("<"):
+        raise ConversionError(
+            "parse_wsdl expects a WSDL file path or URL, but received what "
+            "looks like XML content — write it to a file (or serve it over "
+            "http) and pass its location"
+        )
     # For local files, surface XML syntax errors with a line/column before
     # zeep either swallows them (lenient parse -> misleading "no operations")
     # or reports a cryptic internal error.
@@ -323,7 +331,12 @@ def parse_wsdl(
     except (FileNotFoundError, ConversionError):
         raise
     except Exception as exc:  # malformed/unfetchable WSDL -> clean error
-        raise ValueError(f"could not parse WSDL '{source}': {exc}") from exc
+        label = str(source)
+        if len(label) > 120:
+            label = label[:120] + "…"
+        raise ConversionError(
+            f"could not parse WSDL '{label}': {exc}"
+        ) from exc
 
     svc_doc, op_docs = _extract_wsdl_docs(source)
     xsd_meta = _collect_xsd_meta(client, source, forbid_external=forbid_external)

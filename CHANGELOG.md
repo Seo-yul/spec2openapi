@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- WSDL parse failures now stay inside the `ConversionError` contract
+  (#113): a malformed/unfetchable WSDL raises `ConversionError`
+  (previously bare `ValueError`) with the source label truncated,
+  `UnsupportedWsdlError` (strict-mode skips, no convertible operations)
+  is a `ConversionError` subclass, and passing WSDL *content* instead of
+  a path/URL is detected early with a targeted hint.
+
 ## [0.3.0] - 2026-07-19
 
 ### Added
