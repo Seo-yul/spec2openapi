@@ -2,10 +2,8 @@
 
 ## Supported versions
 
-| Version | Supported |
-|---------|-----------|
-| 0.2.x   | yes       |
-| < 0.2   | no        |
+Only the **latest minor release** receives security fixes. Upgrade to the
+newest version on PyPI before reporting.
 
 ## Reporting a vulnerability
 
@@ -49,3 +47,8 @@ network access. Two behaviors remain configurable:
 - **Parser limits**: libxml2 depth/size limits are enforced by default;
   `--huge-tree` lifts them and should only be used for large *trusted*
   WSDLs.
+- **Bundle input** (`files=`, zip archives, zip `content=` bytes): member
+  names containing absolute paths or `..` segments are rejected
+  (zip-slip guard), the total uncompressed size is capped (256 MB, loud
+  failure), and relative imports resolve only inside the bundle —
+  references leaving it remain governed by `forbid_external`.

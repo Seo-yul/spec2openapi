@@ -212,6 +212,8 @@ class SoapHandler(BaseHTTPRequestHandler):
                 payload, status = handle_app(name, req)
             elif self.path == "/stress":
                 payload, status = handle_stress(req)
+            elif self.path == "/pay":
+                payload, status = handle_pay(name, req)
             else:
                 payload, status = _fault(f"unknown path {self.path}"), 500
         except Exception as exc:  # bad request from the bridge = test failure signal
@@ -229,3 +231,29 @@ def start_server() -> tuple[ThreadingHTTPServer, str]:
     thread.start()
     host, port = server.server_address
     return server, f"http://{host}:{port}"
+
+
+PAY_NS = "http://example.com/pay"
+
+
+def handle_pay(name: str, req: etree._Element) -> tuple[bytes, int]:
+    """Substitution groups: the wire must carry the member element itself
+    (never the abstract head); the response exercises the concrete head."""
+    if name != "PayRequest":
+        return _fault(f"unexpected operation {name}"), 500
+    if req.find(f"{{{PAY_NS}}}payment") is not None:
+        return _fault("abstract head <payment> must not appear on the wire"), 500
+    member = amount = None
+    for tag in ("creditCard", "bankTransfer", "visaCard"):
+        node = req.find(f"{{{PAY_NS}}}{tag}")
+        if node is not None:
+            member = tag
+            amount = node.findtext(f"{{{PAY_NS}}}amount")
+            break
+    if member is None:
+        return _fault("no substitutable payment member found"), 500
+    return _envelope(
+        f'<PayResponse xmlns="{PAY_NS}"><ok>true</ok>'
+        f"<urgentNotice><text>paid {amount} via {member}</text>"
+        f"<deadline>friday</deadline></urgentNotice></PayResponse>"
+    ), 200

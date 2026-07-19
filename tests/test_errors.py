@@ -136,11 +136,17 @@ def test_convert_swagger_rejects_non_mapping(bad):
     assert "mapping" in msg and type(bad).__name__ in msg
 
 
-@pytest.mark.parametrize("bad", [{"not": "a path"}, None, 42, ["x"]])
+@pytest.mark.parametrize("bad", [{"not": "a path"}, 42, ["x"]])
 def test_convert_wsdl_rejects_non_path(bad):
     with pytest.raises(ConversionError) as exc:
         convert_wsdl(bad)
     assert type(bad).__name__ in str(exc.value)
+
+
+def test_convert_wsdl_without_any_input_names_the_choices():
+    # source=None now means "not given": the error lists the input kinds
+    with pytest.raises(ConversionError, match="exactly one of"):
+        convert_wsdl(None)
 
 
 def test_is_swagger2_false_for_non_mapping():
@@ -242,3 +248,26 @@ def test_load_spec_non_utf8_is_labeled_conversion_error(tmp_path):
 def test_spec_has_soap_is_false_on_malformed_input(garbage):
     from spec2openapi import spec_has_soap
     assert spec_has_soap(garbage) is False
+
+
+# -- WSDL parse failures stay inside the ConversionError contract (#113) -------
+
+def test_wsdl_content_instead_of_path_is_conversion_error():
+    content = open("tests/fixtures/calculator.wsdl").read()
+    with pytest.raises(ConversionError, match="looks like XML content"):
+        convert_wsdl(content)
+
+
+def test_non_wsdl_xml_is_labeled_conversion_error(tmp_path):
+    # zeep parses this leniently (zero services), so it surfaces as the
+    # no-operations ConversionError — the contract is class + source label
+    f = tmp_path / "not-wsdl.xml"
+    f.write_text("<root><child/></root>")  # valid XML, not a WSDL
+    with pytest.raises(ConversionError) as exc:
+        convert_wsdl(str(f))
+    assert "not-wsdl.xml" in str(exc.value)
+
+
+def test_strict_skip_is_conversion_error():
+    from spec2openapi.parser import UnsupportedWsdlError
+    assert issubclass(UnsupportedWsdlError, ConversionError)

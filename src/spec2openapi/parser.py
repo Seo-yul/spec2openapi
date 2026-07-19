@@ -7,8 +7,11 @@ plain intermediate model consumed by the OpenAPI generator.
 from __future__ import annotations
 
 import dataclasses
+import io
 import logging
 import os
+import tempfile
+import zipfile
 from typing import Any
 
 from lxml import etree
@@ -23,7 +26,7 @@ XSD_NS = "http://www.w3.org/2001/XMLSchema"
 WSDL_NS = "http://schemas.xmlsoap.org/wsdl/"
 
 
-class UnsupportedWsdlError(Exception):
+class UnsupportedWsdlError(ConversionError):
     """Raised in strict mode when an operation cannot be converted."""
 
 
@@ -66,6 +69,13 @@ class XsdMeta:
     type_docs: dict[tuple[str, str], str]
     # (namespace, container name, child element name) -> documentation
     child_docs: dict[tuple[str, str, str], str]
+    # (namespace, head element) -> [(namespace, member element), ...]
+    # (zeep drops @substitutionGroup entirely)
+    substitutions: dict[tuple[str, str], list[tuple[str, str]]] = (
+        dataclasses.field(default_factory=dict))
+    # global elements declared abstract="true" (zeep drops @abstract too)
+    abstract_elements: set[tuple[str, str]] = (
+        dataclasses.field(default_factory=set))
 
 
 @dataclasses.dataclass
@@ -76,6 +86,8 @@ class ParsedWsdl:
     operations: list[ParsedOperation]
     xsd_meta: XsdMeta
     skipped: list[tuple[str, str]]  # (operation, reason)
+    # zeep Schema — lets the generator resolve substitution-group members
+    schema: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +181,34 @@ def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
     return out
 
 
+def _resolve_qname_ref(value: str, node: etree._Element
+                       ) -> tuple[str, str] | None:
+    """Resolve a QName attribute value ('tns:payment') via the node's
+    in-scope namespace map."""
+    prefix, sep, local = value.rpartition(":")
+    if not sep:
+        return (node.nsmap.get(None) or "", value)
+    ns = node.nsmap.get(prefix)
+    return None if ns is None else (ns, local)
+
+
 def _scan_schema_root(root: etree._Element, meta: XsdMeta) -> None:
     for schema in root.iter(f"{{{XSD_NS}}}schema"):
         tns = schema.get("targetNamespace", "")
+        # global elements: substitution-group membership + abstract flags
+        for el in schema.findall(f"{{{XSD_NS}}}element"):
+            ename = el.get("name")
+            if not ename:
+                continue
+            if el.get("abstract") in ("true", "1"):
+                meta.abstract_elements.add((tns, ename))
+            sg = el.get("substitutionGroup")
+            if sg:
+                head = _resolve_qname_ref(sg, el)
+                if head:
+                    members = meta.substitutions.setdefault(head, [])
+                    if (tns, ename) not in members:
+                        members.append((tns, ename))
         # named simple types: facets + docs
         for st in schema.findall(f"{{{XSD_NS}}}simpleType[@name]"):
             key = (tns, st.get("name"))
@@ -224,6 +261,16 @@ def _collect_xsd_meta(client: Client, source: str,
         except Exception:
             continue
         _scan_schema_root(root, meta)
+    # transitive closure: a member of a member substitutes the outer head
+    changed = True
+    while changed:
+        changed = False
+        for head, members in meta.substitutions.items():
+            for m in list(members):
+                for mm in meta.substitutions.get(m, ()):
+                    if mm != head and mm not in members:
+                        members.append(mm)
+                        changed = True
     return meta
 
 
@@ -280,7 +327,179 @@ def _extract_faults(op: Any) -> list[ParsedFault]:
     return faults
 
 
+_BUNDLE_SIZE_CAP = 256 * 1024 * 1024  # total uncompressed bytes
+
+
+def _check_bundle_names(members: dict[str, bytes]) -> None:
+    total = 0
+    for name, data in members.items():
+        parts = name.replace("\\", "/").split("/")
+        if os.path.isabs(name) or ".." in parts or not parts[-1]:
+            raise ConversionError(
+                f"unsafe bundle member name '{name}' (absolute paths and "
+                "'..' segments are not allowed)"
+            )
+        total += len(data)
+    if total > _BUNDLE_SIZE_CAP:
+        raise ConversionError(
+            f"bundle exceeds the {_BUNDLE_SIZE_CAP // (1024 * 1024)} MB "
+            "uncompressed size cap"
+        )
+
+
+def _resolve_entry(members: dict[str, bytes], entry: str | None) -> str:
+    if entry is not None:
+        if entry not in members:
+            names = ", ".join(sorted(members)[:10])
+            raise ConversionError(
+                f"bundle entry '{entry}' not found (members: {names})"
+            )
+        return entry
+    wsdls = [n for n in members if n.lower().endswith(".wsdl")]
+    if len(wsdls) == 1:
+        return wsdls[0]
+    if not wsdls:
+        raise ConversionError(
+            "bundle has no .wsdl member; pass entry= to name the "
+            "document to convert"
+        )
+    raise ConversionError(
+        f"bundle has multiple .wsdl members ({', '.join(sorted(wsdls))}); "
+        "pass entry= to choose one"
+    )
+
+
+def _zip_members(fh: Any) -> dict[str, bytes]:
+    try:
+        with zipfile.ZipFile(fh) as zf:
+            return {
+                info.filename: zf.read(info)
+                for info in zf.infolist()
+                if not info.is_dir()
+            }
+    except zipfile.BadZipFile as exc:
+        raise ConversionError(f"could not read zip archive: {exc}") from exc
+
+
+def _parse_bundle(members: dict[str, bytes], entry: str, label: str,
+                  **kwargs: Any) -> ParsedWsdl:
+    """Materialize an in-memory bundle under a temp dir so the whole
+    pipeline (zeep import resolution, raw-XML metadata scraping) runs on
+    real file locations, then relabel the temp path."""
+    _check_bundle_names(members)
+    with tempfile.TemporaryDirectory(prefix="spec2openapi-") as td:
+        for name, data in members.items():
+            path = os.path.join(td, name.replace("\\", "/"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(data)
+        parsed = _parse_wsdl_location(os.path.join(td, entry), **kwargs)
+    parsed.source = label
+    return parsed
+
+
+def _as_bytes(value: Any, what: str) -> bytes:
+    if isinstance(value, str):
+        return value.encode("utf-8")
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    raise ConversionError(
+        f"{what} must be str or bytes, got {type(value).__name__}"
+    )
+
+
 def parse_wsdl(
+    source: str | os.PathLike | None = None,
+    *,
+    content: str | bytes | None = None,
+    files: dict[str, str | bytes] | None = None,
+    entry: str | None = None,
+    service: str | None = None,
+    port: str | None = None,
+    prefer_soap12: bool = False,
+    strict: bool = False,
+    forbid_external: bool = False,
+    huge_tree: bool = False,
+) -> ParsedWsdl:
+    """Parse a WSDL into the intermediate model.
+
+    Input is exactly one of:
+      source  — file path, http(s) URL, or path to a zip bundle
+      content — the document itself as str/bytes (zip bytes are detected
+                and treated as a bundle)
+      files   — an in-memory bundle {relative-name: str|bytes}; relative
+                imports resolve within it
+
+    entry names the document to convert inside a bundle; when the bundle
+    holds exactly one .wsdl it is auto-detected.
+
+    Supports document/literal and rpc/literal SOAP bindings; operations
+    that cannot be represented are skipped (or raise in strict mode).
+    forbid_external=True refuses to fetch remote wsdl:/xsd: imports —
+    recommended for untrusted sources (bundle-internal and local relative
+    imports still work). huge_tree=True lifts libxml2 depth/size limits
+    for very large WSDLs; leave off for untrusted input.
+    """
+    given = sum(x is not None for x in (source, content, files))
+    if given != 1:
+        raise ConversionError(
+            "pass exactly one of: source (path/URL/zip), content "
+            "(document str/bytes), or files (bundle mapping)"
+        )
+    kwargs: dict[str, Any] = dict(
+        service=service, port=port, prefer_soap12=prefer_soap12,
+        strict=strict, forbid_external=forbid_external, huge_tree=huge_tree,
+    )
+
+    if content is not None:
+        data = _as_bytes(content, "content")
+        if data[:4] == b"PK\x03\x04":
+            members = _zip_members(io.BytesIO(data))
+            ent = _resolve_entry(members, entry)
+            return _parse_bundle(members, ent, f"<memory>!{ent}", **kwargs)
+        return _parse_bundle(
+            {"document.wsdl": data}, "document.wsdl", "<memory>", **kwargs
+        )
+
+    if files is not None:
+        if not isinstance(files, dict) or not files:
+            raise ConversionError(
+                "files must be a non-empty mapping of "
+                "{relative-name: str|bytes}"
+            )
+        members = {
+            str(name): _as_bytes(data, f"files[{name!r}]")
+            for name, data in files.items()
+        }
+        ent = _resolve_entry(members, entry)
+        return _parse_bundle(members, ent, f"<bundle:{ent}>", **kwargs)
+
+    if not isinstance(source, (str, os.PathLike)):
+        raise ConversionError(
+            "source must be a WSDL file path or URL (str), "
+            f"got {type(source).__name__}"
+        )
+    # A source that starts with '<' is document content, not a location —
+    # catching it here beats the misleading not-a-file error zeep gives
+    if isinstance(source, str) and source.lstrip().startswith("<"):
+        raise ConversionError(
+            "parse_wsdl expects a WSDL file path or URL as source, but "
+            "received what looks like XML content — pass it via the "
+            "content= parameter instead"
+        )
+    if os.path.isfile(source) and zipfile.is_zipfile(source):
+        members = _zip_members(source)
+        ent = _resolve_entry(members, entry)
+        return _parse_bundle(members, ent, f"{source}!{ent}", **kwargs)
+    if entry is not None:
+        raise ConversionError(
+            "entry= applies only to bundle input (zip/files); "
+            "a plain source path or URL does not take one"
+        )
+    return _parse_wsdl_location(source, **kwargs)
+
+
+def _parse_wsdl_location(
     source: str,
     *,
     service: str | None = None,
@@ -290,16 +509,6 @@ def parse_wsdl(
     forbid_external: bool = False,
     huge_tree: bool = False,
 ) -> ParsedWsdl:
-    """Parse a WSDL (path or URL) into the intermediate model.
-
-    Supports document/literal and rpc/literal SOAP bindings; operations that
-    cannot be represented are skipped (or raise in strict mode).
-
-    forbid_external=True refuses to fetch remote wsdl:/xsd: imports —
-    recommended when converting documents from untrusted sources (local
-    relative imports still work). huge_tree=True lifts libxml2 depth/size
-    limits for very large WSDLs; leave off for untrusted input.
-    """
     # For local files, surface XML syntax errors with a line/column before
     # zeep either swallows them (lenient parse -> misleading "no operations")
     # or reports a cryptic internal error.
@@ -323,7 +532,12 @@ def parse_wsdl(
     except (FileNotFoundError, ConversionError):
         raise
     except Exception as exc:  # malformed/unfetchable WSDL -> clean error
-        raise ValueError(f"could not parse WSDL '{source}': {exc}") from exc
+        label = str(source)
+        if len(label) > 120:
+            label = label[:120] + "…"
+        raise ConversionError(
+            f"could not parse WSDL '{label}': {exc}"
+        ) from exc
 
     svc_doc, op_docs = _extract_wsdl_docs(source)
     xsd_meta = _collect_xsd_meta(client, source, forbid_external=forbid_external)
@@ -420,4 +634,5 @@ def parse_wsdl(
         operations=operations,
         xsd_meta=xsd_meta,
         skipped=skipped,
+        schema=client.wsdl.types,
     )

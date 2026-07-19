@@ -1,0 +1,237 @@
+openapi: 3.0.3
+info:
+  title: PayService
+  version: 1.0.0
+  description: Generated from WSDL by spec2openapi 0.4.0. Each path is a SOAP operation exposed as a JSON
+    call.
+servers:
+- url: http://example.com
+paths:
+  /operations/Pay:
+    post:
+      operationId: Pay
+      summary: Submit a payment (any substitutable payment kind).
+      description: Submit a payment (any substitutable payment kind).
+      tags:
+      - PayService
+      x-soap:
+        operation: Pay
+        service: PayService
+        port: PayPort
+        soapAction: urn:pay
+        soapVersion: '1.1'
+        style: document
+        endpoint: http://example.com/pay
+        input:
+          element: PayRequest
+          namespace: http://example.com/pay
+        output:
+          element: PayResponse
+          namespace: http://example.com/pay
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                orderId:
+                  type: string
+                  xml:
+                    name: orderId
+                    namespace: http://example.com/pay
+                payment:
+                  oneOf:
+                  - type: object
+                    properties:
+                      creditCard:
+                        allOf:
+                        - $ref: '#/components/schemas/creditCard'
+                        xml:
+                          name: creditCard
+                          namespace: http://example.com/pay
+                    required:
+                    - creditCard
+                  - type: object
+                    properties:
+                      bankTransfer:
+                        allOf:
+                        - $ref: '#/components/schemas/bankTransfer'
+                        xml:
+                          name: bankTransfer
+                          namespace: http://example.com/pay
+                    required:
+                    - bankTransfer
+                  - type: object
+                    properties:
+                      visaCard:
+                        allOf:
+                        - $ref: '#/components/schemas/visaCard'
+                        xml:
+                          name: visaCard
+                          namespace: http://example.com/pay
+                    required:
+                    - visaCard
+                  description: 'One of the substitutable elements for ''payment'': creditCard, bankTransfer,
+                    visaCard. Pass exactly one key naming the chosen element.'
+                  x-soap-substitution:
+                    head: payment
+                    namespace: http://example.com/pay
+                    members:
+                    - element: creditCard
+                      namespace: http://example.com/pay
+                      schema: '#/components/schemas/creditCard'
+                    - element: bankTransfer
+                      namespace: http://example.com/pay
+                      schema: '#/components/schemas/bankTransfer'
+                    - element: visaCard
+                      namespace: http://example.com/pay
+                      schema: '#/components/schemas/visaCard'
+              required:
+              - orderId
+              - payment
+      responses:
+        '200':
+          description: Result of SOAP operation Pay
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    xml:
+                      name: ok
+                      namespace: http://example.com/pay
+                  notice:
+                    oneOf:
+                    - type: object
+                      properties:
+                        notice:
+                          allOf:
+                          - $ref: '#/components/schemas/NoticeType'
+                          xml:
+                            name: notice
+                            namespace: http://example.com/pay
+                      required:
+                      - notice
+                    - type: object
+                      properties:
+                        urgentNotice:
+                          allOf:
+                          - $ref: '#/components/schemas/urgentNotice'
+                          xml:
+                            name: urgentNotice
+                            namespace: http://example.com/pay
+                      required:
+                      - urgentNotice
+                    description: 'One of the substitutable elements for ''notice'': notice, urgentNotice.
+                      Pass exactly one key naming the chosen element.'
+                    x-soap-substitution:
+                      head: notice
+                      namespace: http://example.com/pay
+                      members:
+                      - element: notice
+                        namespace: http://example.com/pay
+                        schema: '#/components/schemas/NoticeType'
+                      - element: urgentNotice
+                        namespace: http://example.com/pay
+                        schema: '#/components/schemas/urgentNotice'
+                required:
+                - ok
+        '500':
+          description: SOAP Fault
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoapFault'
+components:
+  schemas:
+    SoapFault:
+      type: object
+      description: SOAP Fault mapped to a JSON error payload.
+      properties:
+        faultcode:
+          type: string
+        faultstring:
+          type: string
+        detail:
+          type: string
+    creditCard:
+      type: object
+      properties:
+        amount:
+          type: number
+          xml:
+            name: amount
+            namespace: http://example.com/pay
+        cardNumber:
+          type: string
+          xml:
+            name: cardNumber
+            namespace: http://example.com/pay
+      required:
+      - amount
+      - cardNumber
+    bankTransfer:
+      type: object
+      properties:
+        amount:
+          type: number
+          xml:
+            name: amount
+            namespace: http://example.com/pay
+        iban:
+          type: string
+          xml:
+            name: iban
+            namespace: http://example.com/pay
+      required:
+      - amount
+      - iban
+    visaCard:
+      type: object
+      properties:
+        amount:
+          type: number
+          xml:
+            name: amount
+            namespace: http://example.com/pay
+        visaId:
+          type: string
+          xml:
+            name: visaId
+            namespace: http://example.com/pay
+      required:
+      - amount
+      - visaId
+    NoticeType:
+      type: object
+      properties:
+        text:
+          type: string
+          xml:
+            name: text
+            namespace: http://example.com/pay
+      required:
+      - text
+    urgentNotice:
+      type: object
+      properties:
+        text:
+          type: string
+          xml:
+            name: text
+            namespace: http://example.com/pay
+        deadline:
+          type: string
+          xml:
+            name: deadline
+            namespace: http://example.com/pay
+      required:
+      - text
+      - deadline
+x-soap:
+  wsdl: tests/fixtures/substitution.wsdl
+  generator: spec2openapi/0.4.0
+  skippedOperations: []

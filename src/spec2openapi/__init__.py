@@ -4,7 +4,8 @@ FastMCP-ready OpenAPI 3.x documents.
 Core API (the zeep/lxml SOAP stack loads only on first SOAP use):
 
     convert_swagger     Swagger 2.0 dict -> OpenAPI 3.0/3.1 dict
-    convert_wsdl        WSDL path/URL -> OpenAPI dict with x-soap
+    convert_wsdl        WSDL -> OpenAPI dict with x-soap (path, URL,
+                        zip bundle, or in-memory content=/files=)
     load_spec           read a spec from a path or http(s) URL
     dump_spec           serialize a spec to YAML/JSON text
     check_fastmcp_ready static FastMCP-readiness problems ([] == ready)
@@ -18,7 +19,7 @@ Optional MCP runtime (pip install 'spec2openapi[mcp]'): from_openapi_spec,
 from_wsdl, BridgeOptions, SoapBridgeTransport.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from typing import TYPE_CHECKING
 

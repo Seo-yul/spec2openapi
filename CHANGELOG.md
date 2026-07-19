@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-19
+
+### Added
+- `convert_wsdl`/`parse_wsdl` accept in-memory and multi-file input
+  (#119): `content=` takes the document itself as str/bytes (zip bytes
+  are detected and treated as a bundle), `files=` takes an in-memory
+  bundle whose relative imports resolve within it (`entry` auto-detected
+  for a single `.wsdl`), and a `source` path to a zip archive is
+  unpacked — with zip-slip-safe member names, an uncompressed size cap,
+  and a logical source label (`<memory>`, `<bundle:entry>`,
+  `archive.zip!entry`) in `x-soap.wsdl` and error messages.
+  `spec2openapi convert -` reads the WSDL from stdin. Exactly one input
+  kind must be given; violations raise `ConversionError`.
+- WSDL-converted schemas carry deterministic, source-derived `example`
+  values (#117): the first enumeration value, or a fixed canonical
+  formatting illustration for date/time/duration formats — no value
+  synthesis, and a property with an XSD `default` keeps only the
+  default. Helps LLMs produce correctly-formatted tool arguments.
+- XSD substitution groups are supported (#115): a reference to a
+  substitution-group head converts to a `oneOf` of self-describing
+  single-property branches (`{"creditCard": {…}}` names the wire
+  element), with member schemas as components, transitive membership,
+  abstract heads/members excluded, and an `x-soap-substitution` marker
+  the SOAP bridge uses to serialize the chosen member element (and to
+  wrap the wire element back symmetrically on responses). Previously
+  the head's base type was emitted and the members silently vanished.
+  `blocking`/`final` constraints are ignored.
+
+### Fixed
+- WSDL parse failures now stay inside the `ConversionError` contract
+  (#113): a malformed/unfetchable WSDL raises `ConversionError`
+  (previously bare `ValueError`) with the source label truncated,
+  `UnsupportedWsdlError` (strict-mode skips, no convertible operations)
+  is a `ConversionError` subclass, and passing WSDL *content* instead of
+  a path/URL is detected early with a targeted hint.
+
 ## [0.3.0] - 2026-07-19
 
 ### Added
@@ -330,7 +366,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.0...v0.2.1

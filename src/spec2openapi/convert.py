@@ -19,8 +19,11 @@ from .openapi import (  # noqa: F401  (re-exported)
 
 
 def convert_wsdl(
-    source: str,
+    source: str | os.PathLike | None = None,
     *,
+    content: str | bytes | None = None,
+    files: dict[str, str | bytes] | None = None,
+    entry: str | None = None,
     title: str | None = None,
     version: str = "1.0.0",
     base_path: str = "/operations",
@@ -32,12 +35,17 @@ def convert_wsdl(
     forbid_external: bool = False,
     huge_tree: bool = False,
 ) -> dict[str, Any]:
-    """WSDL (path/URL) -> OpenAPI dict with x-soap extensions.
+    """WSDL -> OpenAPI dict with x-soap extensions.
+
+    The input is exactly one of `source` (path, http(s) URL, or zip
+    bundle), `content` (the document itself as str/bytes; zip bytes are
+    detected), or `files` (an in-memory bundle whose relative imports
+    resolve within it, with `entry` naming the document to convert).
 
     Set forbid_external=True when the WSDL comes from an untrusted source
     (refuses to fetch remote wsdl:/xsd: imports).
     """
-    if not isinstance(source, (str, os.PathLike)):
+    if source is not None and not isinstance(source, (str, os.PathLike)):
         raise ConversionError(
             "convert_wsdl expects a WSDL file path or URL (str), "
             f"got {type(source).__name__}"
@@ -48,7 +56,8 @@ def convert_wsdl(
     from .parser import parse_wsdl  # defers zeep/lxml to first SOAP use
 
     parsed = parse_wsdl(
-        source, service=service, port=port,
+        source, content=content, files=files, entry=entry,
+        service=service, port=port,
         prefer_soap12=prefer_soap12, strict=strict,
         forbid_external=forbid_external, huge_tree=huge_tree,
     )
