@@ -60,8 +60,10 @@ pip install "spec2openapi[mcp]"   # + SOAP bridge & runtime — required to serv
 # See what a WSDL contains (operations, headers, faults, style)
 spec2openapi inspect https://legacy-host/OrderService?wsdl
 
-# WSDL -> OpenAPI
+# WSDL -> OpenAPI (also accepts a zip bundle or '-' for stdin)
 spec2openapi convert https://legacy-host/OrderService?wsdl -o orders.openapi.yaml
+spec2openapi convert vendor-bundle.zip -o orders.openapi.yaml
+spec2openapi convert - < service.wsdl
 
 # Swagger 2.0 -> OpenAPI 3.x (assumptions reported on stderr)
 spec2openapi upgrade swagger2.json -o service.openapi.yaml
@@ -146,7 +148,7 @@ The generated paths (`/operations/...`) are *not* real REST endpoints — a SOAP
 | `headers[]` | `soap:header` parts with schema refs |
 | `faults[]` | declared faults with schema refs |
 
-Serialization rules (schema `xml` annotations): `xml.name`/`xml.namespace` (absent namespace = unqualified), `xml.attribute: true`, `xml.x-text: true` (simpleContent text), arrays repeat the element, and **property order = XSD sequence order** (do not alphabetize the document). `x-soap-choice` lists mutually exclusive property groups.
+Serialization rules (schema `xml` annotations): `xml.name`/`xml.namespace` (absent namespace = unqualified), `xml.attribute: true`, `xml.x-text: true` (simpleContent text), arrays repeat the element, and **property order = XSD sequence order** (do not alphabetize the document). `x-soap-choice` lists mutually exclusive property groups. `x-soap-substitution` marks a substitution-group value: the JSON is a self-describing single-key object (`{"creditCard": {…}}`) and the wire carries that member element itself — the head element never appears.
 
 The `[mcp]` extra contains a verified implementation of this contract (`src/spec2openapi/bridge.py`) — use it directly (via `spec2openapi serve`) or as the reference for your own runtime. **There is no way to serve a SOAP-converted spec without an implementation of this contract**; a standard OpenAPI runtime cannot do it.
 

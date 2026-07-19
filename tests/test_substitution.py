@@ -123,3 +123,33 @@ def test_fastmcp_roundtrip_keeps_branches(spec):
     arg = str(tools[0].inputSchema)
     # FastMCP normalizes oneOf to anyOf; the alternatives must survive
     assert "creditCard" in arg and "bankTransfer" in arg
+
+
+async def test_e2e_tool_call_serializes_member_element(soap_server):
+    """Full loop: MCP tool call -> bridge -> mock SOAP server -> wrapped
+    response. The server faults if the abstract head appears on the wire."""
+    pytest.importorskip("fastmcp")
+    import json as _json
+
+    from fastmcp import Client
+
+    from spec2openapi import BridgeOptions, from_openapi_spec
+
+    spec = convert_wsdl(WSDL)
+    mcp = from_openapi_spec(
+        spec, options=BridgeOptions(endpoint=f"{soap_server}/pay",
+                                    trust_env=False),
+    )
+    async with Client(mcp) as client:
+        result = await client.call_tool("Pay", {
+            "orderId": "A1",
+            "payment": {"creditCard": {"amount": 9.5, "cardNumber": "4111"}},
+        })
+        data = getattr(result, "data", None)
+        if not isinstance(data, dict):
+            data = getattr(result, "structured_content", None)
+        if not isinstance(data, dict):
+            data = _json.loads(result.content[0].text)
+        assert data["ok"] is True
+        assert data["notice"]["urgentNotice"]["text"] == \
+            "paid 9.5 via creditCard"

@@ -40,9 +40,11 @@ pip install -e ".[dev]"
 # WSDL 내용 확인 (오퍼레이션/헤더/fault/스타일)
 spec2openapi inspect https://legacy-host/OrderService?wsdl
 
-# WSDL 변환
+# WSDL 변환 (zip 번들, stdin('-')도 입력 가능)
 spec2openapi convert https://legacy-host/OrderService?wsdl -o orders.openapi.yaml
 spec2openapi convert service.wsdl --openapi-version 3.1 --format json
+spec2openapi convert vendor-bundle.zip -o orders.openapi.yaml
+spec2openapi convert - < service.wsdl
 
 # Swagger 2.0 -> OpenAPI 3.x 업그레이드 (FastMCP는 3.x만 지원)
 # --strict: 가정/손실 변환이 하나라도 필요하면 목록과 함께 실패
@@ -56,7 +58,7 @@ spec2openapi validate orders.openapi.yaml
 spec2openapi serve orders.openapi.yaml --transport http --port 8000
 ```
 
-convert 옵션: `--openapi-version 3.0|3.1`(기본값 `3.0`, 출력 스펙에는 `openapi: 3.0.3`으로 기록), `--service`/`--port-name`, `--prefer-soap12`, `--base-path`, `--title`, `--strict`(미지원 오퍼레이션을 건너뛰지 않고 실패 처리), `--forbid-external`(원격 wsdl:/xsd: import를 가져오지 않음. 신뢰할 수 없는 WSDL을 변환할 때 권장하며, 로컬 상대경로 import는 그대로 동작한다), `--huge-tree`(초대형 WSDL을 위해 libxml2 제한 해제).
+convert 입력: 파일 경로, http(s) URL, zip 번들(WSDL+XSD 묶음, 안전 검사 포함), `-`(stdin). convert 옵션: `--openapi-version 3.0|3.1`(기본값 `3.0`, 출력 스펙에는 `openapi: 3.0.3`으로 기록), `--service`/`--port-name`, `--prefer-soap12`, `--base-path`, `--title`, `--strict`(미지원 오퍼레이션을 건너뛰지 않고 실패 처리), `--forbid-external`(원격 wsdl:/xsd: import를 가져오지 않음. 신뢰할 수 없는 WSDL을 변환할 때 권장하며, 로컬 상대경로 import는 그대로 동작한다), `--huge-tree`(초대형 WSDL을 위해 libxml2 제한 해제).
 
 모든 XML 파싱은 DTD 로딩·엔티티 해석·파서 차원의 네트워크 접근을 차단한다. 상세한 보안 노트는 [SECURITY.md](SECURITY.md) 참조.
 
@@ -173,6 +175,7 @@ XML 직렬화 규칙(스키마의 `xml` 어노테이션):
 - 배열 프로퍼티: 같은 이름의 엘리먼트 반복.
 - `properties`의 키 순서 = XSD sequence 순서. 스펙 후처리 시 순서를 바꾸면 안 된다.
 - `x-soap-choice`: 그룹당 하나만 넣어야 하는 프로퍼티 목록(스키마 차원에서는 전부 optional 처리됨).
+- `x-soap-substitution`: substitution group 값의 표식. JSON은 멤버 이름을 키로 한 자기서술 단일키 객체(`{"creditCard": {…}}`)이며, 와이어에는 그 멤버 element 자체가 실린다 — head element는 절대 등장하지 않는다.
 
 루트 `x-soap`에는 원본 WSDL 경로, 생성기 버전, 스킵된 오퍼레이션 목록이 기록된다.
 
