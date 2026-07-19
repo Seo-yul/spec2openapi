@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `convert_wsdl`/`parse_wsdl` accept in-memory and multi-file input
+  (#119): `content=` takes the document itself as str/bytes (zip bytes
+  are detected and treated as a bundle), `files=` takes an in-memory
+  bundle whose relative imports resolve within it (`entry` auto-detected
+  for a single `.wsdl`), and a `source` path to a zip archive is
+  unpacked — with zip-slip-safe member names, an uncompressed size cap,
+  and a logical source label (`<memory>`, `<bundle:entry>`,
+  `archive.zip!entry`) in `x-soap.wsdl` and error messages.
+  `spec2openapi convert -` reads the WSDL from stdin. Exactly one input
+  kind must be given; violations raise `ConversionError`.
 - WSDL-converted schemas carry deterministic, source-derived `example`
   values (#117): the first enumeration value, or a fixed canonical
   formatting illustration for date/time/duration formats — no value
