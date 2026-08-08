@@ -1,0 +1,145 @@
+# Hand-written OpenAPI 3.0 input for minify_for_mcp tests: carries
+# machine-wiring vendor extensions (must be dropped from schemas, kept on
+# operations), documentation-bearing extensions (must survive), media-type
+# examples in both shapes, parameter examples to hoist, wildcard/default
+# error responses, and $ref'd components.
+openapi: 3.0.3
+info:
+  title: minify-input
+  version: "1.0"
+  contact:
+    name: API Team
+servers:
+  - url: http://minify-input.invalid
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      summary: Create a pet
+      description: Registers a new pet and returns the stored record.
+      x-op-wiring:
+        note: operation-level extensions never leak; must be left alone
+      parameters:
+        - name: region
+          in: query
+          description: Deployment region the pet is registered in.
+          example: eu-west-1
+          schema:
+            type: string
+        - name: trace
+          in: query
+          example: tr-123
+          schema:
+            $ref: "#/components/schemas/Trace"
+      requestBody:
+        content:
+          application/json:
+            example:
+              name: Bella
+              status: A
+            schema:
+              type: object
+              x-root-wiring: dropped-at-root
+              properties:
+                name:
+                  type: string
+                  description: Display name of the pet.
+                status:
+                  type: string
+                  enum: [A, D]
+                  x-enum-varnames: [Active, Deleted]
+                  x-wire-hint: dropped-on-property
+                legacy:
+                  type: string
+                  x-pattern: "(?i)legacy"
+      responses:
+        "200":
+          description: Stored pet record.
+          content:
+            application/json:
+              examples:
+                external-only:
+                  externalValue: https://example.com/pet.json
+                good:
+                  summary: A stored pet
+                  value:
+                    id: 7
+                    name: Bella
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                    x-enum-descriptions: kept-on-response-property
+        "302":
+          description: See other (redirect; must not be folded)
+        "404":
+          description: pet not found
+        "4XX":
+          description: |-
+            client error
+            second line must not be folded
+        default:
+          $ref: "#/components/responses/Oops"
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      summary: Fetch one pet
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: The pet.
+        "404":
+          description: pet not found
+    put:
+      operationId: replacePet
+      description: >-
+        Replaces the record. This description is intentionally long so the
+        max_description option has something real to truncate in tests.
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - $ref: "#/components/parameters/SharedLimit"
+      requestBody:
+        content:
+          application/xml:
+            example: "<pet/>"
+          application/json:
+            example:
+              blob: "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+            schema:
+              type: object
+              properties:
+                blob:
+                  type: string
+      responses:
+        "200":
+          description: Replaced.
+components:
+  schemas:
+    Trace:
+      type: object
+      x-comp-wiring: dropped-inside-components
+      properties:
+        span:
+          type: string
+          example: span-1
+  parameters:
+    SharedLimit:
+      name: limit
+      in: query
+      description: Maximum number of records returned by the call.
+      example: 10
+      schema:
+        type: integer
+  responses:
+    Oops:
+      description: unexpected error

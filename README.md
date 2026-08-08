@@ -37,6 +37,7 @@ The fixed-runtime deployment model — build one image, swap the spec via a Kube
 - **Swagger 2.0 → OpenAPI 3.x upgrade** — full mechanical mapping (servers, requestBody, formData/multipart, parameter schema wrapping, `collectionFormat` → `style`/`explode`, `$ref` rewriting, security schemes, `type: file`, `x-nullable`, discriminator), hardened against real-world documents: deep local `$ref`s are hoisted to components, dangling refs and duplicate parameters are neutralized, type-mismatched defaults are coerced, and common vendor extensions (`x-example`, `x-oneOf`, `x-anyOf`) are promoted to native keywords. Every assumption made for missing information is recorded in `x-s2o.assumptions`; untranslatable constructs are preserved as `x-` extensions and listed in `x-s2o.lossy`.
 - **Real OpenAPI 3.1 output** — `--openapi-version 3.1` is a semantic conversion to JSON Schema 2020-12 style (`nullable` → `type` arrays, boolean `exclusiveMinimum`/`exclusiveMaximum` → numeric bounds), not a version-string bump.
 - **FastMCP compatibility, guaranteed and verifiable** — operationIds are generated in FastMCP's tool-name alphabet (`[A-Za-z0-9_]`, unique, ≤64 chars) so *tool name == operationId*. `spec2openapi validate` proves it: static checks, `openapi-spec-validator`, and a real `FastMCP.from_openapi()` round-trip listing the resulting tools.
+- **MCP tool-payload minification (optional)** — `minify_for_mcp()` shrinks and enriches what FastMCP actually sends the model: foreign vendor extensions are stripped from schema subtrees, and error responses / payload examples — which the MCP tool shape otherwise drops — can be folded into tool descriptions deterministically. Serving behavior is unchanged. See [Minifying the LLM-facing surface](#minifying-the-llm-facing-surface-optional).
 - **SOAP bridge — required to *serve* SOAP specs** — `pip install "spec2openapi[mcp]"` adds the bridge (custom httpx transport) that implements the `x-soap` contract, plus FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors. **Swagger-converted (pure REST) specs do not need this** — any OpenAPI runtime serves them. Only SOAP-converted specs require the bridge at runtime.
 
 ## Installation
@@ -163,6 +164,23 @@ Upgrading is favorable: OpenAPI 3.x is a superset of Swagger 2.0, so almost noth
 3. **Verify the outcome** — `spec2openapi validate` runs the actual FastMCP round-trip; assumptions never block tool generation because tools only need paths and schemas.
 
 Pipelines that must not accept guessed conversions can pass `--strict` to `upgrade` (or `strict=True` to `convert_swagger`): the conversion then fails with the full list of assumption/lossy records instead of applying them.
+
+## Minifying the LLM-facing surface (optional)
+
+When a spec is served over MCP, the model never reads the OpenAPI document. FastMCP sends the tool list: `name`, `description`, `inputSchema`, and (FastMCP 3.x) an `outputSchema` built from the 2xx response schema. Everything else — `info`, unused components, error responses, media-type examples, the `$ref` structure — stays on the server. That has two costs: schema content is copied into tool schemas verbatim, so machine-to-machine vendor extensions burn context tokens in every `tools/list`; and human-authored facts with no slot in the tool shape (error responses, request/response examples) silently vanish.
+
+`minify_for_mcp` addresses both directions as an optional post-processing step — the conversion pipeline itself is unchanged:
+
+```python
+spec = spec2openapi.convert_swagger(legacy)          # or convert_wsdl(...)
+spec = spec2openapi.minify_for_mcp(spec, enrich=("errors", "examples"))
+```
+
+- **Default**: foreign vendor `x-*` extensions are removed from schema subtrees (the locations FastMCP copies into tool payloads). Everything a runtime or a reader needs survives: `x-soap*` and `xml` annotations (SOAP bridge), `x-s2o`, `x-fastmcp-*`, the project's preservation extensions (`x-pattern`, `x-collectionFormat`), and documentation-bearing extensions (`x-enum-varnames`, `x-example`, ...). Protect your own with `keep_extensions=("x-acme-*",)`.
+- **`enrich`**: `"errors"` folds error responses into the description (`Errors: 404 (not found); ...` — they never reach the model otherwise); `"examples"` folds request/response payload examples (`Example request: {...}`) and hoists parameter-level `example` values into the parameter schema, where FastMCP actually shows them. Only facts already in the document are used — nothing is invented, and re-runs never duplicate a fold.
+- **Opt-in trims**: `max_description=N` caps the descriptions that reach the payload (truncated text is marked with `…`); `drop_value_examples=True` strips in-schema examples — they usually *help* the model format arguments, so measure before enabling.
+
+For any option combination the output is a valid OpenAPI document, still passes `check_fastmcp_ready`, and serves identically — no option touches the callable surface, and SOAP bridge envelopes are byte-identical. What was removed or folded is summarized under `x-s2o.minify`. Minification is one-way: write the result to a separate file and keep the original.
 
 ## Kubernetes: one image, many MCP servers
 

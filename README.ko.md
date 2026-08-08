@@ -151,6 +151,23 @@ deep copy하지 않음), 입력을 계속 쓰면서 결과를 수정하려면 `c
 - 테스트 스위트가 모든 픽스처 WSDL에 대해 3.0/3.1 두 버전 모두 라운드트립을 검증한다.
 - description, enum, pattern, min/max 등은 tool 스키마까지 그대로 전달되어 LLM의 인자 생성 품질을 높인다.
 
+## LLM에게 실리는 표면 최소화 (선택 기능)
+
+스펙을 MCP로 서빙하면 모델은 OpenAPI 문서를 읽지 않는다. FastMCP가 보내는 것은 tool 목록이며, 각 tool은 `name`, `description`, `inputSchema`, 그리고 FastMCP 3.x부터는 2xx 응답 스키마로 만든 `outputSchema`를 담는다. 나머지(`info`, 참조되지 않는 컴포넌트, 에러 응답, 미디어타입 example, `$ref` 구조)는 서버에 남는다. 그래서 두 가지 비용이 생긴다. 스키마 내용은 tool 스키마로 그대로 복사되므로 기계 배선용 벤더 확장이 모든 `tools/list` 응답에서 컨텍스트 토큰을 낭비하고, tool 형태에 자리가 없는 정보(에러 응답, request/response example)는 사람이 써 두었어도 모델에게 전달되지 않는다.
+
+`minify_for_mcp`는 이 두 방향을 모두 다루는 선택적 후처리 단계다. 변환 파이프라인 자체는 그대로다.
+
+```python
+spec = spec2openapi.convert_swagger(legacy)          # 또는 convert_wsdl(...)
+spec = spec2openapi.minify_for_mcp(spec, enrich=("errors", "examples"))
+```
+
+- **기본 동작**: 보존 목록에 없는 벤더 `x-*` 확장을 스키마 서브트리에서 제거한다(FastMCP가 tool 페이로드로 복사하는 위치들). 런타임과 독자가 필요로 하는 것은 전부 살아남는다. SOAP 브리지가 읽는 `x-soap*`와 `xml` 어노테이션, `x-s2o`, `x-fastmcp-*`, 이 프로젝트의 보존용 확장(`x-pattern`, `x-collectionFormat`), 문서성 확장(`x-enum-varnames`, `x-example` 등)이 그렇다. 자체 확장은 `keep_extensions=("x-acme-*",)`로 지킨다.
+- **`enrich`**: `"errors"`는 에러 응답을 `Errors: 404 (not found); ...` 형태의 한 줄로 description에 접어 넣는다(에러 응답은 그 외의 방법으로는 모델에게 전달되지 않는다). `"examples"`는 request/response 페이로드 example을 `Example request: {...}` 줄로 접고, 파라미터 수준 `example` 값을 스키마 안으로 옮겨 FastMCP가 실제로 보여주는 위치에 놓는다. 문서에 이미 있는 사실만 사용하며 아무것도 지어내지 않고, 다시 실행해도 중복으로 접히지 않는다.
+- **opt-in 축소**: `max_description=N`은 페이로드에 도달하는 description 길이를 제한한다(잘린 텍스트는 `…`로 표시). `drop_value_examples=True`는 스키마 안의 example을 제거하는데, example은 보통 모델의 인자 형식을 돕는 정보이므로 효과를 측정한 뒤 켜는 것을 권한다.
+
+어떤 옵션 조합에서도 결과물은 유효한 OpenAPI 문서이고 `check_fastmcp_ready`를 통과하며 동일하게 서빙된다. 어떤 옵션도 호출 표면을 건드리지 않으므로 SOAP 브리지 envelope도 바이트 단위로 같다. 제거되거나 접힌 내용은 `x-s2o.minify`에 요약된다. 경량화는 단방향이므로 결과는 별도 파일로 저장하고 원본을 보관한다.
+
 ## x-soap 확장 명세 (런타임 구현 계약)
 
 오퍼레이션 레벨 `paths.*.post.x-soap`:
