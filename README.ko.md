@@ -151,6 +151,43 @@ deep copy하지 않음), 입력을 계속 쓰면서 결과를 수정하려면 `c
 - 테스트 스위트가 모든 픽스처 WSDL에 대해 3.0/3.1 두 버전 모두 라운드트립을 검증한다.
 - description, enum, pattern, min/max 등은 tool 스키마까지 그대로 전달되어 LLM의 인자 생성 품질을 높인다.
 
+## LLM에게 실리는 표면 최소화 (선택 기능)
+
+스펙을 MCP로 서빙하면 모델은 OpenAPI 문서를 읽지 않는다. FastMCP가 보내는 것은 tool 목록이며, 각 tool은 `name`, `description`, `inputSchema`, 그리고 FastMCP 3.x부터는 2xx 응답 스키마로 만든 `outputSchema`를 담는다. 나머지(`info`, 참조되지 않는 컴포넌트, 에러 응답, 미디어타입 example, `$ref` 구조)는 서버에 남는다. 그래서 두 가지 비용이 생긴다. 스키마 내용은 tool 스키마로 그대로 복사되므로 기계 배선용 벤더 확장이 모든 `tools/list` 응답에서 컨텍스트 토큰을 낭비하고, tool 형태에 자리가 없는 정보(에러 응답, request/response example)는 사람이 써 두었어도 모델에게 전달되지 않는다.
+
+`minify_for_mcp`는 이 두 방향을 모두 다루는 선택적 후처리 단계다. 변환 파이프라인 자체는 그대로다.
+
+```python
+spec = spec2openapi.convert_swagger(legacy)          # 또는 convert_wsdl(...)
+spec = spec2openapi.minify_for_mcp(spec, enrich=("errors", "examples"))
+```
+
+- **기본 동작**: 보존 목록에 없는 벤더 `x-*` 확장을 스키마 서브트리에서 제거한다(FastMCP가 tool 페이로드로 복사하는 위치들). 런타임과 독자가 필요로 하는 것은 전부 살아남는다. SOAP 브리지가 읽는 `x-soap*`와 `xml` 어노테이션, `x-s2o`, `x-fastmcp-*`, 이 프로젝트의 보존용 확장(`x-pattern`, `x-collectionFormat`), 문서성 확장(`x-enum-varnames`, `x-example` 등)이 그렇다. 자체 확장은 `keep_extensions=("x-acme-*",)`로 지킨다.
+- **`enrich`**: `"errors"`는 에러 응답을 `Errors: 404 (not found); ...` 형태의 한 줄로 description에 접어 넣는다(에러 응답은 그 외의 방법으로는 모델에게 전달되지 않는다). `"examples"`는 request/response 페이로드 example을 `Example request: {...}` 줄로 접고, 파라미터 수준 `example` 값을 스키마 안으로 옮겨 FastMCP가 실제로 보여주는 위치에 놓는다. 문서에 이미 있는 사실만 사용하며 아무것도 지어내지 않고, 다시 실행해도 중복으로 접히지 않는다.
+- **opt-in 축소**: `max_description=N`은 페이로드에 도달하는 description 길이를 제한한다(잘린 텍스트는 `…`로 표시). `drop_value_examples=True`는 스키마 안의 example을 제거하는데, example은 보통 모델의 인자 형식을 돕는 정보이므로 효과를 측정한 뒤 켜는 것을 권한다.
+
+어떤 옵션 조합에서도 결과물은 유효한 OpenAPI 문서이고 `check_fastmcp_ready`를 통과하며 동일하게 서빙된다. 어떤 옵션도 호출 표면을 건드리지 않으므로 SOAP 브리지 envelope도 바이트 단위로 같다. 제거되거나 접힌 내용은 `x-s2o.minify`에 요약된다. 경량화는 단방향이므로 결과는 별도 파일로 저장하고 원본을 보관한다.
+
+### 대형 스펙: route map으로 tool 개수 제어
+
+`minify_for_mcp`는 tool 하나하나를 다듬지만, 대형 서비스에서 지배적인 컨텍스트 비용은 tool 개수다. operation마다 tool이 하나씩 생기고, MCP 클라이언트는 `tools/list` 결과 전체를 매 요청마다 모델 컨텍스트에 싣는다. `examples/` 실측 기준 tool 하나의 페이로드가 대략 0.3~1.7KB이므로 operation 100개짜리 서비스는 대화가 시작되기도 전에 수십 KB를 싣게 되고, 선택지가 100개인 모델은 5개인 모델보다 tool을 잘못 고르는 일도 잦다. 실제 에이전트에게 필요한 것은 보통 그중 몇 개뿐이다.
+
+어떤 operation을 tool로 만들지 고르는 일은 OpenAPI→MCP 전환 계층의 몫이고, FastMCP가 route map으로 이미 제공한다. `from_openapi_spec`은 추가 키워드 인자를 `FastMCP.from_openapi`로 그대로 전달하므로 route map이 그대로 통과되고, 제외된 operation은 호출 자체가 들어오지 않으므로 SOAP 브리지도 그대로 동작한다.
+
+```python
+from fastmcp.server.providers.openapi import MCPType, RouteMap
+
+mcp = spec2openapi.from_openapi_spec(
+    spec,
+    route_maps=[
+        RouteMap(tags={"OrderService"}, mcp_type=MCPType.TOOL),  # 이것만 유지
+        RouteMap(mcp_type=MCPType.EXCLUDE),                      # 나머지 제외
+    ],
+)
+```
+
+WSDL에서 변환된 스펙은 모든 operation에 서비스 이름이 태그로 붙어 있으므로, 서비스 단위 서브셋에는 별도 태깅이 필요 없다. 참조 CLI(`spec2openapi serve`)는 route map을 노출하지 않으므로, 서브셋이 필요하면 파이썬 진입점을 쓴다.
+
 ## x-soap 확장 명세 (런타임 구현 계약)
 
 오퍼레이션 레벨 `paths.*.post.x-soap`:

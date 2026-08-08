@@ -9,6 +9,8 @@ Core API (the zeep/lxml SOAP stack loads only on first SOAP use):
     load_spec           read a spec from a path or http(s) URL
     dump_spec           serialize a spec to YAML/JSON text
     check_fastmcp_ready static FastMCP-readiness problems ([] == ready)
+    minify_for_mcp      optional post-processing: shrink/enrich what the
+                        MCP tool payload shows the model (see minify.py)
     is_swagger2 / spec_has_soap / to_openapi_31 / parse_wsdl / build_spec
 
 Everything the converters assume or cannot translate is recorded in the
@@ -19,12 +21,13 @@ Optional MCP runtime (pip install 'spec2openapi[mcp]'): from_openapi_spec,
 from_wsdl, BridgeOptions, SoapBridgeTransport.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 from typing import TYPE_CHECKING
 
 from .convert import convert_wsdl, load_spec, spec_has_soap  # noqa: E402,F401
 from .errors import ConversionError  # noqa: E402,F401
+from .minify import minify_for_mcp  # noqa: E402,F401
 from .openapi import (  # noqa: E402,F401
     build_spec,
     check_fastmcp_ready,
@@ -55,6 +58,7 @@ __all__ = [
     "convert_swagger",
     "is_swagger2",
     "check_fastmcp_ready",
+    "minify_for_mcp",
     "ConversionError",
     # lazily loaded, require the [mcp] extra:
     "from_openapi_spec",

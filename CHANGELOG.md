@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-08
+
+### Added
+- `minify_for_mcp` (#128): optional post-processing that shrinks and
+  enriches the LLM-facing MCP tool payload of a converted spec. Foreign
+  vendor `x-*` extensions are removed from schema subtrees — the
+  locations FastMCP copies verbatim into tool schemas — while everything
+  a runtime or reader needs survives (`x-soap*`, `xml` annotations
+  including `x-text`, `x-s2o`, `x-fastmcp-*`, the lossy-preservation
+  companions `x-pattern`/`x-collectionFormat`, and documentation-bearing
+  extensions such as `x-enum-varnames`; `keep_extensions=` protects
+  custom ones). `enrich=("errors", "examples")` folds error responses
+  and media-type examples into tool descriptions and hoists
+  parameter-level `example` values into the parameter schema, using only
+  facts already present in the document. Opt-in trims: `max_description`
+  and `drop_value_examples`. For any option combination the output stays
+  a valid, FastMCP-ready OpenAPI document, serving behavior is unchanged
+  (byte-identical SOAP envelopes), the function is deterministic and
+  idempotent, and removals are summarized under `x-s2o.minify`.
+  Swagger 2.0 input raises `ConversionError` (convert first).
+
 ## [0.4.0] - 2026-07-19
 
 ### Added
@@ -366,7 +387,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.1...v0.2.2
