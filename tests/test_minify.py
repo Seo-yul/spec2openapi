@@ -383,6 +383,196 @@ _EXPECTED_LEAKS = {
 }
 
 
+# --- review-hardening regressions (PR #129) ---------------------------------
+# One test per confirmed finding of the PR review, in its severity order.
+
+import datetime
+
+import yaml
+
+
+def _tiny(op_extra: dict | None = None, **root_extra) -> dict:
+    op = {"operationId": "op1",
+          "responses": {"200": {"description": "ok"}}}
+    op.update(op_extra or {})
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/x": {"post": op}}}
+    spec.update(root_extra)
+    return spec
+
+
+def test_non_dict_root_x_s2o_survives():
+    spec = _tiny({"requestBody": {"content": {"application/json": {
+        "schema": {"type": "object", "x-junk": 1}}}}})
+    spec["x-s2o"] = "hand-written note"
+    mini = minify_for_mcp(spec, enrich=("errors",))
+    schema = (mini["paths"]["/x"]["post"]["requestBody"]["content"]
+              ["application/json"]["schema"])
+    assert "x-junk" not in schema           # dropping still works
+    assert mini["x-s2o"] == "hand-written note"  # user data untouched
+    assert minify_for_mcp(mini, enrich=("errors",)) == mini
+
+
+def test_summary_promotion_truncates_on_first_run():
+    spec = _tiny({"summary": "a summary well over the cap",
+                  "responses": {"404": {"description": "missing"}}})
+    once = minify_for_mcp(spec, max_description=10, enrich=("errors",))
+    twice = minify_for_mcp(once, max_description=10, enrich=("errors",))
+    assert twice == once
+    desc = once["paths"]["/x"]["post"]["description"]
+    base = desc.split("\n")[0]
+    assert len(base) <= 10 and base.endswith("…")
+
+
+def test_31_keywords_and_content_params_cleaned():
+    spec = _tiny({
+        "parameters": [{"name": "q", "in": "query", "content": {
+            "application/json": {"schema": {"x-junk-param": 1}}}}],
+        "requestBody": {"content": {"application/json": {"schema": {
+            "$defs": {"Inner": {"x-junk-defs": 1}},
+            "if": {"x-junk-if": 1},
+            "then": {"x-junk-then": 1},
+            "dependentSchemas": {"a": {"x-junk-dep": 1}},
+            "unevaluatedProperties": {"x-junk-uneval": 1},
+        }}}}})
+    spec["openapi"] = "3.1.0"
+    mini = minify_for_mcp(spec)
+    assert "x-junk" not in json.dumps(mini["paths"])  # subtrees cleaned
+    assert set(mini["x-s2o"]["minify"]["droppedExtensionKeys"]) == {
+        "x-junk-param", "x-junk-defs", "x-junk-if", "x-junk-then",
+        "x-junk-dep", "x-junk-uneval",
+    }
+
+
+def test_hoist_never_mutates_anchor_shared_schemas():
+    spec = yaml.safe_load("""
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      operationId: op1
+      parameters:
+        - {name: p1, in: query, example: FIRST, schema: &S {type: string}}
+        - {name: p2, in: query, example: SECOND, schema: *S}
+      responses:
+        "200": {description: ok}
+""")
+    mini = minify_for_mcp(spec, enrich=("examples",))
+    p1, p2 = mini["paths"]["/x"]["get"]["parameters"]
+    assert p1["schema"]["example"] == "FIRST"
+    assert p2["schema"]["example"] == "SECOND"
+
+
+def test_cyclic_schema_does_not_recurse_forever():
+    spec = yaml.safe_load("""
+openapi: 3.0.3
+info: {title: t, version: "1"}
+paths:
+  /x:
+    get:
+      operationId: op1
+      responses: {"200": {description: ok}}
+components:
+  schemas:
+    Node: &n
+      type: object
+      x-junk: 1
+      properties:
+        child: *n
+""")
+    mini = minify_for_mcp(spec)
+    assert "x-junk" not in mini["components"]["schemas"]["Node"]
+    assert mini["x-s2o"]["minify"]["counts"]["droppedExtensions"] == 1
+
+
+def test_non_string_description_is_left_alone():
+    spec = _tiny({"description": 123})
+    assert minify_for_mcp(spec) == spec
+
+
+def test_keep_extensions_accepts_a_bare_string():
+    spec = _tiny({"requestBody": {"content": {"application/json": {
+        "schema": {"x-acme-keep": 1, "x-junk": 2}}}}})
+    mini = minify_for_mcp(spec, keep_extensions="x-acme-*")
+    schema = (mini["paths"]["/x"]["post"]["requestBody"]["content"]
+              ["application/json"]["schema"])
+    assert schema == {"x-acme-keep": 1}
+
+
+def test_enrich_accepts_a_generator():
+    spec = _tiny({"responses": {"404": {"description": "nf"}}})
+    mini = minify_for_mcp(spec, enrich=(c for c in ["errors"]))
+    assert "Errors: 404 (nf)." in mini["paths"]["/x"]["post"]["description"]
+
+
+def test_marker_prose_does_not_suppress_folds():
+    spec = _tiny({"description": "Common Errors: are listed in the portal.",
+                  "responses": {"404": {"description": "nf"}}})
+    once = minify_for_mcp(spec, enrich=("errors",))
+    desc = once["paths"]["/x"]["post"]["description"]
+    assert desc == ("Common Errors: are listed in the portal.\n"
+                    "Errors: 404 (nf).")
+    assert minify_for_mcp(once, enrich=("errors",)) == once  # no dup
+
+
+def test_error_fold_fragments_are_capped():
+    spec = _tiny({"responses": {"500": {"description": "x" * 500}}})
+    mini = minify_for_mcp(spec, enrich=("errors",))
+    line = mini["paths"]["/x"]["post"]["description"].split("\n")[-1]
+    assert line.startswith("Errors: 500 (") and len(line) < 100
+    assert "…" in line
+
+
+def test_summary_only_channel_is_capped():
+    spec = _tiny({"summary": "a very long summary " * 5})
+    del spec["paths"]["/x"]["post"]["responses"]  # keep it minimal
+    spec["paths"]["/x"]["post"]["responses"] = {"200": {"description": "ok"}}
+    mini = minify_for_mcp(spec, max_description=20)
+    summary = mini["paths"]["/x"]["post"]["summary"]
+    assert len(summary) <= 20 and summary.endswith("…")
+
+
+@pytest.mark.parametrize("bad", [200.0, True, "50"])
+def test_max_description_rejects_non_int(bad):
+    with pytest.raises(ConversionError, match="max_description"):
+        minify_for_mcp(_tiny(), max_description=bad)
+
+
+def test_response_example_scan_continues_past_render_failures():
+    spec = _tiny({"responses": {
+        "200": {"description": "ok", "content": {"application/json": {
+            "example": {"big": "x" * 400}}}},
+        "201": {"description": "made", "content": {"application/json": {
+            "example": {"small": 1}}}},
+    }})
+    mini = minify_for_mcp(spec, enrich=("examples",))
+    desc = mini["paths"]["/x"]["post"]["description"]
+    assert 'Example response: {"small": 1}' in desc
+
+
+def test_nan_is_not_folded_and_dates_fold_as_isoformat():
+    spec = _tiny({"requestBody": {"content": {"application/json": {
+        "example": float("nan")}}}})
+    mini = minify_for_mcp(spec, enrich=("examples",))
+    # the source media example stays (folding never deletes), but no
+    # "Example request: NaN" line may be written into the description
+    assert "Example request:" not in json.dumps(
+        mini["paths"]["/x"]["post"].get("description", ""))
+    assert any("not JSON-serializable" in n
+               for n in mini["x-s2o"]["minify"]["notes"])
+    spec = _tiny({"requestBody": {"content": {"application/json": {
+        "example": {"start": datetime.date(2024, 5, 1)}}}}})
+    mini = minify_for_mcp(spec, enrich=("examples",))
+    assert ('Example request: {"start": "2024-05-01"}'
+            in mini["paths"]["/x"]["post"]["description"])
+
+
+def test_marker_shaped_descriptions_survive_a_noop_run():
+    spec = _tiny({"description": "\nErrors: handwritten note"})
+    assert minify_for_mcp(spec) == spec
+
+
 async def test_leak_map_regression():
     mcp = FastMCP.from_openapi(openapi_spec=_LEAK_SPEC, name="leak")
     async with Client(mcp) as client:
