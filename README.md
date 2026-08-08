@@ -182,6 +182,26 @@ spec = spec2openapi.minify_for_mcp(spec, enrich=("errors", "examples"))
 
 For any option combination the output is a valid OpenAPI document, still passes `check_fastmcp_ready`, and serves identically — no option touches the callable surface, and SOAP bridge envelopes are byte-identical. What was removed or folded is summarized under `x-s2o.minify`. Minification is one-way: write the result to a separate file and keep the original.
 
+### Large specs: control the tool *count* with route maps
+
+`minify_for_mcp` trims each tool, but on a large service the dominant context cost is the number of tools: every operation becomes one, and MCP clients load the entire `tools/list` result into the model's context on every request. Measured on `examples/`, one tool payload is roughly 0.3–1.7 KB — a 100-operation service ships tens of KB before the conversation starts, and a model choosing among 100 tools misfires more often than one choosing among 5. An agent usually needs a handful.
+
+Choosing which operations become tools is the OpenAPI→MCP layer's job, and FastMCP already owns it with route maps. `from_openapi_spec` forwards extra keyword arguments to `FastMCP.from_openapi`, so route maps pass straight through — and the SOAP bridge keeps working, because excluded operations simply never receive a call:
+
+```python
+from fastmcp.server.providers.openapi import MCPType, RouteMap
+
+mcp = spec2openapi.from_openapi_spec(
+    spec,
+    route_maps=[
+        RouteMap(tags={"OrderService"}, mcp_type=MCPType.TOOL),  # keep these
+        RouteMap(mcp_type=MCPType.EXCLUDE),                      # drop the rest
+    ],
+)
+```
+
+WSDL-converted specs tag every operation with its service name, so service-per-agent subsets need no extra tagging. The reference CLI (`spec2openapi serve`) does not expose route maps — use the Python entry point when you need a subset.
+
 ## Kubernetes: one image, many MCP servers
 
 ```bash
