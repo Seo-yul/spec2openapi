@@ -168,6 +168,26 @@ spec = spec2openapi.minify_for_mcp(spec, enrich=("errors", "examples"))
 
 어떤 옵션 조합에서도 결과물은 유효한 OpenAPI 문서이고 `check_fastmcp_ready`를 통과하며 동일하게 서빙된다. 어떤 옵션도 호출 표면을 건드리지 않으므로 SOAP 브리지 envelope도 바이트 단위로 같다. 제거되거나 접힌 내용은 `x-s2o.minify`에 요약된다. 경량화는 단방향이므로 결과는 별도 파일로 저장하고 원본을 보관한다.
 
+### 대형 스펙: route map으로 tool 개수 제어
+
+`minify_for_mcp`는 tool 하나하나를 다듬지만, 대형 서비스에서 지배적인 컨텍스트 비용은 tool 개수다. operation마다 tool이 하나씩 생기고, MCP 클라이언트는 `tools/list` 결과 전체를 매 요청마다 모델 컨텍스트에 싣는다. `examples/` 실측 기준 tool 하나의 페이로드가 대략 0.3~1.7KB이므로 operation 100개짜리 서비스는 대화가 시작되기도 전에 수십 KB를 싣게 되고, 선택지가 100개인 모델은 5개인 모델보다 tool을 잘못 고르는 일도 잦다. 실제 에이전트에게 필요한 것은 보통 그중 몇 개뿐이다.
+
+어떤 operation을 tool로 만들지 고르는 일은 OpenAPI→MCP 전환 계층의 몫이고, FastMCP가 route map으로 이미 제공한다. `from_openapi_spec`은 추가 키워드 인자를 `FastMCP.from_openapi`로 그대로 전달하므로 route map이 그대로 통과되고, 제외된 operation은 호출 자체가 들어오지 않으므로 SOAP 브리지도 그대로 동작한다.
+
+```python
+from fastmcp.server.providers.openapi import MCPType, RouteMap
+
+mcp = spec2openapi.from_openapi_spec(
+    spec,
+    route_maps=[
+        RouteMap(tags={"OrderService"}, mcp_type=MCPType.TOOL),  # 이것만 유지
+        RouteMap(mcp_type=MCPType.EXCLUDE),                      # 나머지 제외
+    ],
+)
+```
+
+WSDL에서 변환된 스펙은 모든 operation에 서비스 이름이 태그로 붙어 있으므로, 서비스 단위 서브셋에는 별도 태깅이 필요 없다. 참조 CLI(`spec2openapi serve`)는 route map을 노출하지 않으므로, 서브셋이 필요하면 파이썬 진입점을 쓴다.
+
 ## x-soap 확장 명세 (런타임 구현 계약)
 
 오퍼레이션 레벨 `paths.*.post.x-soap`:
