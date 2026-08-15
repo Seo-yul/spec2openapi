@@ -80,6 +80,20 @@ def _spec(paths):
             "paths": paths}
 
 
+def _statuses(report, cid):
+    return [(r.status, r.message) for r in report.results if r.id == cid]
+
+
+def _soap_op(oid="op", xsoap=None, **extra):
+    base = {"operationId": oid, "summary": "s",
+            "x-soap": xsoap if xsoap is not None else {
+                "soapVersion": "1.1", "endpoint": "http://e",
+                "input": {"element": "In"}, "output": {"element": "Out"}},
+            "responses": {"200": {"description": "ok"}}}
+    base.update(extra)
+    return {"post": base}
+
+
 def test_ready_problems_matches_frozen_messages():
     spec = _spec({
         "/a": {"get": {"responses": {}}},                       # oid 없음
@@ -166,3 +180,66 @@ def test_verify_never_raises_on_garbage():
                                               "responses": {}}}}}):
         report = verify(garbage, deep=False)
         assert isinstance(report, VerifyReport)
+
+
+def test_document_openapi3_check():
+    swagger = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+               "paths": {}}
+    report = verify(swagger, deep=False)
+    (res,) = [r for r in report.results if r.id == "document.openapi3"]
+    assert res.status == "fail" and "convert_swagger" in res.message
+
+    no_version = {"info": {"title": "t", "version": "1"}, "paths": {}}
+    (res,) = [r for r in verify(no_version, deep=False).results
+              if r.id == "document.openapi3"]
+    assert res.status == "fail"
+
+
+def test_tool_name_normalized_warns():
+    spec = _spec({"/a": {"get": {"operationId": "get.a", "summary": "s",
+                                 "responses": {}}}})
+    (res,) = [r for r in verify(spec, deep=False).results
+              if r.id == "tool-name.normalized"]
+    assert res.status == "warn" and "get_a" in res.message
+
+
+def test_tool_description_present_warns():
+    spec = _spec({"/a": {"get": {"operationId": "a", "responses": {}}}})
+    (res,) = [r for r in verify(spec, deep=False).results
+              if r.id == "tool-description.present"]
+    assert res.status == "warn"
+    # description 또는 summary가 있으면 pass
+    ok = _spec({"/a": {"get": {"operationId": "a", "description": "d",
+                               "responses": {}}}})
+    (res,) = [r for r in verify(ok, deep=False).results
+              if r.id == "tool-description.present"]
+    assert res.status == "pass"
+
+
+def test_xsoap_version_output_endpoint_checks():
+    spec = _spec({"/op": _soap_op(xsoap={
+        "soapVersion": "1,2",              # 오타: fail
+        "input": {"element": "In"},
+        "output": {},                       # element 없음: warn
+    })})                                    # endpoint 없음: warn
+    report = verify(spec, deep=False)
+    assert _statuses(report, "x-soap.version")[0][0] == "fail"
+    assert _statuses(report, "x-soap.output-element")[0][0] == "warn"
+    assert _statuses(report, "x-soap.endpoint")[0][0] == "warn"
+
+
+def test_xsoap_checks_pass_on_pure_rest_spec():
+    spec = _spec({"/a": {"get": {"operationId": "a", "summary": "s",
+                                 "responses": {}}}})
+    report = verify(spec, deep=False)
+    for cid in ("x-soap.version", "x-soap.output-element", "x-soap.endpoint",
+                "x-soap.mixed-rest", "x-soap.input-element"):
+        assert _statuses(report, cid) == [("pass", "")], cid
+
+
+def test_xsoap_mixed_rest_warns():
+    paths = {"/op": _soap_op()}
+    paths["/rest"] = {"get": {"operationId": "r", "summary": "s",
+                              "responses": {}}}
+    report = verify(_spec(paths), deep=False)
+    assert _statuses(report, "x-soap.mixed-rest")[0][0] == "warn"

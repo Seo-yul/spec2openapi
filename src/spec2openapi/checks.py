@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .openapi import _FASTMCP_NORM_RE, _SAFE_TOOL_RE, _operations
+from .swagger import is_swagger2
 
 
 @dataclass(frozen=True)
@@ -260,6 +261,106 @@ def _check_xsoap_input_element(spec):
     return out
 
 
+def _check_openapi3(spec):
+    if is_swagger2(spec):
+        return [_result("document.openapi3", "fail",
+                        "Swagger 2.0 document: run convert_swagger first")]
+    v = spec.get("openapi")
+    if not (isinstance(v, str) and v.startswith("3.")):
+        return [_result("document.openapi3", "fail",
+                        f"openapi version {v!r} is not 3.x")]
+    return []
+
+
+def _check_tool_name_normalized(spec):
+    out = []
+    for path, method, op in _operations(spec):
+        oid = op.get("operationId")
+        if (isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid)):
+            norm = _FASTMCP_NORM_RE.sub("_", oid)
+            if norm != oid:
+                out.append(_result(
+                    "tool-name.normalized", "warn",
+                    f"operationId '{oid}' is exposed as tool '{norm}' "
+                    "(FastMCP normalization)",
+                    location=_op_location(path, method)))
+    return out
+
+
+def _check_tool_description(spec):
+    out = []
+    for path, method, op in _operations(spec):
+        if not (op.get("description") or op.get("summary")):
+            name = op.get("operationId") or f"{str(method).upper()} {path}"
+            out.append(_result(
+                "tool-description.present", "warn",
+                f"{name}: operation has neither description nor summary; "
+                "the MCP tool will expose no description",
+                location=_op_location(path, method)))
+    return out
+
+
+def _soap_operations(spec):
+    for path, method, op in _operations(spec):
+        xsoap = op.get("x-soap")
+        if isinstance(xsoap, dict):
+            yield path, method, op, xsoap
+
+
+def _check_xsoap_version(spec):
+    out = []
+    for path, method, op, xsoap in _soap_operations(spec):
+        sv = xsoap.get("soapVersion")
+        if sv not in ("1.1", "1.2"):
+            oid = op.get("operationId") or f"{str(method).upper()} {path}"
+            out.append(_result(
+                "x-soap.version", "fail",
+                f"{oid}: x-soap.soapVersion {sv!r} is not '1.1' or '1.2'",
+                location=_op_location(path, method)))
+    return out
+
+
+def _check_xsoap_output_element(spec):
+    out = []
+    for path, method, op, xsoap in _soap_operations(spec):
+        if "output" in xsoap:
+            meta = xsoap["output"]
+            if not (isinstance(meta, dict) and meta.get("element")):
+                oid = op.get("operationId") or f"{str(method).upper()} {path}"
+                out.append(_result(
+                    "x-soap.output-element", "warn",
+                    f"{oid}: x-soap.output.element missing; response Body "
+                    "matching cannot be verified",
+                    location=_op_location(path, method)))
+    return out
+
+
+def _check_xsoap_endpoint(spec):
+    out = []
+    for path, method, op, xsoap in _soap_operations(spec):
+        if not xsoap.get("endpoint"):
+            oid = op.get("operationId") or f"{str(method).upper()} {path}"
+            out.append(_result(
+                "x-soap.endpoint", "warn",
+                f"{oid}: x-soap.endpoint missing (set SPEC2OPENAPI_ENDPOINT "
+                "at runtime)",
+                location=_op_location(path, method)))
+    return out
+
+
+def _check_xsoap_mixed_rest(spec):
+    has_soap = any(True for _ in _soap_operations(spec))
+    has_rest = any(not isinstance(op.get("x-soap"), dict)
+                   for _, _, op in _operations(spec))
+    if has_soap and has_rest:
+        return [_result(
+            "x-soap.mixed-rest", "warn",
+            "spec mixes x-soap and plain REST operations; the reference "
+            "runtime routes all traffic through the SOAP bridge, so REST "
+            "operations are not served correctly")]
+    return []
+
+
 # (id, fn) — 실행 순서; 보고서는 어차피 (id, location)으로 재정렬된다.
 # frozen 8종 중 document.mapping은 verify()/fastmcp_ready_problems()의
 # 입구 가드로 처리되므로 목록에 없다.
@@ -271,6 +372,13 @@ _STATIC_CHECKS: list = [
     ("tool-name.unique", _check_tool_name_unique),
     ("tool-name.normalization-collision", _check_normalization_collision),
     ("x-soap.input-element", _check_xsoap_input_element),
+    ("document.openapi3", _check_openapi3),
+    ("tool-name.normalized", _check_tool_name_normalized),
+    ("tool-description.present", _check_tool_description),
+    ("x-soap.version", _check_xsoap_version),
+    ("x-soap.output-element", _check_xsoap_output_element),
+    ("x-soap.endpoint", _check_xsoap_endpoint),
+    ("x-soap.mixed-rest", _check_xsoap_mixed_rest),
 ]
 
 _READY_IDS = frozenset((
