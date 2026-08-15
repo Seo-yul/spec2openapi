@@ -53,6 +53,7 @@ spec2openapi upgrade swagger2.json -o service.openapi.yaml   # 파일 또는 URL
 # FastMCP 변환 가능성 검증 (스펙 정적 검사 + openapi-spec-validator
 # + FastMCP.from_openapi 라운드트립으로 tool 생성까지 확인)
 spec2openapi validate orders.openapi.yaml
+spec2openapi validate orders.openapi.yaml --format json   # 기계가 읽는 검증 보고서
 
 # 참조 MCP 런타임 ([mcp] extra 필요)
 spec2openapi serve orders.openapi.yaml --transport http --port 8000
@@ -83,6 +84,13 @@ report.get("lossy", [])             # 예: "collectionFormat 'tsv' preserved as 
 
 # FastMCP 호환 계약을 함수로 검사 (빈 리스트 == 준비 완료)
 problems = spec2openapi.check_fastmcp_ready(spec)
+
+# 구조화 검증: 위 계약에 x-soap 계약 검사, openapi-spec-validator,
+# FastMCP 인메모리 라운드트립까지 더한 보고서 (Swagger/WSDL 변환 스펙 공통)
+result = spec2openapi.verify(spec)
+result.ok          # 실패한 체크 없음
+result.complete    # 건너뛴 체크 없음 (딥 의존성이 설치되어 실제로 돌았음)
+result.to_dict()   # 체크별 규범 근거 인용이 담긴 JSON 직렬화 가능 보고서
 
 # WSDL -> OpenAPI dict (zeep은 import 시점이 아니라 첫 SOAP 사용 때 로드)
 spec = spec2openapi.convert_wsdl(
@@ -147,7 +155,7 @@ deep copy하지 않음), 입력을 계속 쓰면서 결과를 수정하려면 `c
 이 프로젝트가 보장하는 계약은 이렇다. 생성된 스펙은 `FastMCP.from_openapi()`를 통과해 오퍼레이션 수만큼의 MCP tool을 만들어낸다.
 
 - FastMCP는 tool 이름을 `[A-Za-z0-9_]`로 정규화하므로, operationId를 처음부터 그 알파벳으로 생성한다(중복 없음, 64자 이하). 따라서 *tool 이름 == operationId*가 항상 성립한다.
-- `spec2openapi validate <spec>`이 정적 검사 + 실제 FastMCP 라운드트립으로 이를 확인한다.
+- `spec2openapi validate <spec>`이 정적 검사 + 실제 FastMCP 라운드트립으로 이를 확인한다. 같은 검증을 코드에서 쓰려면 `spec2openapi.verify(spec)` — 체크별 상태와 규범 근거(SEP-986 등)가 담긴 구조화 보고서를 반환하며, `validate --format json`이 동일 보고서를 CLI로 노출한다.
 - 테스트 스위트가 모든 픽스처 WSDL에 대해 3.0/3.1 두 버전 모두 라운드트립을 검증한다.
 - description, enum, pattern, min/max 등은 tool 스키마까지 그대로 전달되어 LLM의 인자 생성 품질을 높인다.
 
@@ -247,6 +255,7 @@ src/spec2openapi/
   openapi.py   OpenAPI 3.0/3.1 + x-soap 조립
   swagger.py   Swagger 2.0 -> OpenAPI 3.x 업그레이드 (x-s2o 리포트)
   convert.py   코어 공개 API (convert_wsdl / load_spec / dump_spec)
+  checks.py    구조화 검증 (verify / VerifyReport)
   cli.py       convert / upgrade / inspect / validate / serve
   bridge.py    [mcp] SOAP 브리지: JSON <-> SOAP envelope httpx transport
   server.py    [mcp] FastMCP 결합 (from_openapi_spec / from_wsdl)
