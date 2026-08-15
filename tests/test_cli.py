@@ -45,6 +45,43 @@ def test_validate_json_output(capsys):
     assert "x-soap.version" in ids and "fastmcp.roundtrip" in ids
 
 
+def test_validate_null_components_no_crash(tmp_path, capsys):
+    spec_file = tmp_path / "null_components.openapi.yaml"
+    spec_file.write_text(
+        "openapi: 3.0.3\n"
+        "info: {title: t, version: '1'}\n"
+        "paths:\n"
+        "  /a:\n"
+        "    get:\n"
+        "      operationId: a\n"
+        "      responses: {'200': {description: ok}}\n"
+        "components:\n",                        # null components
+        encoding="utf-8")
+    rc = main(["validate", str(spec_file)])
+    out = capsys.readouterr().out
+    assert "component schemas : 0" in out
+    assert rc in (0, 1)
+
+
+def test_validate_null_component_schemas_no_crash(tmp_path, capsys):
+    spec_file = tmp_path / "null_schemas.openapi.yaml"
+    spec_file.write_text(
+        "openapi: 3.0.3\n"
+        "info: {title: t, version: '1'}\n"
+        "paths:\n"
+        "  /a:\n"
+        "    get:\n"
+        "      operationId: a\n"
+        "      responses: {'200': {description: ok}}\n"
+        "components:\n"
+        "  schemas:\n",                          # null components.schemas
+        encoding="utf-8")
+    rc = main(["validate", str(spec_file)])
+    out = capsys.readouterr().out
+    assert "component schemas : 0" in out
+    assert rc in (0, 1)
+
+
 def test_validate_json_failure_exit_code(tmp_path, capsys):
     bad = tmp_path / "bad.openapi.yaml"
     bad.write_text(

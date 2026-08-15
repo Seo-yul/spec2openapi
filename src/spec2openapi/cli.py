@@ -163,7 +163,7 @@ def cmd_upgrade(args) -> int:
 
 def cmd_validate(args) -> int:
     """verify() as a CLI: static checks + optional deep validation."""
-    from .checks import verify
+    from .checks import _component_schemas, verify
     from .openapi import _operations
 
     spec = _load_or_convert(args.source)
@@ -181,8 +181,9 @@ def cmd_validate(args) -> int:
 
     op_ids = [op.get("operationId")
               for _, _, op in _operations(spec) if op.get("operationId")]
-    schemas = spec.get("components", {}).get("schemas", {}) \
-        if isinstance(spec, dict) else {}
+    # components (or components.schemas) may be null (`components:` with
+    # no value) rather than absent; _component_schemas tolerates both
+    schemas = _component_schemas(spec) if isinstance(spec, dict) else {}
     print(f"operations        : {len(op_ids)}")
     print(f"component schemas : {len(schemas)}")
 
