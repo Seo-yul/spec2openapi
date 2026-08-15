@@ -361,6 +361,57 @@ def _check_xsoap_mixed_rest(spec):
     return []
 
 
+_SCHEMA_REF_PREFIX = "#/components/schemas/"
+
+
+def _component_schemas(spec: dict) -> dict:
+    comp = spec.get("components")
+    schemas = comp.get("schemas") if isinstance(comp, dict) else None
+    return schemas if isinstance(schemas, dict) else {}
+
+
+def _iter_ref_strings(node):
+    """Yield every "$ref" string in a JSON tree (no ref following)."""
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            yield ref
+        for value in node.values():
+            yield from _iter_ref_strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _iter_ref_strings(value)
+
+
+def _check_xsoap_refs(spec):
+    out = []
+    schemas = _component_schemas(spec)
+
+    def _resolvable(ref: str) -> bool:
+        return (ref.startswith(_SCHEMA_REF_PREFIX)
+                and ref[len(_SCHEMA_REF_PREFIX):] in schemas)
+
+    for path, method, op, xsoap in _soap_operations(spec):
+        oid = op.get("operationId") or f"{str(method).upper()} {path}"
+        loc = _op_location(path, method)
+        for kind in ("headers", "faults"):
+            for entry in xsoap.get(kind) or []:
+                ref = entry.get("schema") if isinstance(entry, dict) else None
+                if isinstance(ref, str) and not _resolvable(ref):
+                    out.append(_result(
+                        "x-soap.refs", "fail",
+                        f"{oid}: x-soap.{kind} schema '{ref}' does not "
+                        "resolve to components.schemas", location=loc))
+        for section in (op.get("requestBody"), op.get("responses")):
+            for ref in _iter_ref_strings(section):
+                if ref.startswith(_SCHEMA_REF_PREFIX) and not _resolvable(ref):
+                    out.append(_result(
+                        "x-soap.refs", "fail",
+                        f"{oid}: schema ref '{ref}' does not resolve to "
+                        "components.schemas", location=loc))
+    return out
+
+
 # (id, fn) — 실행 순서; 보고서는 어차피 (id, location)으로 재정렬된다.
 # frozen 8종 중 document.mapping은 verify()/fastmcp_ready_problems()의
 # 입구 가드로 처리되므로 목록에 없다.
@@ -379,6 +430,7 @@ _STATIC_CHECKS: list = [
     ("x-soap.output-element", _check_xsoap_output_element),
     ("x-soap.endpoint", _check_xsoap_endpoint),
     ("x-soap.mixed-rest", _check_xsoap_mixed_rest),
+    ("x-soap.refs", _check_xsoap_refs),
 ]
 
 _READY_IDS = frozenset((

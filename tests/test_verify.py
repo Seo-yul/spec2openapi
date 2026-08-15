@@ -243,3 +243,28 @@ def test_xsoap_mixed_rest_warns():
                               "responses": {}}}
     report = verify(_spec(paths), deep=False)
     assert _statuses(report, "x-soap.mixed-rest")[0][0] == "warn"
+
+
+def test_xsoap_refs_detects_dangling():
+    spec = _spec({"/op": _soap_op(xsoap={
+        "soapVersion": "1.1", "endpoint": "http://e",
+        "input": {"element": "In"},
+        "headers": [{"element": "H", "part": "h",
+                     "schema": "#/components/schemas/Missing"}],
+    })})
+    spec["paths"]["/op"]["post"]["responses"] = {
+        "200": {"description": "ok", "content": {"application/json": {
+            "schema": {"$ref": "#/components/schemas/AlsoMissing"}}}}}
+    report = verify(spec, deep=False)
+    msgs = [m for s, m in _statuses(report, "x-soap.refs") if s == "fail"]
+    assert any("Missing" in m for m in msgs)
+    assert any("AlsoMissing" in m for m in msgs)
+
+
+def test_xsoap_refs_pass_when_resolvable():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"X": {"type": "object"}}}
+    spec["paths"]["/op"]["post"]["responses"]["200"]["content"] = {
+        "application/json": {"schema": {"$ref": "#/components/schemas/X"}}}
+    report = verify(spec, deep=False)
+    assert _statuses(report, "x-soap.refs") == [("pass", "")]
