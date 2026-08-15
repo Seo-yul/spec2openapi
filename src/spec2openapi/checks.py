@@ -289,3 +289,35 @@ def fastmcp_ready_problems(spec) -> list[str]:
         if cid in _READY_IDS:
             out.extend(r.message for r in fn(spec) if r.status == "fail")
     return out
+
+
+_DEEP_IDS = ("openapi.schema-valid", "fastmcp.roundtrip",
+             "fastmcp.tool-materialized")
+
+
+def verify(spec: Any, *, deep: bool = True) -> VerifyReport:
+    """Run every check over an OpenAPI document; never raises.
+
+    Returns a deterministic report in which every check id appears at
+    least once (pass/warn/fail/skip) — except a non-mapping input, which
+    yields the single document.mapping failure."""
+    if not isinstance(spec, dict):
+        return VerifyReport((_result(
+            "document.mapping", "fail",
+            "not an OpenAPI document (expected a mapping)"),))
+    results: list[CheckResult] = [_result("document.mapping", "pass")]
+    for cid, fn in _STATIC_CHECKS:
+        found = fn(spec)
+        if found:
+            results.extend(found)
+        else:
+            results.append(_result(cid, "pass"))
+    results.extend(_run_deep_checks(spec, deep))
+    results.sort(key=lambda r: (r.id, r.location))
+    return VerifyReport(tuple(results))
+
+
+def _run_deep_checks(spec: dict, deep: bool) -> list[CheckResult]:
+    # openapi-spec-validator / FastMCP round-trip land here in a later
+    # change; without deep, both are reported as deliberately skipped.
+    return [_result(cid, "skip", "deep=False") for cid in _DEEP_IDS]

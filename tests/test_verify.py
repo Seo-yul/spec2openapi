@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from spec2openapi.checks import CheckRef, CheckResult, VerifyReport
+from spec2openapi.checks import CheckRef, CheckResult, VerifyReport, verify
 
 
 def test_report_ok_and_complete_flags():
@@ -110,3 +110,59 @@ def test_ready_problems_frozen_edge_cases():
     probs = fastmcp_ready_problems(_spec(
         {"/a": {"post": {"x-soap": {}, "responses": {}}}}))
     assert probs == ["POST /a: missing operationId"]
+
+
+STATIC_IDS = {
+    "document.has-paths", "document.has-operations",
+    "tool-name.present", "tool-name.safe", "tool-name.unique",
+    "tool-name.normalization-collision", "x-soap.input-element",
+}
+DEEP_IDS = {"openapi.schema-valid", "fastmcp.roundtrip",
+            "fastmcp.tool-materialized"}
+
+
+def test_verify_non_mapping_single_result():
+    report = verify(None, deep=False)
+    assert [r.id for r in report.results] == ["document.mapping"]
+    assert report.results[0].status == "fail"
+    assert report.ok is False
+
+
+def test_verify_every_id_appears_once_when_clean():
+    spec = _spec({"/a": {"get": {"operationId": "get_a", "summary": "s",
+                                 "responses": {"200": {"description": "ok"}}}}})
+    report = verify(spec, deep=False)
+    ids = [r.id for r in report.results]
+    assert set(ids) >= STATIC_IDS
+    assert set(ids) >= DEEP_IDS                      # skip으로라도 등장
+    for cid in STATIC_IDS:
+        (only,) = [r for r in report.results if r.id == cid]
+        assert only.status == "pass"
+    for cid in DEEP_IDS:
+        (only,) = [r for r in report.results if r.id == cid]
+        assert only.status == "skip"
+        assert only.message == "deep=False"
+    assert report.complete is False
+
+
+def test_verify_findings_replace_pass_and_sort_deterministically():
+    spec = _spec({
+        "/b": {"get": {"operationId": "has space", "responses": {}}},
+        "/a": {"get": {"operationId": "also bad", "responses": {}}},
+    })
+    r1 = verify(spec, deep=False)
+    r2 = verify(spec, deep=False)
+    assert r1 == r2                                   # 결정성
+    fails = [r for r in r1.results if r.id == "tool-name.safe"]
+    assert [f.location for f in fails] == sorted(f.location for f in fails)
+    assert not any(r.id == "tool-name.safe" and r.status == "pass"
+                   for r in r1.results)
+
+
+def test_verify_never_raises_on_garbage():
+    for garbage in (None, [], {}, {"paths": None}, {"paths": {"/a": None}},
+                    {"paths": {"/a": {"get": None}}},
+                    {"paths": {"/a": {"get": {"operationId": 7,
+                                              "responses": {}}}}}):
+        report = verify(garbage, deep=False)
+        assert isinstance(report, VerifyReport)
