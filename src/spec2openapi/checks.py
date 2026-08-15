@@ -569,6 +569,68 @@ def verify(spec: Any, *, deep: bool = True) -> VerifyReport:
 
 
 def _run_deep_checks(spec: dict, deep: bool) -> list[CheckResult]:
-    # openapi-spec-validator / FastMCP round-trip land here in a later
-    # change; without deep, both are reported as deliberately skipped.
-    return [_result(cid, "skip", "deep=False") for cid in _DEEP_IDS]
+    if not deep:
+        return [_result(cid, "skip", "deep=False") for cid in _DEEP_IDS]
+    return _run_openapi_validator(spec) + _run_fastmcp_roundtrip(spec)
+
+
+def _run_openapi_validator(spec: dict) -> list[CheckResult]:
+    try:
+        from openapi_spec_validator import validate as osv_validate
+    except ImportError:
+        return [_result("openapi.schema-valid", "skip",
+                        "openapi-spec-validator not installed")]
+    try:
+        osv_validate(spec)
+    except Exception as exc:
+        return [_result("openapi.schema-valid", "fail",
+                        f"openapi-spec-validator: {exc}")]
+    return [_result("openapi.schema-valid", "pass")]
+
+
+def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
+    try:
+        import anyio
+        import httpx
+        from fastmcp import Client, FastMCP
+    except ImportError:
+        msg = ("fastmcp not installed "
+               "(pip install 'spec2openapi[mcp]')")
+        return [_result("fastmcp.roundtrip", "skip", msg),
+                _result("fastmcp.tool-materialized", "skip", msg)]
+    try:
+        # supply a dummy client so specs without a `servers` entry still
+        # convert — verify measures tool convertibility, not deployment
+        dummy = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+        mcp = FastMCP.from_openapi(openapi_spec=spec, name="verify",
+                                   client=dummy)
+
+        async def _tools():
+            async with Client(mcp) as client:
+                return await client.list_tools()
+
+        tools = anyio.run(_tools)
+    except Exception as exc:
+        return [_result("fastmcp.roundtrip", "fail",
+                        f"FastMCP round-trip failed: {exc}"),
+                _result("fastmcp.tool-materialized", "skip",
+                        "round-trip failed")]
+    data = {"tools": [
+        {"name": t.name,
+         "params": sorted(((getattr(t, "inputSchema", None) or {})
+                           .get("properties") or {}).keys())}
+        for t in sorted(tools, key=lambda t: t.name)]}
+    results = [_result("fastmcp.roundtrip", "pass", data=data)]
+    tool_names = {t.name for t in tools}
+    op_ids = [op.get("operationId") for _, _, op in _operations(spec)
+              if isinstance(op.get("operationId"), str)]
+    missing = {o for o in op_ids
+               if o not in tool_names
+               and _FASTMCP_NORM_RE.sub("_", o) not in tool_names}
+    if missing:
+        results.append(_result(
+            "fastmcp.tool-materialized", "fail",
+            f"operations not materialized as tools: {sorted(missing)}"))
+    else:
+        results.append(_result("fastmcp.tool-materialized", "pass"))
+    return results

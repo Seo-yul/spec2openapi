@@ -1,6 +1,7 @@
 """tests/test_verify.py — verify()/checks.py의 구조화 검증 테스트."""
 from __future__ import annotations
 
+import sys
 import pytest
 
 from spec2openapi.checks import CheckRef, CheckResult, VerifyReport, verify
@@ -321,3 +322,42 @@ def test_markers_pass_on_marker_free_spec():
     report = verify(spec, deep=False)
     assert _statuses(report, "x-soap.substitution") == [("pass", "")]
     assert _statuses(report, "x-soap.choice") == [("pass", "")]
+
+
+def test_deep_checks_run_with_installed_deps():
+    pytest.importorskip("fastmcp")
+    pytest.importorskip("openapi_spec_validator")
+    spec = _spec({"/a": {"get": {"operationId": "get_a", "summary": "s",
+                                 "responses": {"200": {"description": "ok"}}}}})
+    report = verify(spec)                     # deep 기본값 True
+    (osv,) = [r for r in report.results if r.id == "openapi.schema-valid"]
+    assert osv.status == "pass"
+    (rt,) = [r for r in report.results if r.id == "fastmcp.roundtrip"]
+    assert rt.status == "pass"
+    assert rt.data == {"tools": [{"name": "get_a", "params": []}]}
+    (mat,) = [r for r in report.results
+              if r.id == "fastmcp.tool-materialized"]
+    assert mat.status == "pass"
+    assert report.complete is True
+
+
+def test_deep_checks_skip_when_fastmcp_missing(monkeypatch):
+    monkeypatch.setitem(sys.modules, "fastmcp", None)   # import 실패 유도
+    spec = _spec({"/a": {"get": {"operationId": "get_a", "summary": "s",
+                                 "responses": {"200": {"description": "ok"}}}}})
+    report = verify(spec)
+    (rt,) = [r for r in report.results if r.id == "fastmcp.roundtrip"]
+    assert rt.status == "skip" and "spec2openapi[mcp]" in rt.message
+    (mat,) = [r for r in report.results
+              if r.id == "fastmcp.tool-materialized"]
+    assert mat.status == "skip"
+    assert report.complete is False
+    assert report.ok is True                  # skip은 ok에 영향 없음
+
+
+def test_deep_invalid_document_fails_schema_valid():
+    pytest.importorskip("openapi_spec_validator")
+    bad = {"openapi": "3.0.3", "paths": {}}   # info 없음: OAS 스키마 위반
+    report = verify(bad)
+    (osv,) = [r for r in report.results if r.id == "openapi.schema-valid"]
+    assert osv.status == "fail"
