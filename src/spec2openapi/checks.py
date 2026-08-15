@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .openapi import _FASTMCP_NORM_RE, _SAFE_TOOL_RE, _operations
+
 
 @dataclass(frozen=True)
 class CheckRef:
@@ -171,3 +173,119 @@ def _result(cid: str, status: str, message: str = "", location: str = "",
     return CheckResult(id=cid, status=status, message=message,
                        location=location, refs=REGISTRY[cid]["refs"],
                        data=data)
+
+
+def _op_location(path: object, method: object) -> str:
+    return f"paths.{path}.{method}"
+
+
+def _check_has_paths(spec):
+    if not spec.get("paths"):
+        return [_result("document.has-paths", "fail", "spec has no paths")]
+    return []
+
+
+def _check_has_operations(spec):
+    if spec.get("paths") and not any(True for _ in _operations(spec)):
+        return [_result("document.has-operations", "fail",
+                        "spec has no operations")]
+    return []
+
+
+def _check_tool_name_present(spec):
+    out = []
+    for path, method, op in _operations(spec):
+        if not op.get("operationId"):
+            out.append(_result(
+                "tool-name.present", "fail",
+                f"{str(method).upper()} {path}: missing operationId",
+                location=_op_location(path, method)))
+    return out
+
+
+def _check_tool_name_safe(spec):
+    out = []
+    for path, method, op in _operations(spec):
+        oid = op.get("operationId")
+        if not oid:
+            continue
+        if not isinstance(oid, str) or not _SAFE_TOOL_RE.fullmatch(oid):
+            out.append(_result(
+                "tool-name.safe", "fail",
+                f"{oid}: not a safe MCP tool name",
+                location=_op_location(path, method)))
+    return out
+
+
+def _check_tool_name_unique(spec):
+    op_ids = [op.get("operationId") for _, _, op in _operations(spec)
+              if op.get("operationId")]
+    dupes = {o for o in op_ids if op_ids.count(o) > 1}
+    if dupes:
+        return [_result("tool-name.unique", "fail",
+                        f"duplicate operationIds: {sorted(dupes)}")]
+    return []
+
+
+def _check_normalization_collision(spec):
+    by_tool: dict[str, set[str]] = {}
+    for _, _, op in _operations(spec):
+        oid = op.get("operationId")
+        if isinstance(oid, str) and oid:
+            by_tool.setdefault(_FASTMCP_NORM_RE.sub("_", oid), set()).add(oid)
+    out = []
+    for tool, oids in sorted(by_tool.items()):
+        if len(oids) > 1:
+            out.append(_result(
+                "tool-name.normalization-collision", "fail",
+                "operationIds collide after FastMCP normalization "
+                f"('{tool}'): {sorted(oids)}"))
+    return out
+
+
+def _check_xsoap_input_element(spec):
+    out = []
+    for path, method, op in _operations(spec):
+        oid = op.get("operationId")
+        if not oid:
+            continue
+        xsoap = op.get("x-soap")
+        if isinstance(xsoap, dict):
+            inp = xsoap.get("input")
+            if not (isinstance(inp, dict) and inp.get("element")):
+                out.append(_result(
+                    "x-soap.input-element", "fail",
+                    f"{oid}: x-soap.input.element missing",
+                    location=_op_location(path, method)))
+    return out
+
+
+# (id, fn) — 실행 순서; 보고서는 어차피 (id, location)으로 재정렬된다.
+# frozen 8종 중 document.mapping은 verify()/fastmcp_ready_problems()의
+# 입구 가드로 처리되므로 목록에 없다.
+_STATIC_CHECKS: list = [
+    ("document.has-paths", _check_has_paths),
+    ("document.has-operations", _check_has_operations),
+    ("tool-name.present", _check_tool_name_present),
+    ("tool-name.safe", _check_tool_name_safe),
+    ("tool-name.unique", _check_tool_name_unique),
+    ("tool-name.normalization-collision", _check_normalization_collision),
+    ("x-soap.input-element", _check_xsoap_input_element),
+]
+
+_READY_IDS = frozenset((
+    "document.has-paths", "document.has-operations", "tool-name.present",
+    "tool-name.safe", "tool-name.unique", "tool-name.normalization-collision",
+    "x-soap.input-element",
+))
+
+
+def fastmcp_ready_problems(spec) -> list[str]:
+    """The frozen check_fastmcp_ready contract: one message per problem."""
+    if not isinstance(spec, dict):
+        return ["not an OpenAPI document (expected a mapping)"]
+    out: list[str] = []
+    for cid, fn in _STATIC_CHECKS:
+        if cid in _READY_IDS:
+            out.extend(r.message for r in fn(spec) if r.status == "fail")
+    return out

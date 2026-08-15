@@ -88,46 +88,12 @@ def check_fastmcp_ready(spec: dict[str, Any]) -> list[str]:
     importing fastmcp: the document has operations, every operation has
     an operationId that is a safe MCP tool name and stays unique even
     after FastMCP's ``[A-Za-z0-9_]`` normalization, and SOAP operations
-    carry their wrapper element. Returns one message per problem."""
-    if not isinstance(spec, dict):
-        return ["not an OpenAPI document (expected a mapping)"]
-    problems: list[str] = []
-    if not spec.get("paths"):
-        problems.append("spec has no paths")
-    op_ids: list[str] = []
-    op_count = 0
-    for path, method, op in _operations(spec):
-        op_count += 1
-        oid = op.get("operationId")
-        if not oid:
-            problems.append(
-                f"{str(method).upper()} {path}: missing operationId"
-            )
-            continue
-        op_ids.append(oid)
-        if not isinstance(oid, str) or not _SAFE_TOOL_RE.fullmatch(oid):
-            problems.append(f"{oid}: not a safe MCP tool name")
-        xsoap = op.get("x-soap")
-        if isinstance(xsoap, dict):
-            inp = xsoap.get("input")
-            if not (isinstance(inp, dict) and inp.get("element")):
-                problems.append(f"{oid}: x-soap.input.element missing")
-    if spec.get("paths") and not op_count:
-        problems.append("spec has no operations")
-    dupes = {o for o in op_ids if op_ids.count(o) > 1}
-    if dupes:
-        problems.append(f"duplicate operationIds: {sorted(dupes)}")
-    by_tool: dict[str, set[str]] = {}
-    for oid in op_ids:
-        if isinstance(oid, str):
-            by_tool.setdefault(_FASTMCP_NORM_RE.sub("_", oid), set()).add(oid)
-    for tool, oids in sorted(by_tool.items()):
-        if len(oids) > 1:  # distinct ids that become the same tool
-            problems.append(
-                "operationIds collide after FastMCP normalization "
-                f"('{tool}'): {sorted(oids)}"
-            )
-    return problems
+    carry their wrapper element. Returns one message per problem.
+
+    This check set is frozen; `spec2openapi.verify` runs the superset."""
+    from .checks import fastmcp_ready_problems
+
+    return fastmcp_ready_problems(spec)
 
 
 def _unique_id(base: str, used: set[str]) -> str:

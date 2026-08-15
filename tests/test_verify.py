@@ -70,3 +70,43 @@ def test_result_helper_attaches_registry_refs():
     r = _result("tool-name.safe", "fail", "msg", location="paths./x.get")
     assert r.refs == REGISTRY["tool-name.safe"]["refs"]
     assert any(ref.id == "SEP-986" for ref in r.refs)
+
+
+from spec2openapi.checks import fastmcp_ready_problems
+
+
+def _spec(paths):
+    return {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": paths}
+
+
+def test_ready_problems_matches_frozen_messages():
+    spec = _spec({
+        "/a": {"get": {"responses": {}}},                       # oid 없음
+        "/b": {"get": {"operationId": "has space", "responses": {}}},
+        "/c": {"get": {"operationId": "same", "responses": {}},
+               "put": {"operationId": "same", "responses": {}}},
+        "/d": {"get": {"operationId": "get.a", "responses": {}}},
+        "/e": {"get": {"operationId": "get-a", "responses": {}}},
+        "/f": {"post": {"operationId": "op", "x-soap": {"soapAction": ""},
+                        "responses": {}}},
+    })
+    problems = fastmcp_ready_problems(spec)
+    assert "GET /a: missing operationId" in problems
+    assert "has space: not a safe MCP tool name" in problems
+    assert "duplicate operationIds: ['same']" in problems
+    assert ("operationIds collide after FastMCP normalization "
+            "('get_a'): ['get-a', 'get.a']") in problems
+    assert "op: x-soap.input.element missing" in problems
+
+
+def test_ready_problems_frozen_edge_cases():
+    assert fastmcp_ready_problems(None) == [
+        "not an OpenAPI document (expected a mapping)"]
+    assert "spec has no paths" in fastmcp_ready_problems({})
+    assert "spec has no operations" in fastmcp_ready_problems(
+        {"paths": {"/a": None}})
+    # oid 없는 오퍼레이션은 x-soap/safe 검사 대상이 아니다 (원본의 continue)
+    probs = fastmcp_ready_problems(_spec(
+        {"/a": {"post": {"x-soap": {}, "responses": {}}}}))
+    assert probs == ["POST /a: missing operationId"]
