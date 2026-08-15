@@ -7,11 +7,12 @@ normative citations (refs), and explicit skip-vs-fail separation.
 """
 from __future__ import annotations
 
+import collections
 from dataclasses import dataclass
 from typing import Any
 
 from .openapi import _FASTMCP_NORM_RE, _SAFE_TOOL_RE, _operations
-from .swagger import is_swagger2
+from .swagger import _DATA_KEYWORDS, is_swagger2
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,10 @@ class VerifyReport:
                     "id": r.id, "status": r.status, "message": r.message,
                     "location": r.location,
                     "refs": [{"id": ref.id, "url": ref.url} for ref in r.refs],
-                    "data": r.data,
+                    # shallow copy: to_dict() must not leak a reference a
+                    # caller could mutate to corrupt this (frozen)
+                    # CheckResult's internal data dict.
+                    "data": dict(r.data) if r.data is not None else None,
                 }
                 for r in self.results
             ],
@@ -125,8 +129,10 @@ REGISTRY: dict[str, dict] = {
                      "(x-soap.input.element).",
         "level": "fail", "refs": (_REF_XSOAP,)},
     "x-soap.version": {
-        "statement": "x-soap.soapVersion must be '1.1' or '1.2'; any other "
-                     "value silently degrades to 1.1 in the bridge.",
+        "statement": "An invalid soapVersion is always a defect (the "
+                     "bridge silently degrades to 1.1, misbehaving "
+                     "against 1.2 services) — fail; an absent soapVersion "
+                     "falls back to the documented 1.1 default — warn.",
         "level": "fail", "refs": (_REF_XSOAP,)},
     "x-soap.output-element": {
         "statement": "x-soap.output should name its element; without it "
@@ -163,8 +169,12 @@ REGISTRY: dict[str, dict] = {
                      "tools from the document.",
         "level": "fail", "refs": (_REF_FASTMCP,)},
     "fastmcp.tool-materialized": {
-        "statement": "Every operation must materialize as an MCP tool in the "
-                     "FastMCP round-trip.",
+        "statement": "Every operation must materialize as an MCP tool: the "
+                     "FastMCP round-trip's tool count must equal the "
+                     "document's operation count (FastMCP's actual "
+                     "tool-naming/normalization differs across versions and "
+                     "cannot be predicted, so the check is a count "
+                     "invariant, not a name match).",
         "level": "fail", "refs": (_REF_FASTMCP, _REF_TOOLS_LIST)},
 }
 
@@ -187,7 +197,13 @@ def _check_has_paths(spec):
 
 
 def _check_has_operations(spec):
-    if spec.get("paths") and not any(True for _ in _operations(spec)):
+    if not spec.get("paths"):
+        # document.has-paths already fails this document; without paths
+        # there is nothing to check operations against, so say so
+        # instead of silently reporting a dishonest pass.
+        return [_result("document.has-operations", "skip",
+                        "not checked: spec has no paths")]
+    if not any(True for _ in _operations(spec)):
         return [_result("document.has-operations", "fail",
                         "spec has no operations")]
     return []
@@ -221,11 +237,33 @@ def _check_tool_name_safe(spec):
 def _check_tool_name_unique(spec):
     op_ids = [op.get("operationId") for _, _, op in _operations(spec)
               if op.get("operationId")]
-    dupes = {o for o in op_ids if op_ids.count(o) > 1}
+    # operationId is untrusted input and may be unhashable (list/dict);
+    # split into a hashable group (Counter, O(n)) and an unhashable group
+    # (grouped by repr) instead of a set comprehension over op_ids, which
+    # both required hashability and re-scanned the list per id (O(n^2)).
+    hashable, unhashable = [], []
+    for o in op_ids:
+        try:
+            hash(o)
+        except TypeError:
+            unhashable.append(o)
+        else:
+            hashable.append(o)
+    dupes = [o for o, n in collections.Counter(hashable).items() if n > 1]
+    by_repr: dict[str, list] = {}
+    for o in unhashable:
+        by_repr.setdefault(repr(o), []).append(o)
+    dupes.extend(group[0] for group in by_repr.values() if len(group) > 1)
     if dupes:
+        # previously-non-crashing input (homogeneous, comparable types)
+        # must keep its natural sort order; only fall back to repr-based
+        # ordering for genuinely incomparable/unhashable duplicates.
+        try:
+            rendered = sorted(dupes)
+        except TypeError:
+            rendered = sorted(dupes, key=repr)
         return [_result("tool-name.unique", "fail",
-                        f"duplicate operationIds: "
-                        f"{sorted(dupes, key=repr)}")]
+                        f"duplicate operationIds: {rendered}")]
     return []
 
 
@@ -312,12 +350,20 @@ def _check_xsoap_version(spec):
     out = []
     for path, method, op, xsoap in _soap_operations(spec):
         sv = xsoap.get("soapVersion")
-        if sv not in ("1.1", "1.2"):
-            oid = op.get("operationId") or f"{str(method).upper()} {path}"
+        oid = op.get("operationId") or f"{str(method).upper()} {path}"
+        loc = _op_location(path, method)
+        if sv is None:
+            # the bridge falls back to 1.1 when soapVersion is absent —
+            # a documented default, not a defect, so warn rather than fail
+            out.append(_result(
+                "x-soap.version", "warn",
+                f"{oid}: x-soap.soapVersion missing; the bridge assumes "
+                "1.1 — declare it explicitly", location=loc))
+        elif sv not in ("1.1", "1.2"):
             out.append(_result(
                 "x-soap.version", "fail",
                 f"{oid}: x-soap.soapVersion {sv!r} is not '1.1' or '1.2'",
-                location=_op_location(path, method)))
+                location=loc))
     return out
 
 
@@ -364,6 +410,14 @@ def _check_xsoap_mixed_rest(spec):
 
 _SCHEMA_REF_PREFIX = "#/components/schemas/"
 
+# schema keywords whose *values* are data, not sub-schemas, so a
+# dict shaped like {"$ref": ...} inside them is a data value, not an
+# actual reference to resolve. Reuses swagger.py's _DATA_KEYWORDS (the
+# set applied when the upgrader protects data values from schema
+# rewriting) plus "const", a 3.1/2020-12 data keyword swagger.py's
+# Swagger-2.0-only upgrader has no reason to know about.
+_DATA_SUBTREE_KEYS = frozenset(_DATA_KEYWORDS) | {"const"}
+
 
 def _component_schemas(spec: dict) -> dict:
     comp = spec.get("components")
@@ -372,16 +426,24 @@ def _component_schemas(spec: dict) -> dict:
 
 
 def _iter_ref_strings(node):
-    """Yield every "$ref" string in a JSON tree (no ref following)."""
-    if isinstance(node, dict):
-        ref = node.get("$ref")
-        if isinstance(ref, str):
-            yield ref
-        for value in node.values():
-            yield from _iter_ref_strings(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from _iter_ref_strings(value)
+    """Yield every "$ref" string in a JSON tree (no ref following).
+
+    Subtrees under a data keyword (example/examples/default/enum/const)
+    are skipped: their values are data, not schema, and may incidentally
+    contain a dict shaped like {"$ref": ...}. Explicit-stack iteration
+    (not recursive) so a deeply nested document cannot RecursionError."""
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            ref = cur.get("$ref")
+            if isinstance(ref, str):
+                yield ref
+            children = [v for k, v in cur.items()
+                       if k not in _DATA_SUBTREE_KEYS]
+            stack.extend(reversed(children))
+        elif isinstance(cur, list):
+            stack.extend(reversed(cur))
 
 
 def _check_xsoap_refs(spec):
@@ -389,14 +451,21 @@ def _check_xsoap_refs(spec):
     schemas = _component_schemas(spec)
 
     def _resolvable(ref: str) -> bool:
-        return (ref.startswith(_SCHEMA_REF_PREFIX)
-                and ref[len(_SCHEMA_REF_PREFIX):] in schemas)
+        if not ref.startswith(_SCHEMA_REF_PREFIX):
+            return False
+        # a pointer into a component (.../A/properties/b) only needs its
+        # first segment (the component name) to exist
+        name = ref[len(_SCHEMA_REF_PREFIX):].split("/", 1)[0]
+        return name in schemas
 
     for path, method, op, xsoap in _soap_operations(spec):
         oid = op.get("operationId") or f"{str(method).upper()} {path}"
         loc = _op_location(path, method)
         for kind in ("headers", "faults"):
-            for entry in xsoap.get(kind) or []:
+            entries = xsoap.get(kind)
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
                 ref = entry.get("schema") if isinstance(entry, dict) else None
                 if isinstance(ref, str) and not _resolvable(ref):
                     out.append(_result(
@@ -418,13 +487,20 @@ def _iter_schema_nodes(spec):
     request/response schema trees of x-soap operations. Walks the JSON
     tree without following $refs, so termination is structural."""
     def _walk(node, loc):
-        if isinstance(node, dict):
-            yield loc, node
-            for key, value in node.items():
-                yield from _walk(value, f"{loc}.{key}")
-        elif isinstance(node, list):
-            for i, value in enumerate(node):
-                yield from _walk(value, f"{loc}[{i}]")
+        # explicit-stack DFS (not recursive): a deeply nested schema
+        # tree must not RecursionError. Yield order matches the
+        # original recursive pre-order traversal exactly.
+        stack = [(node, loc)]
+        while stack:
+            cur, cur_loc = stack.pop()
+            if isinstance(cur, dict):
+                yield cur_loc, cur
+                children = [(v, f"{cur_loc}.{k}") for k, v in cur.items()]
+                stack.extend(reversed(children))
+            elif isinstance(cur, list):
+                children = [(v, f"{cur_loc}[{i}]")
+                           for i, v in enumerate(cur)]
+                stack.extend(reversed(children))
 
     for name, schema in _component_schemas(spec).items():
         yield from _walk(schema, f"components.schemas.{name}")
@@ -485,6 +561,9 @@ def _check_xsoap_substitution(spec):
 
 
 def _check_xsoap_choice(spec):
+    # actual emitted/consumed shape (schema.py ~317, bridge.py ~256):
+    # x-soap-choice is a list of {"members": [name, ...], "required":
+    # bool} group dicts, not a list of name-lists.
     out = []
     for loc, node in _iter_schema_nodes(spec):
         groups = node.get("x-soap-choice")
@@ -493,8 +572,20 @@ def _check_xsoap_choice(spec):
         props = node.get("properties")
         names = set(props) if isinstance(props, dict) else set()
         for group in groups:
-            unknown = [g for g in (group if isinstance(group, list) else [])
-                       if not (isinstance(g, str) and g in names)]
+            if not isinstance(group, dict):
+                out.append(_result(
+                    "x-soap.choice", "fail",
+                    "x-soap-choice group is not an object", location=loc))
+                continue
+            members = group.get("members")
+            if not isinstance(members, list):
+                out.append(_result(
+                    "x-soap.choice", "fail",
+                    "x-soap-choice group without a members list",
+                    location=loc))
+                continue
+            unknown = [m for m in members
+                       if not (isinstance(m, str) and m in names)]
             if unknown:
                 out.append(_result(
                     "x-soap.choice", "fail",
@@ -540,7 +631,17 @@ def fastmcp_ready_problems(spec) -> list[str]:
     out: list[str] = []
     for cid, fn in _STATIC_CHECKS:
         if cid in _READY_IDS:
-            out.extend(r.message for r in fn(spec) if r.status == "fail")
+            # own safety net (independent of verify()'s): a crash on an
+            # input that previously crashed becomes one problem message
+            # instead of propagating, without touching the frozen
+            # messages of inputs that already worked.
+            try:
+                found = fn(spec)
+            except Exception as exc:
+                out.append(f"check could not complete: "
+                           f"{type(exc).__name__}: {exc}")
+                continue
+            out.extend(r.message for r in found if r.status == "fail")
     return out
 
 
@@ -560,7 +661,13 @@ def verify(spec: Any, *, deep: bool = True) -> VerifyReport:
             "not an OpenAPI document (expected a mapping)"),))
     results: list[CheckResult] = [_result("document.mapping", "pass")]
     for cid, fn in _STATIC_CHECKS:
-        found = fn(spec)
+        try:
+            found = fn(spec)
+        except Exception as exc:
+            # conformance's untestable policy: a check that cannot
+            # complete is a visible fail, not a silently swallowed skip.
+            found = [_result(cid, "fail", "check could not complete: "
+                             f"{type(exc).__name__}: {exc}")]
         if found:
             results.extend(found)
         else:
@@ -600,39 +707,67 @@ def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
                "(pip install 'spec2openapi[mcp]')")
         return [_result("fastmcp.roundtrip", "skip", msg),
                 _result("fastmcp.tool-materialized", "skip", msg)]
+
+    import asyncio
     try:
-        # supply a dummy client so specs without a `servers` entry still
-        # convert — verify measures tool convertibility, not deployment
-        dummy = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        # anyio.run() cannot start a second event loop inside one that
+        # is already running; without this guard the round-trip crashes
+        # and is misreported as a "fail" rather than what it actually is
+        # (untestable from this calling context).
+        msg = ("cannot run the FastMCP round-trip inside a running event "
+               "loop; call verify() from a synchronous context")
+        return [_result("fastmcp.roundtrip", "skip", msg),
+                _result("fastmcp.tool-materialized", "skip", msg)]
+
+    # supply a dummy client so specs without a `servers` entry still
+    # convert — verify measures tool convertibility, not deployment
+    dummy = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+    try:
         mcp = FastMCP.from_openapi(openapi_spec=spec, name="verify",
                                    client=dummy)
 
         async def _tools():
-            async with Client(mcp) as client:
-                return await client.list_tools()
+            try:
+                async with Client(mcp) as client:
+                    return await client.list_tools()
+            finally:
+                await dummy.aclose()
 
         tools = anyio.run(_tools)
     except Exception as exc:
+        # if from_openapi() (or anything else before _tools() starts)
+        # raised, _tools()'s finally never ran and dummy is still open;
+        # best-effort close — verify() must never raise even if this does
+        if not dummy.is_closed:
+            try:
+                anyio.run(dummy.aclose)
+            except Exception:
+                pass
         return [_result("fastmcp.roundtrip", "fail",
                         f"FastMCP round-trip failed: {exc}"),
                 _result("fastmcp.tool-materialized", "skip",
                         "round-trip failed")]
     data = {"tools": [
         {"name": t.name,
-         "params": sorted(((getattr(t, "inputSchema", None) or {})
-                           .get("properties") or {}).keys())}
+         "params": list(((getattr(t, "inputSchema", None) or {})
+                         .get("properties") or {}))}
         for t in sorted(tools, key=lambda t: t.name)]}
     results = [_result("fastmcp.roundtrip", "pass", data=data)]
-    tool_names = {t.name for t in tools}
+    # FastMCP's actual tool-name normalization is version-specific
+    # (fastmcp 3.4.7: '__'-splitting, [\s.-] run-collapsing, 64-char
+    # truncation) and cannot be reliably predicted here, so materialization
+    # is judged by count, not by matching predicted tool names.
     op_ids = [op.get("operationId") for _, _, op in _operations(spec)
               if isinstance(op.get("operationId"), str)]
-    missing = {o for o in op_ids
-               if o not in tool_names
-               and _FASTMCP_NORM_RE.sub("_", o) not in tool_names}
-    if missing:
+    if len(tools) < len(op_ids):
         results.append(_result(
             "fastmcp.tool-materialized", "fail",
-            f"operations not materialized as tools: {sorted(missing)}"))
+            f"operations not materialized as tools: expected "
+            f"{len(op_ids)}, materialized {len(tools)}"))
     else:
         results.append(_result("fastmcp.tool-materialized", "pass"))
     return results

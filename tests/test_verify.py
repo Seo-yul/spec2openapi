@@ -222,6 +222,63 @@ def test_check_fastmcp_ready_never_raises_on_mixed_type_duplicates():
     assert any("duplicate operationIds" in p for p in problems)
 
 
+def _list_dupe_operationid_spec():
+    # unhashable (list) operationIds: op_ids.count()/set-comprehension
+    # over these previously crashed with `unhashable type: 'list'`.
+    return _spec({
+        "/a": {"get": {"operationId": ["x"], "responses": {}}},
+        "/b": {"get": {"operationId": ["x"], "responses": {}}},
+    })
+
+
+def test_unique_check_handles_unhashable_operation_ids():
+    spec = _list_dupe_operationid_spec()
+    report = verify(spec, deep=False)
+    assert isinstance(report, VerifyReport)
+    (res,) = [r for r in report.results if r.id == "tool-name.unique"]
+    assert res.status == "fail"
+    assert "duplicate operationIds" in res.message
+
+    from spec2openapi import check_fastmcp_ready
+    problems = check_fastmcp_ready(spec)
+    assert any("duplicate operationIds" in p for p in problems)
+
+
+def test_unique_check_preserves_natural_sort_for_homogeneous_dupes():
+    # finding #12: forcing key=repr on a duplicate set of same-typed,
+    # naturally-orderable ids changed byte-identical output for input
+    # that never crashed to begin with ({7, 10} -> [10, 7] via repr sort).
+    spec = _spec({
+        "/a": {"get": {"operationId": 7, "responses": {}}},
+        "/b": {"get": {"operationId": 7, "responses": {}}},
+        "/c": {"get": {"operationId": 10, "responses": {}}},
+        "/d": {"get": {"operationId": 10, "responses": {}}},
+    })
+    report = verify(spec, deep=False)
+    (res,) = [r for r in report.results if r.id == "tool-name.unique"]
+    assert res.message == "duplicate operationIds: [7, 10]"
+
+
+def test_has_operations_skips_when_no_paths():
+    # previously an empty/missing `paths` made document.has-operations
+    # return [] -> recorded as a dishonest "pass" (never actually
+    # checked). It must report skip instead.
+    report = verify({}, deep=False)
+    (paths_res,) = [r for r in report.results if r.id == "document.has-paths"]
+    assert paths_res.status == "fail"
+    (ops_res,) = [r for r in report.results
+                  if r.id == "document.has-operations"]
+    assert ops_res.status == "skip"
+    assert "not checked" in ops_res.message
+
+    # fastmcp_ready_problems only collects fail-status messages, so the
+    # frozen contract (document.has-operations never appearing there for
+    # a paths-less spec) is unaffected by the skip.
+    from spec2openapi import check_fastmcp_ready
+    problems = check_fastmcp_ready({})
+    assert not any("no operations" in p for p in problems)
+
+
 def test_document_openapi3_check():
     swagger = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
                "paths": {}}
@@ -268,6 +325,26 @@ def test_xsoap_version_output_endpoint_checks():
     assert _statuses(report, "x-soap.endpoint")[0][0] == "warn"
 
 
+def test_xsoap_version_missing_warns_invalid_fails():
+    # an absent soapVersion falls back to the documented 1.1 default in
+    # the bridge -> warn; an invalid value is always a defect -> fail.
+    missing = _spec({"/op": _soap_op(xsoap={
+        "endpoint": "http://e", "input": {"element": "In"},
+    })})
+    report = verify(missing, deep=False)
+    (res,) = [r for r in report.results if r.id == "x-soap.version"]
+    assert res.status == "warn"
+    assert "soapVersion missing" in res.message
+
+    invalid = _spec({"/op": _soap_op(xsoap={
+        "soapVersion": "1,2", "endpoint": "http://e",
+        "input": {"element": "In"},
+    })})
+    report = verify(invalid, deep=False)
+    (res,) = [r for r in report.results if r.id == "x-soap.version"]
+    assert res.status == "fail"
+
+
 def test_xsoap_checks_pass_on_pure_rest_spec():
     spec = _spec({"/a": {"get": {"operationId": "a", "summary": "s",
                                  "responses": {}}}})
@@ -310,6 +387,53 @@ def test_xsoap_refs_pass_when_resolvable():
     assert _statuses(report, "x-soap.refs") == [("pass", "")]
 
 
+def test_xsoap_refs_scalar_headers_faults_no_crash():
+    # headers/faults must normally be lists of entry dicts; a scalar there
+    # (5, True) previously crashed via `xsoap.get(kind) or []` iterating
+    # over a non-iterable/bool.
+    spec = _spec({"/op": _soap_op(xsoap={
+        "soapVersion": "1.1", "endpoint": "http://e",
+        "input": {"element": "In"}, "headers": 5, "faults": True,
+    })})
+    report = verify(spec, deep=False)
+    assert isinstance(report, VerifyReport)
+    assert _statuses(report, "x-soap.refs") == [("pass", "")]
+
+
+def test_xsoap_refs_skips_data_keyword_subtrees():
+    # a $ref-shaped dict inside `example`/`examples`/`default`/`enum`/
+    # `const` is data, not a schema reference, and must not be resolved.
+    spec = _spec({"/op": _soap_op()})
+    spec["paths"]["/op"]["post"]["responses"]["200"]["content"] = {
+        "application/json": {
+            "schema": {"type": "object"},
+            "example": {"$ref": "#/components/schemas/JustData"},
+        }}
+    report = verify(spec, deep=False)
+    assert _statuses(report, "x-soap.refs") == [("pass", "")]
+
+
+def test_xsoap_refs_resolves_nested_pointer_first_segment():
+    # `#/components/schemas/X/properties/b` points *into* X; only the
+    # first segment (X) needs to exist in components.schemas.
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"X": {"type": "object",
+                                            "properties": {"b": {}}}}}
+    spec["paths"]["/op"]["post"]["responses"]["200"]["content"] = {
+        "application/json": {
+            "schema": {"$ref": "#/components/schemas/X/properties/b"}}}
+    report = verify(spec, deep=False)
+    assert _statuses(report, "x-soap.refs") == [("pass", "")]
+
+    spec["paths"]["/op"]["post"]["responses"]["200"]["content"] = {
+        "application/json": {
+            "schema": {"$ref": "#/components/schemas/Missing/properties/b"}
+        }}
+    report = verify(spec, deep=False)
+    fails = [m for s, m in _statuses(report, "x-soap.refs") if s == "fail"]
+    assert any("Missing" in m for m in fails)
+
+
 def _sub_schema(members, branches):
     node = {"x-soap-substitution": {"head": "payment", "namespace": "ns",
                                     "members": members}}
@@ -346,14 +470,47 @@ def test_substitution_marker_violations():
 
 
 def test_choice_marker_violations():
+    # 실제 emitted 형태(schema.py ~317 / bridge.py ~256):
+    # x-soap-choice는 {"members": [...], "required": bool} dict의 리스트.
     spec = _spec({"/op": _soap_op()})
     spec["components"] = {"schemas": {"C": {
         "type": "object", "properties": {"a": {}, "b": {}},
-        "x-soap-choice": [["a", "ghost"]],
+        "x-soap-choice": [{"members": ["a", "ghost"], "required": False}],
     }}}
     report = verify(spec, deep=False)
     (res,) = [(s, m) for s, m in _statuses(report, "x-soap.choice")]
     assert res[0] == "fail" and "ghost" in res[1]
+
+
+def test_choice_marker_members_not_a_list_fails():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}, "b": {}},
+        "x-soap-choice": [{"members": "a", "required": False}],
+    }}}
+    report = verify(spec, deep=False)
+    (res,) = [(s, m) for s, m in _statuses(report, "x-soap.choice")]
+    assert res[0] == "fail" and "members list" in res[1]
+
+
+def test_choice_marker_group_not_a_dict_fails():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}, "b": {}},
+        "x-soap-choice": [["a", "b"]],
+    }}}
+    report = verify(spec, deep=False)
+    (res,) = [(s, m) for s, m in _statuses(report, "x-soap.choice")]
+    assert res[0] == "fail"
+
+
+def test_choice_marker_passes_on_real_world_example():
+    # examples/advanced.openapi.yaml uses the real x-soap-choice marker
+    # shape emitted by schema.py; the check must not false-positive on it.
+    spec = yaml.safe_load(
+        (EXAMPLES / "advanced.openapi.yaml").read_text(encoding="utf-8"))
+    report = verify(spec, deep=False)
+    assert all(s == "pass" for s, _ in _statuses(report, "x-soap.choice"))
 
 
 def test_markers_pass_on_marker_free_spec():
@@ -361,6 +518,55 @@ def test_markers_pass_on_marker_free_spec():
     report = verify(spec, deep=False)
     assert _statuses(report, "x-soap.substitution") == [("pass", "")]
     assert _statuses(report, "x-soap.choice") == [("pass", "")]
+
+
+def _deeply_nested_object_schema(depth):
+    node = {"type": "string"}
+    for _ in range(depth):
+        node = {"type": "object", "properties": {"a": node}}
+    return node
+
+
+def test_deeply_nested_schema_does_not_recursion_error():
+    # _iter_schema_nodes/_iter_ref_strings used to recurse in Python
+    # call-stack frames; a ~4000-deep schema tree blew the recursion
+    # limit. Both now walk with an explicit stack.
+    spec = _spec({"/a": {"get": {"operationId": "a", "summary": "s",
+                                 "responses": {"200": {"description": "ok"}}}}})
+    spec["components"] = {
+        "schemas": {"Deep": _deeply_nested_object_schema(4000)}}
+    report = verify(spec, deep=False)
+    assert isinstance(report, VerifyReport)
+
+
+def test_static_check_crash_becomes_fail_not_raise(monkeypatch):
+    import spec2openapi.checks as checks_mod
+
+    def _boom(spec):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(checks_mod, "_STATIC_CHECKS",
+                        [("document.has-paths", _boom)])
+    spec = _spec({"/a": {"get": {"operationId": "a", "responses": {}}}})
+    report = verify(spec, deep=False)
+    (res,) = [r for r in report.results if r.id == "document.has-paths"]
+    assert res.status == "fail"
+    assert "check could not complete" in res.message
+    assert "ValueError" in res.message
+    assert "boom" in res.message
+
+
+def test_fastmcp_ready_problems_crash_reported_not_raised(monkeypatch):
+    import spec2openapi.checks as checks_mod
+
+    def _boom(spec):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(checks_mod, "_STATIC_CHECKS",
+                        [("document.has-paths", _boom)])
+    problems = checks_mod.fastmcp_ready_problems({"paths": {"/a": {}}})
+    assert any("check could not complete" in p and "ValueError" in p
+               for p in problems)
 
 
 def test_deep_checks_run_with_installed_deps():
@@ -378,6 +584,123 @@ def test_deep_checks_run_with_installed_deps():
               if r.id == "fastmcp.tool-materialized"]
     assert mat.status == "pass"
     assert report.complete is True
+
+
+def test_tool_materialized_uses_count_invariant_not_name_prediction():
+    # FastMCP's real tool-name normalization (version-specific: '__'
+    # splitting, [\s.-] run collapsing, 64-char truncation in 3.4.7)
+    # cannot be reliably predicted; the check must only compare counts.
+    # `get_user__v2` materializes as tool "get_user" in fastmcp 3.4.7,
+    # which the old name-prediction check flagged as missing.
+    pytest.importorskip("fastmcp")
+    pytest.importorskip("openapi_spec_validator")
+    spec = _spec({"/a": {"get": {"operationId": "get_user__v2",
+                                 "summary": "s",
+                                 "responses": {"200": {"description": "ok"}}}}})
+    report = verify(spec)
+    (mat,) = [r for r in report.results
+              if r.id == "fastmcp.tool-materialized"]
+    assert mat.status == "pass"
+
+
+def test_roundtrip_skips_inside_running_event_loop():
+    pytest.importorskip("fastmcp")
+    import asyncio
+
+    spec = _spec({"/a": {"get": {"operationId": "get_a", "summary": "s",
+                                 "responses": {"200": {"description": "ok"}}}}})
+
+    async def _run():
+        return verify(spec)
+
+    report = asyncio.run(_run())
+    (rt,) = [r for r in report.results if r.id == "fastmcp.roundtrip"]
+    assert rt.status == "skip"
+    assert "running event loop" in rt.message
+    (mat,) = [r for r in report.results
+              if r.id == "fastmcp.tool-materialized"]
+    assert mat.status == "skip"
+    assert report.ok is True
+
+
+def test_tool_params_preserve_input_schema_order_not_alphabetized():
+    # params order must mirror the OpenAPI/XSD-sequence declaration
+    # order, not be alphabetized.
+    pytest.importorskip("fastmcp")
+    spec = _spec({"/a": {"get": {
+        "operationId": "get_a", "summary": "s",
+        "parameters": [
+            {"name": "zeta", "in": "query", "required": True,
+             "schema": {"type": "string"}},
+            {"name": "alpha", "in": "query", "required": True,
+             "schema": {"type": "string"}},
+        ],
+        "responses": {"200": {"description": "ok"}}}}})
+    report = verify(spec)
+    (rt,) = [r for r in report.results if r.id == "fastmcp.roundtrip"]
+    assert rt.status == "pass"
+    (tool,) = rt.data["tools"]
+    assert tool["params"] == ["zeta", "alpha"]
+
+
+def test_fastmcp_roundtrip_closes_dummy_client_on_success(monkeypatch):
+    pytest.importorskip("fastmcp")
+    import httpx as httpx_mod
+
+    closed = []
+    orig_aclose = httpx_mod.AsyncClient.aclose
+
+    async def _tracking_aclose(self):
+        closed.append(self)
+        await orig_aclose(self)
+
+    monkeypatch.setattr(httpx_mod.AsyncClient, "aclose", _tracking_aclose)
+
+    spec = _spec({"/a": {"get": {"operationId": "get_a", "summary": "s",
+                                 "responses": {"200": {"description": "ok"}}}}})
+    report = verify(spec)
+    (rt,) = [r for r in report.results if r.id == "fastmcp.roundtrip"]
+    assert rt.status == "pass"
+    assert len(closed) == 1
+    assert closed[0].is_closed
+
+
+def test_fastmcp_roundtrip_closes_dummy_client_on_from_openapi_failure(
+        monkeypatch):
+    pytest.importorskip("fastmcp")
+    import httpx as httpx_mod
+    from fastmcp import FastMCP
+
+    closed = []
+    orig_aclose = httpx_mod.AsyncClient.aclose
+
+    async def _tracking_aclose(self):
+        closed.append(self)
+        await orig_aclose(self)
+
+    monkeypatch.setattr(httpx_mod.AsyncClient, "aclose", _tracking_aclose)
+
+    def _boom(cls, *a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(FastMCP, "from_openapi", classmethod(_boom))
+
+    spec = _spec({"/a": {"get": {"operationId": "get_a", "summary": "s",
+                                 "responses": {"200": {"description": "ok"}}}}})
+    report = verify(spec)
+    (rt,) = [r for r in report.results if r.id == "fastmcp.roundtrip"]
+    assert rt.status == "fail"
+    assert len(closed) == 1
+    assert closed[0].is_closed
+
+
+def test_to_dict_data_dict_is_not_shared_with_source():
+    data = {"tools": [{"name": "a", "params": []}]}
+    res = CheckResult(id="fastmcp.roundtrip", status="pass", data=data)
+    d = VerifyReport((res,)).to_dict()
+    d["results"][0]["data"]["extra"] = "mutated"
+    assert "extra" not in data
+    assert "extra" not in res.data
 
 
 def test_deep_checks_skip_when_fastmcp_missing(monkeypatch):
