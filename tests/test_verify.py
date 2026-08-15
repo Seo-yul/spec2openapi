@@ -174,13 +174,52 @@ def test_verify_findings_replace_pass_and_sort_deterministically():
                    for r in r1.results)
 
 
+def _mixed_dupe_operationid_spec():
+    return _spec({
+        "/a": {"get": {"operationId": 7, "responses": {}}},
+        "/b": {"get": {"operationId": 7, "responses": {}}},
+        "/c": {"get": {"operationId": "x", "responses": {}}},
+        "/d": {"get": {"operationId": "x", "responses": {}}},
+    })
+
+
+def _xsoap_substitution_unhashable_member_spec():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"Bad": {
+        "x-soap-substitution": {
+            "head": "payment", "namespace": "ns",
+            "members": [{"element": ["not", "a", "string"]}],
+        },
+    }}}
+    return spec
+
+
+def _xsoap_choice_unhashable_member_spec():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}, "b": {}},
+        "x-soap-choice": [["a", ["nested", "list"]]],
+    }}}
+    return spec
+
+
 def test_verify_never_raises_on_garbage():
     for garbage in (None, [], {}, {"paths": None}, {"paths": {"/a": None}},
                     {"paths": {"/a": {"get": None}}},
                     {"paths": {"/a": {"get": {"operationId": 7,
-                                              "responses": {}}}}}):
+                                              "responses": {}}}}},
+                    _mixed_dupe_operationid_spec(),
+                    _xsoap_substitution_unhashable_member_spec(),
+                    _xsoap_choice_unhashable_member_spec()):
         report = verify(garbage, deep=False)
         assert isinstance(report, VerifyReport)
+
+
+def test_check_fastmcp_ready_never_raises_on_mixed_type_duplicates():
+    from spec2openapi import check_fastmcp_ready
+    problems = check_fastmcp_ready(_mixed_dupe_operationid_spec())
+    assert isinstance(problems, list)
+    assert any("duplicate operationIds" in p for p in problems)
 
 
 def test_document_openapi3_check():

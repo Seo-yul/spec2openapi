@@ -7,7 +7,7 @@ normative citations (refs), and explicit skip-vs-fail separation.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .openapi import _FASTMCP_NORM_RE, _SAFE_TOOL_RE, _operations
@@ -224,7 +224,8 @@ def _check_tool_name_unique(spec):
     dupes = {o for o in op_ids if op_ids.count(o) > 1}
     if dupes:
         return [_result("tool-name.unique", "fail",
-                        f"duplicate operationIds: {sorted(dupes)}")]
+                        f"duplicate operationIds: "
+                        f"{sorted(dupes, key=repr)}")]
     return []
 
 
@@ -449,7 +450,7 @@ def _check_xsoap_substitution(spec):
         bad_member = False
         for m in members:
             el = m.get("element") if isinstance(m, dict) else None
-            if not el:
+            if not isinstance(el, str) or not el:
                 out.append(_result(
                     "x-soap.substitution", "fail",
                     "x-soap-substitution member without an element name",
@@ -477,8 +478,9 @@ def _check_xsoap_substitution(spec):
         if not bad_branch and not bad_member and branch_props != member_els:
             out.append(_result(
                 "x-soap.substitution", "fail",
-                f"oneOf branches {sorted(branch_props)} do not match "
-                f"substitution members {sorted(member_els)}", location=loc))
+                f"oneOf branches {sorted(branch_props, key=repr)} do not "
+                f"match substitution members "
+                f"{sorted(member_els, key=repr)}", location=loc))
     return out
 
 
@@ -492,7 +494,7 @@ def _check_xsoap_choice(spec):
         names = set(props) if isinstance(props, dict) else set()
         for group in groups:
             unknown = [g for g in (group if isinstance(group, list) else [])
-                       if g not in names]
+                       if not (isinstance(g, str) and g in names)]
             if unknown:
                 out.append(_result(
                     "x-soap.choice", "fail",
