@@ -412,6 +412,95 @@ def _check_xsoap_refs(spec):
     return out
 
 
+def _iter_schema_nodes(spec):
+    """Yield (location, dict-node) over components.schemas and the
+    request/response schema trees of x-soap operations. Walks the JSON
+    tree without following $refs, so termination is structural."""
+    def _walk(node, loc):
+        if isinstance(node, dict):
+            yield loc, node
+            for key, value in node.items():
+                yield from _walk(value, f"{loc}.{key}")
+        elif isinstance(node, list):
+            for i, value in enumerate(node):
+                yield from _walk(value, f"{loc}[{i}]")
+
+    for name, schema in _component_schemas(spec).items():
+        yield from _walk(schema, f"components.schemas.{name}")
+    for path, method, op, _ in _soap_operations(spec):
+        base = _op_location(path, method)
+        yield from _walk(op.get("requestBody"), f"{base}.requestBody")
+        yield from _walk(op.get("responses"), f"{base}.responses")
+
+
+def _check_xsoap_substitution(spec):
+    out = []
+    for loc, node in _iter_schema_nodes(spec):
+        sub = node.get("x-soap-substitution")
+        if not isinstance(sub, dict):
+            continue
+        members = sub.get("members")
+        if not isinstance(members, list):
+            out.append(_result("x-soap.substitution", "fail",
+                               "x-soap-substitution.members missing",
+                               location=loc))
+            continue
+        member_els = set()
+        bad_member = False
+        for m in members:
+            el = m.get("element") if isinstance(m, dict) else None
+            if not el:
+                out.append(_result(
+                    "x-soap.substitution", "fail",
+                    "x-soap-substitution member without an element name",
+                    location=loc))
+                bad_member = True
+            else:
+                member_els.add(el)
+        one_of = node.get("oneOf")
+        if not isinstance(one_of, list) or not members:
+            continue
+        branch_props = set()
+        bad_branch = False
+        for branch in one_of:
+            props = branch.get("properties") if isinstance(branch, dict) \
+                else None
+            if not (isinstance(props, dict) and len(props) == 1
+                    and branch.get("required") == list(props)):
+                out.append(_result(
+                    "x-soap.substitution", "fail",
+                    "oneOf branch is not a self-describing "
+                    "single-property object", location=loc))
+                bad_branch = True
+            else:
+                branch_props.add(next(iter(props)))
+        if not bad_branch and not bad_member and branch_props != member_els:
+            out.append(_result(
+                "x-soap.substitution", "fail",
+                f"oneOf branches {sorted(branch_props)} do not match "
+                f"substitution members {sorted(member_els)}", location=loc))
+    return out
+
+
+def _check_xsoap_choice(spec):
+    out = []
+    for loc, node in _iter_schema_nodes(spec):
+        groups = node.get("x-soap-choice")
+        if not isinstance(groups, list):
+            continue
+        props = node.get("properties")
+        names = set(props) if isinstance(props, dict) else set()
+        for group in groups:
+            unknown = [g for g in (group if isinstance(group, list) else [])
+                       if g not in names]
+            if unknown:
+                out.append(_result(
+                    "x-soap.choice", "fail",
+                    f"x-soap-choice references unknown properties: "
+                    f"{unknown}", location=loc))
+    return out
+
+
 # (id, fn) — 실행 순서; 보고서는 어차피 (id, location)으로 재정렬된다.
 # frozen 8종 중 document.mapping은 verify()/fastmcp_ready_problems()의
 # 입구 가드로 처리되므로 목록에 없다.
@@ -431,6 +520,8 @@ _STATIC_CHECKS: list = [
     ("x-soap.endpoint", _check_xsoap_endpoint),
     ("x-soap.mixed-rest", _check_xsoap_mixed_rest),
     ("x-soap.refs", _check_xsoap_refs),
+    ("x-soap.substitution", _check_xsoap_substitution),
+    ("x-soap.choice", _check_xsoap_choice),
 ]
 
 _READY_IDS = frozenset((

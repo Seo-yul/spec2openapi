@@ -268,3 +268,56 @@ def test_xsoap_refs_pass_when_resolvable():
         "application/json": {"schema": {"$ref": "#/components/schemas/X"}}}
     report = verify(spec, deep=False)
     assert _statuses(report, "x-soap.refs") == [("pass", "")]
+
+
+def _sub_schema(members, branches):
+    node = {"x-soap-substitution": {"head": "payment", "namespace": "ns",
+                                    "members": members}}
+    if branches is not None:
+        node["oneOf"] = branches
+    return node
+
+
+def test_substitution_marker_violations():
+    good_branch = {"type": "object",
+                   "properties": {"creditCard": {"type": "object"}},
+                   "required": ["creditCard"]}
+    bad_branch = {"type": "object",
+                  "properties": {"a": {}, "b": {}}, "required": ["a"]}
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {
+        "NoElement": _sub_schema([{"namespace": "ns"}], None),
+        "BadBranch": _sub_schema([{"element": "creditCard"}],
+                                 [bad_branch]),
+        "Mismatch": _sub_schema([{"element": "creditCard"}],
+                                [{"type": "object",
+                                  "properties": {"other": {}},
+                                  "required": ["other"]}]),
+        "Good": _sub_schema([{"element": "creditCard"}], [good_branch]),
+        "AbstractHead": _sub_schema([], None),
+    }}
+    report = verify(spec, deep=False)
+    fails = [m for s, m in _statuses(report, "x-soap.substitution")
+             if s == "fail"]
+    assert any("NoElement" in m or "element" in m for m in fails)
+    assert any("single-property" in m for m in fails)
+    assert any("do not match" in m for m in fails)
+    assert len(fails) == 3          # Good/AbstractHead는 위반 아님
+
+
+def test_choice_marker_violations():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}, "b": {}},
+        "x-soap-choice": [["a", "ghost"]],
+    }}}
+    report = verify(spec, deep=False)
+    (res,) = [(s, m) for s, m in _statuses(report, "x-soap.choice")]
+    assert res[0] == "fail" and "ghost" in res[1]
+
+
+def test_markers_pass_on_marker_free_spec():
+    spec = _spec({"/op": _soap_op()})
+    report = verify(spec, deep=False)
+    assert _statuses(report, "x-soap.substitution") == [("pass", "")]
+    assert _statuses(report, "x-soap.choice") == [("pass", "")]
