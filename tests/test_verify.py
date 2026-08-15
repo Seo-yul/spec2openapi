@@ -361,3 +361,36 @@ def test_deep_invalid_document_fails_schema_valid():
     report = verify(bad)
     (osv,) = [r for r in report.results if r.id == "openapi.schema-valid"]
     assert osv.status == "fail"
+
+
+from pathlib import Path
+
+import yaml
+
+EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+
+
+def test_public_api_exports():
+    import spec2openapi
+    for name in ("verify", "VerifyReport", "CheckResult", "CheckRef"):
+        assert name in spec2openapi.__all__
+        assert getattr(spec2openapi, name) is not None
+
+
+@pytest.mark.parametrize("example", sorted(EXAMPLES.glob("*.openapi.yaml")),
+                         ids=lambda p: p.name)
+def test_examples_sweep_no_fails(example):
+    spec = yaml.safe_load(example.read_text(encoding="utf-8"))
+    report = verify(spec)
+    fails = [r for r in report.results if r.status == "fail"]
+    assert fails == [], [f"{r.id}@{r.location}: {r.message}" for r in fails]
+
+
+def test_checks_module_does_not_import_optional_deps():
+    # 새 프로세스에서 코어 import만으로 fastmcp/zeep가 로드되지 않아야 한다
+    import subprocess
+    code = ("import sys; import spec2openapi, spec2openapi.checks; "
+            "bad = {'fastmcp', 'zeep', 'httpx'} & set(sys.modules); "
+            "sys.exit(1 if bad else 0)")
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True)
+    assert proc.returncode == 0, proc.stderr.decode()
