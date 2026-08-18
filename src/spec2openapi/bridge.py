@@ -14,11 +14,14 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import math
 import os
 from typing import Any
 
 import httpx
 from lxml import etree
+
+from .checks import _component_schemas
 
 logger = logging.getLogger("spec2openapi")
 
@@ -35,6 +38,17 @@ PASSWORD_TEXT = (
     "http://docs.oasis-open.org/wss/2004/01/"
     "oasis-200401-wss-username-token-profile-1.0#PasswordText"
 )
+
+
+def _soap_version(xsoap: dict[str, Any]) -> str:
+    """Normalize x-soap.soapVersion to the "1.1"/"1.2" text every lookup
+    here keys on. A hand-edited YAML spec can turn this into something
+    other than a clean string: an unquoted `soapVersion: 1.2` parses as
+    the float 1.2 (str(1.2) == "1.2", so this round-trips it), and a
+    missing/null value falls back to "1.1" like the rest of the bridge
+    assumes."""
+    v = xsoap.get("soapVersion")
+    return str(v) if v is not None else "1.1"
 
 
 _FALSEY = {"0", "false", "no", "off"}
@@ -69,6 +83,21 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_json_object(name: str) -> dict[str, Any] | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("env %s is not valid JSON (%s); ignoring", name, exc)
+        return None
+    if not isinstance(value, dict):
+        logger.warning("env %s must be a JSON object; ignoring", name)
+        return None
+    return value
+
+
 @dataclasses.dataclass
 class BridgeOptions:
     """Runtime options, typically injected via env vars in the container."""
@@ -79,8 +108,20 @@ class BridgeOptions:
     auth: str | None = None  # None | "basic" | "wsse"
     timeout: float = 30.0
     verify: bool = True
-    headers: dict[str, str] | None = None
+    headers: dict[str, str] | None = None  # extra *HTTP* headers on the POST
     trust_env: bool = True  # honor HTTP(S)_PROXY / NO_PROXY env vars
+    # values for declared soap:header parts (x-soap.headers[]), keyed by
+    # either the WSDL part name or the header element name — not to be
+    # confused with `headers` above (plain HTTP headers, not SOAP XML).
+    # There is no per-call source for these (tool arguments never carry
+    # them, by design: see openapi.py's "supplied by the runtime" note),
+    # so they are runtime/deployment-level configuration.
+    soap_headers: dict[str, Any] | None = None
+    # internal: (operation, header) pairs already warned about via
+    # _warn_missing_header, so a long-lived bridge logs each gap once
+    _warned_missing_headers: set[str] = dataclasses.field(
+        default_factory=set, repr=False, compare=False,
+    )
 
     @classmethod
     def from_env(cls) -> "BridgeOptions":
@@ -92,6 +133,7 @@ class BridgeOptions:
             timeout=_env_float("SPEC2OPENAPI_TIMEOUT", 30.0),
             verify=_env_bool("SPEC2OPENAPI_VERIFY", True),
             trust_env=_env_bool("SPEC2OPENAPI_TRUST_ENV", True),
+            soap_headers=_env_json_object("SPEC2OPENAPI_SOAP_HEADERS"),
         )
 
 
@@ -103,7 +145,10 @@ class BridgeOptions:
 class _SpecIndex:
     def __init__(self, spec: dict[str, Any]):
         self.spec = spec
-        self.components: dict[str, Any] = spec.get("components", {}).get("schemas", {})
+        # components (or components.schemas) may be null (`components:`
+        # with no value) rather than absent; same class of bug already
+        # fixed for cmd_validate — reuse its null-tolerant lookup
+        self.components: dict[str, Any] = _component_schemas(spec)
         self.ops: dict[str, dict[str, Any]] = {}
         for path, item in spec.get("paths", {}).items():
             post = (item or {}).get("post") or {}
@@ -267,12 +312,42 @@ def _choice_violations(schema: dict[str, Any], data: Any) -> list[str]:
     return errors
 
 
+def _lookup_soap_header(soap_headers: dict[str, Any] | None,
+                        hmeta: dict[str, Any]) -> tuple[Any, bool]:
+    """Look up a declared soap:header's value: by WSDL part name first,
+    then by element name. Returns (value, True) even for an explicit None
+    (rendered as xsi:nil), or (None, False) if nothing was supplied."""
+    if not soap_headers:
+        return None, False
+    for key in (hmeta.get("part"), hmeta.get("element")):
+        if key is not None and key in soap_headers:
+            return soap_headers[key], True
+    return None, False
+
+
+def _warn_missing_header(options: BridgeOptions, xsoap: dict[str, Any],
+                         hmeta: dict[str, Any]) -> None:
+    """Log once per (operation, header) that a declared header has no
+    configured value, instead of silently sending the call without it."""
+    key = f"{xsoap.get('operation')}:{hmeta.get('part') or hmeta.get('element')}"
+    if key in options._warned_missing_headers:
+        return
+    options._warned_missing_headers.add(key)
+    logger.warning(
+        "operation %s declares soap:header part=%r (element %s) but "
+        "BridgeOptions.soap_headers / SPEC2OPENAPI_SOAP_HEADERS supplies "
+        "no value for it; sending the request without this header",
+        xsoap.get("operation"), hmeta.get("part"), hmeta.get("element"),
+    )
+
+
 def build_envelope(op: dict[str, Any], payload: dict[str, Any],
                    index: _SpecIndex, options: BridgeOptions) -> bytes:
     xsoap = op["x-soap"]
-    env_ns = SOAP_ENV_NS.get(xsoap.get("soapVersion", "1.1"), SOAP_ENV_NS["1.1"])
+    env_ns = SOAP_ENV_NS.get(_soap_version(xsoap), SOAP_ENV_NS["1.1"])
     nsmap = {"soapenv": env_ns}
     envelope = etree.Element(etree.QName(env_ns, "Envelope"), nsmap=nsmap)
+    header = None
 
     if options.auth == "wsse" and options.username is not None:
         header = etree.SubElement(envelope, etree.QName(env_ns, "Header"))
@@ -286,6 +361,18 @@ def build_envelope(op: dict[str, Any], payload: dict[str, Any],
         pwd = etree.SubElement(token, etree.QName(WSSE_NS, "Password"))
         pwd.set("Type", PASSWORD_TEXT)
         pwd.text = options.password or ""
+
+    for hmeta in xsoap.get("headers") or []:
+        value, supplied = _lookup_soap_header(options.soap_headers, hmeta)
+        if not supplied:
+            _warn_missing_header(options, xsoap, hmeta)
+            continue
+        if header is None:
+            header = etree.SubElement(envelope, etree.QName(env_ns, "Header"))
+        local = hmeta.get("element") or hmeta.get("part") or "Header"
+        ns = hmeta.get("namespace")
+        tag = etree.QName(ns, local) if ns else local
+        _write_value(header, tag, {"$ref": hmeta["schema"]}, value, index)
 
     body = etree.SubElement(envelope, etree.QName(env_ns, "Body"))
     in_meta = xsoap.get("input", {})
@@ -318,12 +405,20 @@ def _coerce(text: str | None, schema: dict[str, Any]) -> Any:
     if text is None:
         return None
     t = schema.get("type")
+    if isinstance(t, list):
+        # OpenAPI 3.1 nullable scalar, e.g. to_openapi_31's ["integer",
+        # "null"]: coerce against the first non-null member, if any
+        t = next((x for x in t if x != "null"), None)
     s = text.strip()
     try:
         if t == "integer":
             return int(s)
         if t == "number":
-            return float(s)
+            v = float(s)
+            # xsd NaN/INF/-INF parse fine but aren't valid JSON; httpx's
+            # encoder would emit a bare (invalid) token for them, so keep
+            # the original text instead of a non-finite float
+            return v if math.isfinite(v) else text
         if t == "boolean":
             low = s.lower()
             if low in ("true", "1"):
@@ -441,6 +536,20 @@ def _http_error(http_status: int, content: bytes) -> tuple[int, dict[str, Any]]:
     }
 
 
+def _http_fault(http_status: int, content: bytes) -> tuple[int, dict[str, Any]]:
+    """Like _http_error, but for a body that parsed as a well-formed
+    (non-Fault) SOAP envelope: legible enough to trust, so the endpoint's
+    actual HTTP status is reported instead of a generic 502."""
+    return http_status, {
+        "faultcode": "spec2openapi.HTTPError",
+        "faultstring": (
+            f"endpoint returned HTTP {http_status} "
+            "(response body parsed but contained no SOAP Fault)"
+        ),
+        "detail": content[:2000].decode("utf-8", "replace"),
+    }
+
+
 def parse_response(content: bytes, op: dict[str, Any],
                    index: _SpecIndex,
                    http_status: int = 200) -> tuple[int, dict[str, Any]]:
@@ -448,7 +557,7 @@ def parse_response(content: bytes, op: dict[str, Any],
     status code, used to give sensible errors for empty/non-XML bodies."""
     xsoap = op["x-soap"]
     is_one_way = not xsoap.get("output")
-    env_ns = SOAP_ENV_NS.get(xsoap.get("soapVersion", "1.1"), SOAP_ENV_NS["1.1"])
+    env_ns = SOAP_ENV_NS.get(_soap_version(xsoap), SOAP_ENV_NS["1.1"])
 
     if not content or not content.strip():
         # empty body: a one-way call with a 2xx succeeded; otherwise the
@@ -495,6 +604,11 @@ def parse_response(content: bytes, op: dict[str, Any],
     fault = parse_fault(body, env_ns)
     if fault is not None:
         return 500, fault
+    if http_status >= 400:
+        # the body parsed as an envelope but carried no Fault: an upstream
+        # proxy/gateway can still return an error status with a templated
+        # non-Fault body, and the operation never actually ran
+        return _http_fault(http_status, content)
 
     out_meta = xsoap.get("output") or {}
     expected = out_meta.get("element")
@@ -520,6 +634,24 @@ def parse_response(content: bytes, op: dict[str, Any],
 # --------------------------------------------------------------------------
 # the transport
 # --------------------------------------------------------------------------
+
+
+def _soap_request_headers(xsoap: dict[str, Any]) -> dict[str, str]:
+    """Content-Type / SOAPAction for the outbound POST, from x-soap
+    soapAction/soapVersion. Both are trusted-but-verify: a hand-edited
+    YAML spec can supply `soapAction: null` (must not become the literal
+    string "None") or an unquoted `soapVersion: 1.2` (a float, normalized
+    by _soap_version)."""
+    action = xsoap.get("soapAction") or ""
+    if _soap_version(xsoap) == "1.2":
+        ct = "application/soap+xml; charset=utf-8"
+        if action:
+            ct += f'; action="{action}"'
+        return {"Content-Type": ct}
+    return {
+        "Content-Type": "text/xml; charset=utf-8",
+        "SOAPAction": f'"{action}"',
+    }
 
 
 class SoapBridgeTransport(httpx.AsyncBaseTransport):
@@ -595,17 +727,7 @@ class SoapBridgeTransport(httpx.AsyncBaseTransport):
                 {"faultcode": "spec2openapi.BadRequest",
                  "faultstring": str(exc), "detail": ""},
             )
-        action = xsoap.get("soapAction", "")
-        if xsoap.get("soapVersion") == "1.2":
-            ct = "application/soap+xml; charset=utf-8"
-            if action:
-                ct += f'; action="{action}"'
-            headers = {"Content-Type": ct}
-        else:
-            headers = {
-                "Content-Type": "text/xml; charset=utf-8",
-                "SOAPAction": f'"{action}"',
-            }
+        headers = _soap_request_headers(xsoap)
 
         try:
             soap_resp = await self._client.post(

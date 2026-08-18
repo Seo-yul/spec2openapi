@@ -212,6 +212,8 @@ WSDL에서 변환된 스펙은 모든 operation에 서비스 이름이 태그로
 | `headers[]` | soap:header 파트: `{part, element, namespace, schema}` |
 | `faults[]` | 선언된 fault: `{name, element, namespace, schema}` |
 
+`headers[]`로 선언된 soap:header 값은 도구 인자로 전달되지 않는다 — 런타임이 `BridgeOptions.soap_headers` / `SPEC2OPENAPI_SOAP_HEADERS`(part 또는 element 이름을 키로 하는 JSON 객체)로 공급한다. 값이 설정되지 않은 헤더는 경고를 로그로 남기고(오퍼레이션·헤더별 최초 1회) 생략한 채 전송된다.
+
 XML 직렬화 규칙(스키마의 `xml` 어노테이션):
 
 - `xml.name` / `xml.namespace`: 엘리먼트 로컬명과 네임스페이스. namespace가 없으면 unqualified로 직렬화한다(rpc 파트, elementFormDefault=unqualified).
@@ -230,7 +232,7 @@ XML 직렬화 규칙(스키마의 `xml` 어노테이션):
 
 > **SOAP + REST 혼합 스펙 주의.** 현재 참조 런타임은 한 경로라도 `x-soap`이 있으면 *전체* 트래픽을 SOAP 브리지로 라우팅하므로, 혼합 스펙의 REST 오퍼레이션은 올바르게 서빙되지 않는다. 해결 전까지 SOAP 스펙과 REST 스펙을 분리해서 쓸 것.
 
-런타임 환경변수: `SPEC2OPENAPI_ENDPOINT`(엔드포인트 오버라이드), `SPEC2OPENAPI_AUTH`(`basic`|`wsse`), `SPEC2OPENAPI_USERNAME`/`SPEC2OPENAPI_PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`.
+런타임 환경변수: `SPEC2OPENAPI_ENDPOINT`(엔드포인트 오버라이드), `SPEC2OPENAPI_AUTH`(`basic`|`wsse`), `SPEC2OPENAPI_USERNAME`/`SPEC2OPENAPI_PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`, `SPEC2OPENAPI_SOAP_HEADERS`(선언된 `soap:header` 파트 값; part 이름 또는 element 이름을 키로 하는 JSON 객체).
 
 `Dockerfile`(고정 이미지)과 `k8s/example.yaml`(ConfigMap으로 스펙을 교체하고 Secret으로 자격증명 주입)이 쿠버네티스 운영 예시다. 자체 런타임을 만든다면 `src/spec2openapi/bridge.py`를 참조 구현으로 삼으면 된다.
 

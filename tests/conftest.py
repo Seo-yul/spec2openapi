@@ -24,6 +24,11 @@ def orders_wsdl() -> str:
 
 
 @pytest.fixture(scope="session")
+def advanced_wsdl() -> str:
+    return str(FIXTURES / "advanced.wsdl")
+
+
+@pytest.fixture(scope="session")
 def soap_server():
     server, base_url = start_server()
     yield base_url
