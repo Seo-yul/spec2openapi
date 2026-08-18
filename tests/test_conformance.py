@@ -938,6 +938,93 @@ def test_properties_named_like_keywords_are_schemas(version):
     assert "nullable" in t["enum"] or t["enum"].get("type") == ["string", "null"]
 
 
+# -- opaque property-map keys must survive to_openapi_31 (#141 A6) -------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_opaque_property_named_nullable_survives_31(version):
+    # a property literally named "nullable"/"enum" must not be deleted or
+    # left invalid by to_openapi_31's own keyword handling — the
+    # properties map's keys are opaque names, not schema keywords, the
+    # same rule swagger.py's own _fix_schema already applies.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "T": {"type": "object", "properties": {
+                   "nullable": {"type": "string"},
+                   "enum": {"type": "integer"},
+                   "exclusiveMinimum": {"type": "boolean"}}}}}
+    out = _valid(src, version)
+    props = out["components"]["schemas"]["T"]["properties"]
+    assert set(props) == {"nullable", "enum", "exclusiveMinimum"}
+    assert props["nullable"]["type"] == "string"
+    assert props["enum"]["type"] == "integer"
+    assert props["exclusiveMinimum"]["type"] == "boolean"
+
+
+def test_opaque_property_own_nullable_still_converts_in_31():
+    # a property literally named "enum" whose OWN schema has "nullable"
+    # must still get that nullable correctly re-encoded for 3.1 — the
+    # data-keyword passthrough must not also suppress recursion into a
+    # legitimately-schema-shaped value sitting at a colliding key.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "T": {"type": "object", "properties": {
+                   "enum": {"type": "string", "x-nullable": True}}}}}
+    out = _valid(src, "3.1")
+    prop = out["components"]["schemas"]["T"]["properties"]["enum"]
+    assert "nullable" not in prop
+    assert set(prop["type"]) == {"string", "null"}
+
+
+# -- nullable on a non-string-type schema must survive to_openapi_31 (#141 A5) -
+
+def _accepts_null(schema) -> bool:
+    """Best-effort structural check that a JSON-Schema-2020-12 fragment
+    accepts a null instance (no live $ref-resolving validator needed for
+    this unit test: the fixtures below never rely on resolving a $ref
+    branch to prove nullability — the null-accepting branch is always
+    self-contained)."""
+    if not isinstance(schema, dict):
+        return False
+    t = schema.get("type")
+    if t == "null" or (isinstance(t, list) and "null" in t):
+        return True
+    if isinstance(schema.get("enum"), list) and None in schema["enum"]:
+        return True
+    if any(_accepts_null(b) for b in schema.get("anyOf") or ()):
+        return True
+    if any(_accepts_null(b) for b in schema.get("oneOf") or ()):
+        return True
+    allof = schema.get("allOf")
+    if allof:
+        return all(_accepts_null(b) for b in allof)
+    return False
+
+
+def test_nullable_ref_sibling_survives_31():
+    # x-nullable next to a $ref (wrapped in allOf by swagger.py, no
+    # sibling 'type' to fold nullable into) must not vanish in 3.1.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object"},
+               "B": {"type": "object", "properties": {
+                   "x": {"x-nullable": True, "$ref": "#/definitions/A"}}}}}
+    out = _valid(src, "3.1")
+    schema = out["components"]["schemas"]["B"]["properties"]["x"]
+    assert "nullable" not in schema
+    assert _accepts_null(schema)
+
+
+def test_nullable_enum_only_survives_31():
+    # nullable on an enum-only (typeless) schema must not vanish either.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "T": {"nullable": True, "enum": ["a", "b"]}}}
+    out = _valid(src, "3.1")
+    schema = out["components"]["schemas"]["T"]
+    assert "nullable" not in schema
+    assert _accepts_null(schema)
+
+
 # -- parameter-position $refs and duplicates (#97, #101) -----------------------
 
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
