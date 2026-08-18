@@ -7,7 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `x-soap-choice` entries describe *branches*, not individual elements
+  (#141). A `members[]` entry is still a bare property name for the usual
+  single-element branch, but a branch that is itself an `xsd:sequence` now
+  appears as a list of names: those elements belong together and are
+  chosen or omitted as a unit. Previously they were flattened into
+  separate members, so the bridge rejected a payload the XSD requires.
+  Documented in both READMEs; the SOAP bridge and the `x-soap.choice`
+  verification check understand both shapes.
+
 ### Fixed
+- Conversion no longer silently drops a `$ref` that has sibling keys
+  including `allOf` (#141) — the sibling spread overwrote the wrapper, so
+  the referenced schema vanished with no `x-s2o.lossy` record.
+- Multi-type schemas (`type: ["array", "null"]`, `type: ["file"]`) are
+  collapsed *before* the `type: file` and array-needs-`items` fixups run,
+  so they no longer emit documents that fail validation (#141).
+- `nullable` survives the OpenAPI 3.1 conversion on schemas where it
+  cannot be folded into a `type` — `allOf`/`$ref`-wrapped, enum-only, or
+  type-less schemas are now expressed as `anyOf: [schema, {type: null}]`
+  instead of losing the null case (#141).
+- A property literally named `nullable`, `enum`, or `exclusiveMinimum` is
+  no longer mangled by the 3.1 conversion: keys inside `properties` maps
+  are names, not keywords (#141).
+- The `default` response subtree is no longer treated as opaque data by
+  the null-stripping pass, which left invalid `null` values in the output
+  and shared the subtree with the input document by reference (#141).
+- XSD enumerations and numeric bounds are converted to the base type, so
+  a restriction on `xs:int` no longer yields the unsatisfiable
+  `{type: integer, enum: ["1", "2"]}`, and 64-bit bounds keep their
+  precision instead of passing through `float` (#141).
+- A document nested past 200 levels raises `ConversionError` instead of
+  `RecursionError`, keeping the "every failure is a ConversionError"
+  contract (#141).
+- A doc/literal wrapper of simple type carries the `xml: {x-text: true}`
+  annotation, so the bridge serializes its value as the wrapper's text
+  rather than a `<value>` child element (#141).
+- `nillable` is preserved on complex and `$ref` elements; a complexType
+  containing only `xsd:any` is no longer misclassified as simpleContent;
+  XSD `pattern` facets are anchored to match XSD semantics; and the
+  metadata scrapers honor `--huge-tree` instead of dropping all facets and
+  documentation on very large WSDLs (#141).
+- Malformed `responses`/`securityDefinitions`/`info` sections raise
+  `ConversionError` instead of a raw `AttributeError`/`ValueError`; a path
+  key that collides after normalization is recorded rather than silently
+  overwriting; response-header conversion applies the full schema fixups
+  and records dropped `collectionFormat`; and an operation-level empty
+  `consumes`/`produces` now clears the global instead of inheriting it
+  (#141).
 - The SOAP bridge no longer reports a failed call as a success (#140): an
   HTTP 4xx/5xx response whose body is a well-formed non-Fault envelope was
   answered as HTTP 200, telling the model an operation that never ran had

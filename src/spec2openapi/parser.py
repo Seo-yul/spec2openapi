@@ -101,6 +101,19 @@ _SAFE_XML = etree.XMLParser(
 )
 
 
+def _safe_xml_parser(huge_tree: bool) -> etree.XMLParser:
+    """The metadata scrapers below (facets, documentation) used to parse
+    with _SAFE_XML unconditionally, ignoring whatever huge_tree the
+    caller passed to parse_wsdl — so a document only parseable with
+    huge_tree=True (the same document zeep's own client parses
+    successfully) silently lost its facets/docs instead of scraping them
+    (#141 C). Reuse the shared instance for the common (False) case."""
+    if huge_tree:
+        return etree.XMLParser(resolve_entities=False, load_dtd=False,
+                               no_network=True, huge_tree=True)
+    return _SAFE_XML
+
+
 def _load_raw(location: str, *, allow_remote: bool = True) -> bytes | None:
     try:
         if os.path.exists(location):
@@ -122,15 +135,79 @@ def _doc_text(node: etree._Element) -> str | None:
     return None
 
 
-_FACET_MAP = {
-    "pattern": ("pattern", str),
-    "minLength": ("minLength", int),
-    "maxLength": ("maxLength", int),
-    "minInclusive": ("minimum", float),
-    "maxInclusive": ("maximum", float),
-    "minExclusive": ("exclusiveMinimumValue", float),
-    "maxExclusive": ("exclusiveMaximumValue", float),
+# facets whose value is a numeric bound (minInclusive/etc.) -> the JSON
+# Schema keyword it becomes. Cast is picked dynamically from the
+# restriction's base type (see _restriction_number_kind): int for an
+# integer base (exact, no float precision loss for e.g. int64 bounds),
+# float otherwise.
+_BOUND_FACET_MAP = {
+    "minInclusive": "minimum",
+    "maxInclusive": "maximum",
+    "minExclusive": "exclusiveMinimumValue",
+    "maxExclusive": "exclusiveMaximumValue",
 }
+
+# xs: base type local names whose lexical values are exact integers /
+# floating-point numbers; anything else (string, date, boolean, a
+# reference to another named simpleType, ...) is left as text.
+_XSD_INTEGER_BASES = frozenset({
+    "integer", "int", "long", "short", "byte",
+    "nonNegativeInteger", "nonPositiveInteger",
+    "positiveInteger", "negativeInteger",
+    "unsignedLong", "unsignedInt", "unsignedShort", "unsignedByte",
+})
+_XSD_NUMBER_BASES = frozenset({"decimal", "float", "double"})
+
+
+def _restriction_number_kind(restriction: etree._Element) -> str:
+    """Classify a restriction's base type for facet coercion: 'integer'
+    (cast via int — exact, no float precision loss), 'number' (cast via
+    float), or 'string' (base is non-numeric, or is a reference to
+    another named simpleType this raw-XML metadata pass does not chase —
+    left as the original text rather than guessing)."""
+    base = restriction.get("base")
+    if not base:
+        return "string"
+    resolved = _resolve_qname_ref(base, restriction)
+    if resolved is None or resolved[0] != XSD_NS:
+        return "string"
+    local = resolved[1]
+    if local in _XSD_INTEGER_BASES:
+        return "integer"
+    if local in _XSD_NUMBER_BASES:
+        return "number"
+    return "string"
+
+
+def _coerce_enum_value(raw: str, kind: str) -> Any:
+    """Convert an enumeration's lexical value toward its restriction's
+    base type; keep the original text when it doesn't parse as that type
+    (a garbage/mismatched XSD value must not crash the parser — the
+    original text stays available for a human to fix) (#141 A7)."""
+    if kind == "integer":
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
+    if kind == "number":
+        try:
+            return float(raw)
+        except ValueError:
+            return raw
+    return raw
+
+
+def _anchor_pattern(pattern: str) -> str:
+    """XSD pattern facets implicitly match the *whole* lexical value (the
+    XSD regex language has no start/end-of-string metacharacters of its
+    own — the entire pattern is always a full match). JSON Schema's
+    'pattern' keyword follows ECMA-262 and is an unanchored *search* by
+    default, so copying an XSD pattern verbatim silently accepts values
+    that only partially match (e.g. "xxAAxx" against "[A-Z]{2}") (#141
+    C). Wrapping in a non-capturing group + ^...$ restores XSD's
+    full-match semantics; this is safe to apply unconditionally since a
+    literal '^'/'$' has no special meaning as an XSD pattern anchor."""
+    return f"^(?:{pattern})$"
 
 
 def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
@@ -139,13 +216,15 @@ def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
     restriction = st.find(f"{{{XSD_NS}}}restriction")
     if restriction is None:
         return out
+    kind = _restriction_number_kind(restriction)
     enums = [
-        e.get("value")
+        _coerce_enum_value(e.get("value"), kind)
         for e in restriction.findall(f"{{{XSD_NS}}}enumeration")
         if e.get("value") is not None
     ]
     if enums:
         out["enum"] = enums
+    bound_cast = int if kind == "integer" else float
     for facet in restriction:
         if not isinstance(facet.tag, str):
             continue
@@ -165,10 +244,21 @@ def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
                     out["multipleOf"] = round(10 ** -digits, digits)
             except ValueError:
                 pass
-        elif local in _FACET_MAP:
-            key, cast = _FACET_MAP[local]
+        elif local == "pattern":
+            out["pattern"] = _anchor_pattern(value)
+        elif local in ("minLength", "maxLength"):
             try:
-                out[key] = cast(value)
+                out[local] = int(value)
+            except ValueError:
+                pass
+        elif local in _BOUND_FACET_MAP:
+            # minimum/maximum are numeric-only JSON Schema keywords: a
+            # value that doesn't parse as a number is dropped exactly as
+            # before, never smuggled through as a string (which would be
+            # schema-invalid, unlike an enum value of the same shape)
+            key = _BOUND_FACET_MAP[local]
+            try:
+                out[key] = bound_cast(value)
             except ValueError:
                 pass
     # OpenAPI 3.0 exclusive bounds are boolean flags on minimum/maximum
@@ -236,7 +326,8 @@ def _scan_schema_root(root: etree._Element, meta: XsdMeta) -> None:
 
 
 def _collect_xsd_meta(client: Client, source: str,
-                      *, forbid_external: bool = False) -> XsdMeta:
+                      *, forbid_external: bool = False,
+                      huge_tree: bool = False) -> XsdMeta:
     meta = XsdMeta(facets={}, type_docs={}, child_docs={})
     locations: list[str] = []
     try:
@@ -250,6 +341,7 @@ def _collect_xsd_meta(client: Client, source: str,
         logger.debug("schema document introspection failed: %s", exc)
     if source not in locations:
         locations.append(source)
+    parser = _safe_xml_parser(huge_tree)
     for loc in locations:
         # the source itself was chosen by the caller; imported locations
         # are attacker-controllable and honor forbid_external
@@ -257,7 +349,7 @@ def _collect_xsd_meta(client: Client, source: str,
         if not raw:
             continue
         try:
-            root = etree.fromstring(raw, parser=_SAFE_XML)
+            root = etree.fromstring(raw, parser=parser)
         except Exception:
             continue
         _scan_schema_root(root, meta)
@@ -274,12 +366,13 @@ def _collect_xsd_meta(client: Client, source: str,
     return meta
 
 
-def _extract_wsdl_docs(source: str) -> tuple[str | None, dict[str, str]]:
+def _extract_wsdl_docs(source: str, *, huge_tree: bool = False
+                       ) -> tuple[str | None, dict[str, str]]:
     raw = _load_raw(source)
     if not raw:
         return None, {}
     try:
-        tree = etree.fromstring(raw, parser=_SAFE_XML)
+        tree = etree.fromstring(raw, parser=_safe_xml_parser(huge_tree))
     except Exception:
         return None, {}
     ns = {"wsdl": WSDL_NS}
@@ -570,8 +663,9 @@ def _parse_wsdl_location(
             f"could not parse WSDL '{label}': {exc}"
         ) from exc
 
-    svc_doc, op_docs = _extract_wsdl_docs(source)
-    xsd_meta = _collect_xsd_meta(client, source, forbid_external=forbid_external)
+    svc_doc, op_docs = _extract_wsdl_docs(source, huge_tree=huge_tree)
+    xsd_meta = _collect_xsd_meta(client, source, forbid_external=forbid_external,
+                                 huge_tree=huge_tree)
 
     operations: list[ParsedOperation] = []
     skipped: list[tuple[str, str]] = []

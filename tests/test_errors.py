@@ -270,3 +270,23 @@ def test_non_wsdl_xml_is_labeled_conversion_error(tmp_path):
 def test_strict_skip_is_conversion_error():
     from spec2openapi.parser import UnsupportedWsdlError
     assert issubclass(UnsupportedWsdlError, ConversionError)
+
+
+# -- non-dict responses/securityDefinitions/info are ConversionError (#141 C) --
+
+BASE = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {}}
+
+
+def test_non_dict_top_level_responses_is_conversion_error():
+    with pytest.raises(ConversionError, match="responses"):
+        convert_swagger({**BASE, "responses": ["not", "a", "mapping"]})
+
+
+def test_non_dict_security_definitions_is_conversion_error():
+    with pytest.raises(ConversionError, match="securityDefinitions"):
+        convert_swagger({**BASE, "securityDefinitions": ["nope"]})
+
+
+def test_non_dict_info_is_conversion_error():
+    with pytest.raises(ConversionError, match="info"):
+        convert_swagger({"swagger": "2.0", "info": "nope", "paths": {}})

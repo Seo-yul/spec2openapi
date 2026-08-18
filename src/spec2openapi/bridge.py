@@ -295,19 +295,34 @@ def _write_object(parent: etree._Element, schema: dict, data: Any,
 
 
 def _choice_violations(schema: dict[str, Any], data: Any) -> list[str]:
-    """Enforce x-soap-choice on the payload: at most one member per group,
-    and exactly one when the group is required."""
+    """Enforce x-soap-choice on the payload: at most one *branch* per
+    group, and exactly one when the group is required.
+
+    A `members[]` entry is normally a bare property name (one branch),
+    but may also be a list of names — a branch that is itself an
+    xsd:sequence of 2+ elements (#141 B2). Those names belong together,
+    so the branch counts as "chosen" when any of its own names is set,
+    and setting several of them together is not a violation; only
+    choosing more than one *branch* (or none, when required) is."""
     if not isinstance(data, dict):
         return []
     errors: list[str] = []
     for group in schema.get("x-soap-choice", []) or []:
         members = group.get("members", [])
-        present = [m for m in members if data.get(m) is not None]
-        if len(present) > 1:
+        chosen: list[Any] = []   # branch entries with >=1 name present
+        present: list[str] = []  # every individual name actually set
+        for m in members:
+            names = m if isinstance(m, list) else [m]
+            hit = [n for n in names
+                  if isinstance(n, str) and data.get(n) is not None]
+            if hit:
+                chosen.append(m)
+                present.extend(hit)
+        if len(chosen) > 1:
             errors.append(
                 f"at most one of {members} may be set (got {present})"
             )
-        elif group.get("required") and not present:
+        elif group.get("required") and not chosen:
             errors.append(f"exactly one of {members} is required")
     return errors
 

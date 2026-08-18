@@ -189,6 +189,24 @@ def test_repeated_records_aggregated():
     assert len(hits) == 1 and hits[0].endswith("(×2)")
 
 
+def test_default_response_nulls_not_aliased_to_source():
+    # a response literally named "default" must be null-stripped and
+    # rebuilt like any other response, not kept as an opaque, unstripped
+    # alias of the source subtree (#141 A3).
+    from spec2openapi.swagger import _Upgrader
+
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {},
+           "responses": {"default": {"description": "d",
+                                     "schema": {"type": "object",
+                                               "properties": None}}}}
+    up = _Upgrader(src)
+    stripped_default = up.src["responses"]["default"]
+    assert "properties" not in stripped_default["schema"]
+    assert stripped_default is not src["responses"]["default"]
+    # the untouched input is not mutated in place
+    assert src["responses"]["default"]["schema"]["properties"] is None
+
+
 def test_strict_error_lists_aggregated_records():
     import pytest as _pytest
     src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},

@@ -41,9 +41,29 @@ def test_sequence_branch_choice_not_all_required():
     schema = _request_schema(spec, "Get_Data_2")  # SeqChoice input
     # the impossible "all three required" must not happen
     assert "cardNumber" not in schema.get("required", [])
+    assert "cardExpiry" not in schema.get("required", [])
     assert "iban" not in schema.get("required", [])
-    members = {m for g in schema["x-soap-choice"] for m in g["members"]}
-    assert {"cardNumber", "cardExpiry", "iban"} <= members
+    (group,) = schema["x-soap-choice"]
+    # the <sequence>cardNumber,cardExpiry</sequence> branch is ONE bundled
+    # member (a name list) — not two further mutually-exclusive
+    # alternatives — while the single-element <sequence>iban</sequence>
+    # branch stays a bare name (#141 B2)
+    assert group["members"] == [["cardNumber", "cardExpiry"], "iban"]
+    assert group["required"] is True
+
+
+def test_sequence_branch_members_settable_together():
+    # a payload that sets BOTH elements of the bundled sequence branch
+    # together must not be rejected by the bridge's choice check, and a
+    # payload spanning two different branches still must be (#141 B2).
+    from spec2openapi.bridge import _choice_violations
+
+    spec = convert_wsdl(EDGE)
+    schema = _request_schema(spec, "Get_Data_2")
+    assert _choice_violations(
+        schema, {"cardNumber": "4111", "cardExpiry": "12/34"}) == []
+    assert _choice_violations(
+        schema, {"cardNumber": "4111", "iban": "DE00"}) != []
 
 
 def test_wsdl_type_named_soapfault_not_clobbered():

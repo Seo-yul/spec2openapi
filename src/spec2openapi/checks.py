@@ -574,10 +574,23 @@ def _check_xsoap_substitution(spec):
     return out
 
 
+def _valid_choice_member(m: Any, names: set) -> bool:
+    """A members[] entry is a bare property name (one branch), or a
+    non-empty list of property names — a branch that is itself a
+    bundled xsd:sequence of 2+ elements (#141 B2)."""
+    if isinstance(m, str):
+        return m in names
+    if isinstance(m, list) and m:
+        return all(isinstance(n, str) and n in names for n in m)
+    return False
+
+
 def _check_xsoap_choice(spec):
-    # actual emitted/consumed shape (schema.py ~317, bridge.py ~256):
-    # x-soap-choice is a list of {"members": [name, ...], "required":
-    # bool} group dicts, not a list of name-lists.
+    # actual emitted/consumed shape (schema.py's _choice_groups,
+    # bridge.py's _choice_violations): x-soap-choice is a list of
+    # {"members": [...], "required": bool} group dicts. Each members[]
+    # entry is either a bare property name, or a list of property names
+    # for a branch that bundles 2+ elements together.
     out = []
     for loc, node in _iter_schema_nodes(spec):
         groups = node.get("x-soap-choice")
@@ -599,7 +612,7 @@ def _check_xsoap_choice(spec):
                     location=loc))
                 continue
             unknown = [m for m in members
-                       if not (isinstance(m, str) and m in names)]
+                       if not _valid_choice_member(m, names)]
             if unknown:
                 out.append(_finding(
                     "x-soap.choice",

@@ -398,6 +398,30 @@ def test_string_media_types_wrapped_not_split(kind, where):
     assert any("was a string" in a for a in out["x-s2o"]["assumptions"])
 
 
+# -- operation-level empty consumes/produces clears the global (#141 C) --------
+
+@pytest.mark.parametrize("kind", ["consumes", "produces"])
+def test_operation_level_empty_media_types_does_not_inherit_global(kind):
+    # an operation-level `consumes: []`/`produces: []` is a deliberate
+    # override, not "unspecified" — it must not fall back to the global
+    # declaration (previously `op.get(kind) or self.src.get(kind)`
+    # treated the empty list as falsy and inherited the global anyway).
+    op = {"operationId": "a", kind: [],
+          "parameters": [{"name": "b", "in": "body",
+                          "schema": {"type": "object"}}],
+          "responses": {"200": {"description": "ok",
+                                "schema": {"type": "string"}}}}
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           kind: ["application/xml"], "paths": {"/a": {"post": op}}}
+    out = _valid(src)
+    post = out["paths"]["/a"]["post"]
+    content = (post["requestBody"]["content"] if kind == "consumes"
+               else post["responses"]["200"]["content"])
+    # falls back to the documented application/json default, NOT the
+    # global 'application/xml'
+    assert list(content.keys()) == ["application/json"]
+
+
 # -- more GIGO hardening (#57) -------------------------------------------------
 
 def test_boolean_required_hoisted_to_parent():
@@ -533,6 +557,62 @@ def test_operationid_dedup_recorded():
     assert any("renamed to 'same_2'" in a for a in out["x-s2o"]["assumptions"])
 
 
+# -- response header schema fixups + collectionFormat recording (#141 C) ------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_response_header_multitype_array_collapses(version):
+    # a response header's schema fields were fixed one field at a time,
+    # so a multi-type array on 'type' never reached _fix_schema's
+    # collapse logic and stayed an invalid JSON-Schema type array.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a",
+               "responses": {"200": {"description": "ok",
+                   "headers": {"X-Count": {"type": ["integer", "null"]}}}}}}}}
+    out = _valid(src, version)
+    schema = out["paths"]["/a"]["get"]["responses"]["200"][
+        "headers"]["X-Count"]["schema"]
+    if version == "3.0":
+        assert schema["type"] == "integer" and schema["nullable"] is True
+    else:
+        assert set(schema["type"]) == {"integer", "null"}
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_response_header_collection_format_recorded(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a",
+               "responses": {"200": {"description": "ok",
+                   "headers": {"X-Tags": {
+                       "type": "array", "items": {"type": "string"},
+                       "collectionFormat": "csv"}}}}}}}}
+    out = _valid(src, version)
+    schema = out["paths"]["/a"]["get"]["responses"]["200"][
+        "headers"]["X-Tags"]["schema"]
+    assert "collectionFormat" not in schema
+    assert schema["x-collectionFormat"] == "csv"
+    assert any("collectionFormat" in m for m in out["x-s2o"]["lossy"])
+
+
+# -- path collision after leading-slash normalization is recorded (#141 C) -----
+
+def test_path_collision_after_normalization_recorded():
+    # 'pets' normalizes to '/pets', silently overwriting the path item
+    # already declared at '/pets' — must be recorded, not silent.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {
+               "/pets": {"get": {"operationId": "a",
+                                 "responses": {"200": {"description": "ok"}}}},
+               "pets": {"post": {"operationId": "b",
+                                 "responses": {"200": {"description": "ok"}}}},
+           }}
+    out = _valid(src)
+    assert any("collide" in m for m in out["x-s2o"]["lossy"])
+    assert len(out["paths"]) == 1  # one survives at the normalized key
+    assert "get" in out["paths"]["/pets"] or "post" in out["paths"]["/pets"]
+
+
 def test_strict_raises_with_records_listed():
     from spec2openapi import ConversionError
     src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
@@ -591,6 +671,130 @@ def test_ref_siblings_wrapped_in_allof(version):
     assert props["x"]["description"] == "keep me"       # sibling stays alive
     assert props["y"] == {"$ref": "#/components/schemas/A"}  # bare untouched
     assert any("allOf" in a for a in out["x-s2o"]["assumptions"])
+
+
+# -- $ref + sibling allOf must merge, not clobber (#141 A1) --------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_ref_with_sibling_allof_merged_not_overwritten(version):
+    # a $ref alongside a sibling *allOf* (not just plain keys like
+    # 'description') must not have the $ref silently dropped by the
+    # dict-spread `{"allOf": [ref], **out}` when `out` already has its
+    # own 'allOf' key.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object"},
+               "B": {"type": "object", "properties": {
+                   "x": {"$ref": "#/definitions/A",
+                         "allOf": [{"description": "extra"}]}}}}}
+    out = _valid(src, version)
+    allof = out["components"]["schemas"]["B"]["properties"]["x"]["allOf"]
+    refs = [m["$ref"] for m in allof if isinstance(m, dict) and "$ref" in m]
+    assert refs == ["#/components/schemas/A"]
+    assert {"description": "extra"} in allof
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deep_ref_with_sibling_allof_merged(version):
+    # same bug, deep-$ref hoisting path (swagger.py's other copy of the
+    # allOf-wrap logic).
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a",
+               "responses": {"200": {"description": "ok", "schema": {
+                   "type": "object", "properties": {
+                       "word": {"type": "string"}}}}}}}},
+           "definitions": {"Uses": {"type": "object", "properties": {
+               "w": {"$ref": "#/paths/~1a/get/responses/200/schema"
+                             "/properties/word",
+                     "allOf": [{"description": "extra"}]}}}}}
+    out = _valid(src, version)
+    allof = out["components"]["schemas"]["Uses"]["properties"]["w"]["allOf"]
+    assert any(isinstance(m, dict) and "$ref" in m for m in allof)
+    assert {"description": "extra"} in allof
+
+
+# -- multi-type collapse must not skip file/items fixups (#141 A2) -------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_multitype_array_collapse_still_gets_items(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {"T": {"type": ["array", "null"]}}}
+    out = _valid(src, version)
+    t = out["components"]["schemas"]["T"]
+    assert t.get("items") == {}
+    if version == "3.0":
+        assert t["type"] == "array" and t["nullable"] is True
+    else:
+        assert set(t["type"]) == {"array", "null"}
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_multitype_file_collapse_still_gets_binary_fixup(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {"T": {"type": ["file"]}}}
+    out = _valid(src, version)
+    t = out["components"]["schemas"]["T"]
+    assert t["type"] == "string"
+    assert t["format"] == "binary"
+
+
+# -- 'default' response key must not be treated as opaque data (#141 A3) -------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_default_response_key_not_treated_as_opaque_data(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a",
+               "responses": {
+                   "200": {"description": "ok", "schema": {
+                       "type": "object", "properties": None}},
+                   "default": {"description": "err", "schema": {
+                       "type": "object", "properties": None}},
+               }}}}}
+    out = _valid(src, version)
+    resps = out["paths"]["/a"]["get"]["responses"]
+    s200 = resps["200"]["content"]["application/json"]["schema"]
+    sdef = resps["default"]["content"]["application/json"]["schema"]
+    assert "properties" not in s200
+    assert "properties" not in sdef
+    assert sdef == s200
+
+
+# -- deep documents must not RecursionError (#141 A4) ---------------------------
+
+def _deep_swagger_definition(depth):
+    node = {"type": "string"}
+    for _ in range(depth):
+        node = {"type": "object", "properties": {"a": node}}
+    return node
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deeply_nested_definition_does_not_crash(version):
+    # _strip_nulls/_fix_schema/to_openapi_31.walk used to recurse via raw
+    # Python call-stack frames; a ~1000-deep schema raised a bare
+    # RecursionError instead of the documented ConversionError contract.
+    from spec2openapi import ConversionError
+
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {"Deep": _deep_swagger_definition(1000)}}
+    try:
+        out = convert_swagger(src, openapi_version=version)
+    except ConversionError:
+        return  # a clean, documented refusal is an acceptable outcome
+    validate(out)  # or a full, valid conversion is also acceptable
+
+
+def test_moderately_nested_definition_converts_successfully():
+    # a realistic depth must never be falsely rejected by a depth cap
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {"Deep": _deep_swagger_definition(50)}}
+    out = _valid(src)
+    node = out["components"]["schemas"]["Deep"]
+    for _ in range(50):
+        node = node["properties"]["a"]
+    assert node["type"] == "string"
 
 
 # -- component-key sanitization beyond schemas (#72) ---------------------------
@@ -812,6 +1016,93 @@ def test_properties_named_like_keywords_are_schemas(version):
     assert t["discriminator"] == {"type": "string"}
     assert t["collectionFormat"] == {"type": "integer"}
     assert "nullable" in t["enum"] or t["enum"].get("type") == ["string", "null"]
+
+
+# -- opaque property-map keys must survive to_openapi_31 (#141 A6) -------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_opaque_property_named_nullable_survives_31(version):
+    # a property literally named "nullable"/"enum" must not be deleted or
+    # left invalid by to_openapi_31's own keyword handling — the
+    # properties map's keys are opaque names, not schema keywords, the
+    # same rule swagger.py's own _fix_schema already applies.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "T": {"type": "object", "properties": {
+                   "nullable": {"type": "string"},
+                   "enum": {"type": "integer"},
+                   "exclusiveMinimum": {"type": "boolean"}}}}}
+    out = _valid(src, version)
+    props = out["components"]["schemas"]["T"]["properties"]
+    assert set(props) == {"nullable", "enum", "exclusiveMinimum"}
+    assert props["nullable"]["type"] == "string"
+    assert props["enum"]["type"] == "integer"
+    assert props["exclusiveMinimum"]["type"] == "boolean"
+
+
+def test_opaque_property_own_nullable_still_converts_in_31():
+    # a property literally named "enum" whose OWN schema has "nullable"
+    # must still get that nullable correctly re-encoded for 3.1 — the
+    # data-keyword passthrough must not also suppress recursion into a
+    # legitimately-schema-shaped value sitting at a colliding key.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "T": {"type": "object", "properties": {
+                   "enum": {"type": "string", "x-nullable": True}}}}}
+    out = _valid(src, "3.1")
+    prop = out["components"]["schemas"]["T"]["properties"]["enum"]
+    assert "nullable" not in prop
+    assert set(prop["type"]) == {"string", "null"}
+
+
+# -- nullable on a non-string-type schema must survive to_openapi_31 (#141 A5) -
+
+def _accepts_null(schema) -> bool:
+    """Best-effort structural check that a JSON-Schema-2020-12 fragment
+    accepts a null instance (no live $ref-resolving validator needed for
+    this unit test: the fixtures below never rely on resolving a $ref
+    branch to prove nullability — the null-accepting branch is always
+    self-contained)."""
+    if not isinstance(schema, dict):
+        return False
+    t = schema.get("type")
+    if t == "null" or (isinstance(t, list) and "null" in t):
+        return True
+    if isinstance(schema.get("enum"), list) and None in schema["enum"]:
+        return True
+    if any(_accepts_null(b) for b in schema.get("anyOf") or ()):
+        return True
+    if any(_accepts_null(b) for b in schema.get("oneOf") or ()):
+        return True
+    allof = schema.get("allOf")
+    if allof:
+        return all(_accepts_null(b) for b in allof)
+    return False
+
+
+def test_nullable_ref_sibling_survives_31():
+    # x-nullable next to a $ref (wrapped in allOf by swagger.py, no
+    # sibling 'type' to fold nullable into) must not vanish in 3.1.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object"},
+               "B": {"type": "object", "properties": {
+                   "x": {"x-nullable": True, "$ref": "#/definitions/A"}}}}}
+    out = _valid(src, "3.1")
+    schema = out["components"]["schemas"]["B"]["properties"]["x"]
+    assert "nullable" not in schema
+    assert _accepts_null(schema)
+
+
+def test_nullable_enum_only_survives_31():
+    # nullable on an enum-only (typeless) schema must not vanish either.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "T": {"nullable": True, "enum": ["a", "b"]}}}
+    out = _valid(src, "3.1")
+    schema = out["components"]["schemas"]["T"]
+    assert "nullable" not in schema
+    assert _accepts_null(schema)
 
 
 # -- parameter-position $refs and duplicates (#97, #101) -----------------------

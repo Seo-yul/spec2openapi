@@ -26,6 +26,334 @@ def _input_schema(spec, op):
         "content"]["application/json"]["schema"]
 
 
+# -- numeric XSD enum / large bounds must not lose type or precision (#141 A7) -
+
+_ENUM_WSDL = """<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:enumtest" targetNamespace="urn:enumtest">
+  <types>
+    <xsd:schema targetNamespace="urn:enumtest" elementFormDefault="qualified">
+      <xsd:simpleType name="Level">
+        <xsd:restriction base="xsd:int">
+          <xsd:enumeration value="1"/>
+          <xsd:enumeration value="2"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:simpleType name="BigBound">
+        <xsd:restriction base="xsd:long">
+          <xsd:minInclusive value="0"/>
+          <xsd:maxInclusive value="9223372036854775807"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:simpleType name="Ratio">
+        <xsd:restriction base="xsd:decimal">
+          <xsd:enumeration value="0.5"/>
+          <xsd:enumeration value="1.5"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:simpleType name="Code">
+        <xsd:restriction base="xsd:string">
+          <xsd:enumeration value="A"/>
+          <xsd:enumeration value="B"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:element name="EnumOp">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="level" type="tns:Level"/>
+            <xsd:element name="bound" type="tns:BigBound"/>
+            <xsd:element name="ratio" type="tns:Ratio"/>
+            <xsd:element name="code" type="tns:Code"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="EnumOpResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="ok" type="xsd:boolean"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+  <message name="EnumOpIn"><part name="p" element="tns:EnumOp"/></message>
+  <message name="EnumOpOut"><part name="p" element="tns:EnumOpResponse"/></message>
+  <portType name="pt"><operation name="EnumOp">
+    <input message="tns:EnumOpIn"/><output message="tns:EnumOpOut"/>
+  </operation></portType>
+  <binding name="b" type="tns:pt">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="EnumOp"><soap:operation soapAction="urn:EnumOp"/>
+      <input><soap:body use="literal"/></input>
+      <output><soap:body use="literal"/></output>
+    </operation>
+  </binding>
+  <service name="s"><port name="p" binding="tns:b">
+    <soap:address location="http://x/y"/></port></service>
+</definitions>
+"""
+
+
+@pytest.fixture(scope="module")
+def enum_spec():
+    return convert_wsdl(content=_ENUM_WSDL)
+
+
+def test_int_based_enum_coerced_to_integer(enum_spec):
+    level = _input_schema(enum_spec, "EnumOp")["properties"]["level"]
+    assert level["type"] == "integer"
+    assert level["enum"] == [1, 2]  # not the unsatisfiable ["1", "2"]
+
+
+def test_long_based_bounds_keep_int64_precision(enum_spec):
+    bound = _input_schema(enum_spec, "EnumOp")["properties"]["bound"]
+    assert bound["type"] == "integer"
+    assert bound["minimum"] == 0
+    assert bound["maximum"] == 9223372036854775807
+    assert isinstance(bound["maximum"], int)  # not a float (precision loss)
+
+
+def test_decimal_based_enum_coerced_to_number(enum_spec):
+    ratio = _input_schema(enum_spec, "EnumOp")["properties"]["ratio"]
+    assert ratio["type"] == "number"
+    assert ratio["enum"] == [0.5, 1.5]
+
+
+def test_string_based_enum_stays_string(enum_spec):
+    code = _input_schema(enum_spec, "EnumOp")["properties"]["code"]
+    assert code["type"] == "string"
+    assert code["enum"] == ["A", "B"]
+
+
+def test_openapi_31_enum_spec_still_validates():
+    from openapi_spec_validator import validate as osv_validate
+
+    spec = convert_wsdl(content=_ENUM_WSDL, openapi_version="3.1")
+    osv_validate(spec)
+
+
+# -- nillable complex/$ref elements must not lose the annotation (#141 C) -----
+
+_NIL_WSDL = """<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:nilltest" targetNamespace="urn:nilltest">
+  <types>
+    <xsd:schema targetNamespace="urn:nilltest" elementFormDefault="qualified">
+      <xsd:complexType name="Address">
+        <xsd:sequence>
+          <xsd:element name="city" type="xsd:string"/>
+        </xsd:sequence>
+      </xsd:complexType>
+      <xsd:element name="NilOp">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="home" type="tns:Address" nillable="true"/>
+            <xsd:element name="note" type="xsd:string" nillable="true"/>
+            <xsd:element name="stops" type="tns:Address" nillable="true"
+                         minOccurs="0" maxOccurs="unbounded"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="NilOpResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="ok" type="xsd:boolean"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+  <message name="NilOpIn"><part name="p" element="tns:NilOp"/></message>
+  <message name="NilOpOut"><part name="p" element="tns:NilOpResponse"/></message>
+  <portType name="pt"><operation name="NilOp">
+    <input message="tns:NilOpIn"/><output message="tns:NilOpOut"/>
+  </operation></portType>
+  <binding name="b" type="tns:pt">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="NilOp"><soap:operation soapAction="urn:NilOp"/>
+      <input><soap:body use="literal"/></input>
+      <output><soap:body use="literal"/></output>
+    </operation>
+  </binding>
+  <service name="s"><port name="p" binding="tns:b">
+    <soap:address location="http://x/y"/></port></service>
+</definitions>
+"""
+
+
+def test_nillable_complex_ref_element_preserved():
+    # nillable was silently dropped whenever the element's type was
+    # complex (a $ref): OpenAPI 3.0 ignores 'nullable' as a bare $ref
+    # sibling, so it must be wrapped in allOf like other $ref-sibling
+    # cases in this codebase, not just discarded.
+    spec = convert_wsdl(content=_NIL_WSDL)
+    schema = _input_schema(spec, "NilOp")
+
+    home = schema["properties"]["home"]
+    assert home["nullable"] is True
+    assert home["allOf"][0]["$ref"].endswith("/Address")
+
+    note = schema["properties"]["note"]  # simple type: baseline, unaffected
+    assert note["nullable"] is True
+
+    stops_items = schema["properties"]["stops"]["items"]
+    assert stops_items["nullable"] is True
+    assert stops_items["allOf"][0]["$ref"].endswith("/Address")
+
+
+def test_nillable_complex_ref_valid_in_31():
+    from openapi_spec_validator import validate as osv_validate
+
+    spec = convert_wsdl(content=_NIL_WSDL, openapi_version="3.1")
+    osv_validate(spec)
+
+
+# -- complexType with only xsd:any must not be misjudged as simpleContent -----
+# (#141 C: zeep names an xsd:any particle "_value_1", same as the
+# synthetic name it gives xsd:simpleContent's implicit text value)
+
+_ANY_ONLY_WSDL = """<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:anytest" targetNamespace="urn:anytest">
+  <types>
+    <xsd:schema targetNamespace="urn:anytest" elementFormDefault="qualified">
+      <xsd:complexType name="AnyOnly">
+        <xsd:sequence>
+          <xsd:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+        </xsd:sequence>
+      </xsd:complexType>
+      <xsd:element name="AnyOp">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="payload" type="tns:AnyOnly"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="AnyOpResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="ok" type="xsd:boolean"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+  <message name="AnyOpIn"><part name="p" element="tns:AnyOp"/></message>
+  <message name="AnyOpOut"><part name="p" element="tns:AnyOpResponse"/></message>
+  <portType name="pt"><operation name="AnyOp">
+    <input message="tns:AnyOpIn"/><output message="tns:AnyOpOut"/>
+  </operation></portType>
+  <binding name="b" type="tns:pt">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="AnyOp"><soap:operation soapAction="urn:AnyOp"/>
+      <input><soap:body use="literal"/></input>
+      <output><soap:body use="literal"/></output>
+    </operation>
+  </binding>
+  <service name="s"><port name="p" binding="tns:b">
+    <soap:address location="http://x/y"/></port></service>
+</definitions>
+"""
+
+
+def test_any_only_complextype_not_misjudged_as_simple_content():
+    spec = convert_wsdl(content=_ANY_ONLY_WSDL)
+    schema = _input_schema(spec, "AnyOp")
+    payload_ref = schema["properties"]["payload"]["allOf"][0]  # $ref wrapper
+    payload = spec["components"]["schemas"][
+        payload_ref["$ref"].rsplit("/", 1)[-1]]
+    assert "x-soap-simple-content" not in payload
+    assert payload.get("additionalProperties") is True
+    assert "value" not in payload.get("properties", {})
+
+
+# -- metadata scrapers must honor huge_tree like zeep's own parse (#141 C) ----
+
+def _deep_wsdl(depth: int) -> str:
+    """A WSDL whose input type nests `depth` levels of wrapper elements —
+    enough to exceed libxml2's default (huge_tree=False) depth limit of
+    256, so parsing it at all requires huge_tree=True. The innermost
+    type is a documented, faceted named simpleType — metadata only the
+    raw-XML scraper (not zeep's own type resolution) can supply."""
+    inner = '<xsd:element name="leaf" type="tns:Leaf"/>'
+    for i in range(depth):
+        inner = (
+            f'<xsd:element name="w{i}"><xsd:complexType><xsd:sequence>'
+            f"{inner}</xsd:sequence></xsd:complexType></xsd:element>"
+        )
+    return f"""<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:deeptest" targetNamespace="urn:deeptest">
+  <types>
+    <xsd:schema targetNamespace="urn:deeptest" elementFormDefault="qualified">
+      <xsd:simpleType name="Leaf">
+        <xsd:annotation><xsd:documentation>A leaf value.</xsd:documentation></xsd:annotation>
+        <xsd:restriction base="xsd:string">
+          <xsd:minLength value="3"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:element name="DeepOp">
+        <xsd:complexType>
+          <xsd:sequence>{inner}</xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="DeepOpResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="ok" type="xsd:boolean"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+  <message name="DeepOpIn"><part name="p" element="tns:DeepOp"/></message>
+  <message name="DeepOpOut"><part name="p" element="tns:DeepOpResponse"/></message>
+  <portType name="pt"><operation name="DeepOp">
+    <input message="tns:DeepOpIn"/><output message="tns:DeepOpOut"/>
+  </operation></portType>
+  <binding name="b" type="tns:pt">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="DeepOp"><soap:operation soapAction="urn:DeepOp"/>
+      <input><soap:body use="literal"/></input>
+      <output><soap:body use="literal"/></output>
+    </operation>
+  </binding>
+  <service name="s"><port name="p" binding="tns:b">
+    <soap:address location="http://x/y"/></port></service>
+</definitions>
+"""
+
+
+def _deref(spec, node):
+    """Follow a bare or allOf-wrapped $ref one hop against components.schemas."""
+    if "$ref" not in node and "allOf" in node:
+        node = node["allOf"][0]
+    if "$ref" in node:
+        name = node["$ref"].rsplit("/", 1)[-1]
+        return spec["components"]["schemas"][name]
+    return node
+
+
+def _drill_to_leaf(spec, schema, depth):
+    node = schema
+    for i in range(depth - 1, -1, -1):
+        node = _deref(spec, node["properties"][f"w{i}"])
+    return _deref(spec, node["properties"]["leaf"])
+
+
+def test_metadata_scraper_honors_huge_tree():
+    # the raw-XML metadata scraper (facets, docs) used its own always-
+    # huge_tree=False parser regardless of what the caller passed, so a
+    # document only parseable with huge_tree=True (the same document
+    # zeep's own client successfully parses) silently lost its facets
+    # and documentation instead of raising or recording the gap.
+    spec = convert_wsdl(content=_deep_wsdl(100), huge_tree=True)
+    schema = _input_schema(spec, "DeepOp")
+    leaf = _drill_to_leaf(spec, schema, 100)
+    assert leaf["minLength"] == 3
+    assert leaf["description"] == "A leaf value."
+
+
 def test_facets_from_imported_xsd(adv_spec):
     props = _input_schema(adv_spec, "SubmitApplication")["properties"]
     discount = props["discount"]
@@ -40,8 +368,23 @@ def test_facets_from_imported_xsd(adv_spec):
     assert name_schema["maxLength"] == 80
 
     country = person["properties"]["country"]
-    assert country["pattern"] == "[A-Z]{2}"
+    # XSD patterns implicitly match the whole lexical value; JSON
+    # Schema/ECMA-262 'pattern' is an unanchored search by default, so
+    # the copied pattern must be anchored to keep XSD semantics (#141 C)
+    assert country["pattern"] == "^(?:[A-Z]{2})$"
     assert country["minLength"] == 2 and country["maxLength"] == 2
+
+
+def test_pattern_facet_is_anchored_for_json_schema_semantics(adv_spec):
+    import re
+
+    person = adv_spec["components"]["schemas"]["Person"]
+    pattern = person["properties"]["country"]["pattern"]
+    # the anchored pattern rejects what the unanchored original would
+    # wrongly accept (a match embedded in a longer, invalid string)
+    assert re.search(pattern, "xxAAxx") is None
+    assert re.search("[A-Z]{2}", "xxAAxx") is not None  # unanchored: false positive
+    assert re.search(pattern, "AA") is not None  # a genuinely valid value still matches
 
 
 def test_inheritance_flattened(adv_spec):
@@ -80,6 +423,23 @@ def test_simple_content_value_plus_attribute(adv_spec):
         "name": "currency", "attribute": True,
     }
     assert set(money["required"]) == {"value", "currency"}
+
+
+# -- simple-type wrapper 'value' needs the same x-text annotation (#141 B1) ----
+
+def test_simple_type_wrapper_value_has_x_text_annotation():
+    # a wrapper element whose type is a plain simple type (not a
+    # complexType) must annotate its "value" property like the
+    # simpleContent path does above, or the bridge serializes it as a
+    # <value> child element instead of the wrapper element's own text.
+    from zeep import xsd as zx
+
+    from spec2openapi.schema import SchemaConverter
+
+    conv = SchemaConverter()
+    schema = conv.element_type_to_object_schema(zx.String(), hint="EchoInput")
+    assert schema["properties"]["value"]["xml"] == {"x-text": True}
+    assert schema["required"] == ["value"]
 
 
 def test_default_value(adv_spec):

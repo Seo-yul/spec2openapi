@@ -221,7 +221,7 @@ XML 직렬화 규칙(스키마의 `xml` 어노테이션):
 - `xml.x-text: true`: 자식 엘리먼트가 아니라 부모의 텍스트 내용(simpleContent의 값).
 - 배열 프로퍼티: 같은 이름의 엘리먼트 반복.
 - `properties`의 키 순서 = XSD sequence 순서. 스펙 후처리 시 순서를 바꾸면 안 된다.
-- `x-soap-choice`: 그룹당 하나만 넣어야 하는 프로퍼티 목록(스키마 차원에서는 전부 optional 처리됨).
+- `x-soap-choice`: 그룹당 하나만 넣어야 하는 프로퍼티 목록(스키마 차원에서는 전부 optional 처리됨). `members`의 각 항목은 `xsd:choice`의 **브랜치** 하나다. 보통은 프로퍼티 이름 하나지만, 브랜치가 `sequence`인 경우에는 이름의 **리스트**가 온다 — 그 원소들은 함께 묶여 한 단위로 선택되거나 생략되며, 서로 배타적인 관계가 아니다.
 - `x-soap-substitution`: substitution group 값의 표식. JSON은 멤버 이름을 키로 한 자기서술 단일키 객체(`{"creditCard": {…}}`)이며, 와이어에는 그 멤버 element 자체가 실린다 — head element는 절대 등장하지 않는다.
 
 루트 `x-soap`에는 원본 WSDL 경로, 생성기 버전, 스킵된 오퍼레이션 목록이 기록된다.

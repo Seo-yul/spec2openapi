@@ -311,22 +311,62 @@ def build_spec(
     return spec
 
 
+# walk() recurses once per document-nesting level; a pathologically deep
+# document must raise ConversionError, never a bare RecursionError (see
+# swagger.py's _MAX_SCHEMA_DEPTH for the same guard and rationale).
+_MAX_WALK_DEPTH = 200
+
+
 def to_openapi_31(spec: dict[str, Any]) -> dict[str, Any]:
     """Convert the generated 3.0 document to OpenAPI 3.1 JSON Schema style."""
 
     # keywords whose values are data, not sub-schemas — don't descend
     data_kw = ("example", "examples", "default", "enum")
+    # keys whose value is a name -> schema map: the map's own keys are
+    # opaque property names, not schema keywords — a property literally
+    # named "nullable"/"enum"/"exclusiveMinimum" must not trigger the
+    # keyword handling below (mirrors swagger.py's _fix_schema, which
+    # already applies this rule on the way to 3.0).
+    map_kw = ("properties", "patternProperties")
 
-    def walk(node: Any) -> Any:
+    def walk(node: Any, depth: int = 0) -> Any:
+        if depth > _MAX_WALK_DEPTH:
+            raise ConversionError(
+                f"schema nesting exceeds {_MAX_WALK_DEPTH} levels; "
+                "refusing to convert (a legitimate document is never "
+                "this deep)"
+            )
         if isinstance(node, list):
-            return [walk(v) for v in node]
+            return [walk(v, depth + 1) for v in node]
         if not isinstance(node, dict):
             return node
-        node = {k: (v if k in data_kw else walk(v)) for k, v in node.items()}
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            if k in map_kw and isinstance(v, dict):
+                out[k] = {pn: walk(pv, depth + 1) for pn, pv in v.items()}
+            elif k in data_kw:
+                out[k] = v
+            else:
+                out[k] = walk(v, depth + 1)
+        node = out
         if node.pop("nullable", False):
             t = node.get("type")
             if isinstance(t, str):
                 node["type"] = [t, "null"]
+            elif isinstance(t, list):
+                if "null" not in t:
+                    node["type"] = [*t, "null"]
+            elif node:
+                # can't fold into 'type': the schema is $ref/allOf-
+                # wrapped, enum-only, or otherwise typeless. Compose
+                # instead of dropping — 'anyOf: [X, {type: null}]' always
+                # stays exact (matches X, or is null) for any X, so this
+                # is never actually lossy (#141 A5).
+                rest = dict(node)
+                node.clear()
+                node["anyOf"] = [rest, {"type": "null"}]
+            # else: node is now empty ('nullable: true' was the only
+            # key) — {} already matches every value including null.
         # 3.0 uses boolean exclusiveMinimum/Maximum alongside minimum/maximum;
         # 2020-12 requires a number. Convert true+bound, and drop the boolean
         # otherwise (false = inclusive default; true without a bound is

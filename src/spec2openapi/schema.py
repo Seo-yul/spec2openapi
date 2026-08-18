@@ -77,15 +77,20 @@ def _choice_groups(t: Any) -> list[dict[str, Any]]:
     """Walk zeep's indicator tree to find xsd:choice member groups.
 
     Handles a choice at any level, including the common top-level
-    ``<complexType><choice>`` case, and choices whose branches are
-    ``<sequence>``s (the branch's leaf element names are flattened into
-    the group so mutually-exclusive fields are not all marked required).
+    ``<complexType><choice>`` case. Each choice *branch* becomes one
+    ``members`` entry: a bare element name for a single-element branch
+    (the common case, unchanged), or a *list* of names when the branch is
+    itself a group (e.g. a ``<sequence>`` of 2+ elements) — those
+    elements belong together and must not be treated as further
+    mutually-exclusive alternatives (#141 B2). Both shapes are always
+    excluded from the parent schema's `required`.
     """
     groups: list[dict[str, Any]] = []
 
     def leaf_names(node) -> list[str]:
         """Every element name reachable under an indicator, flattening
-        nested sequences/groups (used to gather a choice's members)."""
+        nested sequences/groups (used to gather one branch's own member
+        names when the branch is not a single leaf element)."""
         names: list[str] = []
         try:
             items = list(node)
@@ -102,16 +107,36 @@ def _choice_groups(t: Any) -> list[dict[str, Any]]:
                 names.extend(leaf_names(item))
         return names
 
+    def branch_member(item) -> str | list[str] | None:
+        """One xsd:choice branch -> a members[] entry."""
+        if isinstance(item, tuple) and item:
+            return str(item[0])
+        n = getattr(item, "name", None)
+        if n:
+            return n
+        # nested indicator with no name of its own (Sequence/Choice/...):
+        # a single leaf stays a bare name; 2+ leaves bundle into one
+        # group member so they are checked/settable together
+        names = leaf_names(item)
+        if not names:
+            return None
+        return names[0] if len(names) == 1 else names
+
     def walk(node):
         cls = type(node).__name__
         if cls == "Choice":
-            names = leaf_names(node)
-            if names:
+            try:
+                items = list(node)
+            except TypeError:
+                items = []
+            members = [m for m in (branch_member(i) for i in items)
+                      if m is not None]
+            if members:
                 try:
                     required = int(getattr(node, "min_occurs", 1)) >= 1
                 except (TypeError, ValueError):
                     required = True
-                groups.append({"members": names, "required": required})
+                groups.append({"members": members, "required": required})
             return  # members already collected across all branches
         if cls not in ("Sequence", "All", "Group"):
             return
@@ -129,6 +154,26 @@ def _choice_groups(t: Any) -> list[dict[str, Any]]:
     if root is not None:
         walk(root)
     return groups
+
+
+def _flatten_choice_members(members: list[Any]) -> list[str]:
+    """A group's `members` list may mix bare names and bundled-branch
+    name-lists; flatten to every individual element name (used wherever
+    the distinction between "one branch" and "one name" doesn't matter,
+    e.g. excluding choice members from `required`)."""
+    out: list[str] = []
+    for m in members:
+        if isinstance(m, list):
+            out.extend(m)
+        else:
+            out.append(m)
+    return out
+
+
+def _choice_member_label(m: Any) -> str:
+    """Human-readable label for one members[] entry, for the generated
+    description text."""
+    return m if isinstance(m, str) else " + ".join(m)
 
 
 class SchemaConverter:
@@ -186,9 +231,14 @@ class SchemaConverter:
         object (used for request/response bodies)."""
         if isinstance(xsd_type, zx.ComplexType):
             return self._complex_to_schema(xsd_type, hint, qkey=qkey)
+        # a wrapper element whose type is a simple type serializes the
+        # same way xsd:simpleContent does: the value IS the element's own
+        # text, not a nested <value> child (#141 B1)
+        value_schema = self._simple_to_schema(xsd_type)
+        value_schema["xml"] = {"x-text": True}
         return {
             "type": "object",
-            "properties": {"value": self._simple_to_schema(xsd_type)},
+            "properties": {"value": value_schema},
             "required": ["value"],
         }
 
@@ -245,10 +295,17 @@ class SchemaConverter:
         attributes = list(getattr(t, "attributes", []))
 
         # xsd:simpleContent: a text value plus attributes
+        # zeep names an xsd:any particle "_value_1" too — the same
+        # synthetic name it gives xsd:simpleContent's implicit text
+        # value — so a complexType containing only <xsd:any/> must be
+        # excluded here or it is misjudged as simpleContent (#141 C);
+        # the elements loop below already handles Any/AnyObject
+        # correctly (additionalProperties: true) once it actually runs.
         is_simple_content = (
             len(elements) == 1
             and elements[0][0] == "_value_1"
             and not isinstance(elements[0][1].type, zx.ComplexType)
+            and type(elements[0][1]).__name__ not in ("Any", "AnyObject")
         )
         if is_simple_content:
             value_schema = self._simple_to_schema(elements[0][1].type)
@@ -306,7 +363,9 @@ class SchemaConverter:
         # xsd:choice groups: members must not be required; record the groups
         choices = _choice_groups(t)
         if choices:
-            member_set = {m for g in choices for m in g["members"]}
+            member_set = {
+                n for g in choices for n in _flatten_choice_members(g["members"])
+            }
             if "required" in schema:
                 schema["required"] = [
                     r for r in schema["required"] if r not in member_set
@@ -317,7 +376,8 @@ class SchemaConverter:
             notes = []
             for g in choices:
                 kind = "Exactly one" if g["required"] else "At most one"
-                notes.append(f"{kind} of: {', '.join(g['members'])}.")
+                labels = ", ".join(_choice_member_label(m) for m in g["members"])
+                notes.append(f"{kind} of: {labels}.")
             schema["description"] = " ".join(
                 filter(None, [schema.get("description"), *notes])
             )
@@ -458,8 +518,13 @@ class SchemaConverter:
         if qname is not None and getattr(qname, "namespace", None):
             xml_meta["name"] = qname.localname
             xml_meta["namespace"] = qname.namespace
-        if getattr(el, "nillable", False) and "$ref" not in base:
+        # a complex ($ref) type can't take 'nullable' as a bare sibling
+        # (OpenAPI 3.0 ignores siblings next to a schema $ref); defer to
+        # the allOf-wrap sites below instead of just dropping it (#141 C)
+        nillable = bool(getattr(el, "nillable", False))
+        if nillable and "$ref" not in base:
             base["nullable"] = True
+            nillable = False
 
         doc = self._child_doc(qkey, el_name)
 
@@ -482,6 +547,8 @@ class SchemaConverter:
             if "$ref" not in items:
                 items = dict(items)
                 items["xml"] = dict(xml_meta)
+            elif nillable:
+                items = {"allOf": [items], "nullable": True}
             arr: dict[str, Any] = {"type": "array", "items": items, "xml": xml_meta}
             try:
                 mn = int(getattr(el, "min_occurs", 0))
@@ -500,6 +567,8 @@ class SchemaConverter:
 
         if "$ref" in base:
             out: dict[str, Any] = {"allOf": [base], "xml": xml_meta}
+            if nillable:
+                out["nullable"] = True
             if doc:
                 out["description"] = doc
             return out
