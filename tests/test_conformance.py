@@ -533,6 +533,24 @@ def test_operationid_dedup_recorded():
     assert any("renamed to 'same_2'" in a for a in out["x-s2o"]["assumptions"])
 
 
+# -- path collision after leading-slash normalization is recorded (#141 C) -----
+
+def test_path_collision_after_normalization_recorded():
+    # 'pets' normalizes to '/pets', silently overwriting the path item
+    # already declared at '/pets' — must be recorded, not silent.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {
+               "/pets": {"get": {"operationId": "a",
+                                 "responses": {"200": {"description": "ok"}}}},
+               "pets": {"post": {"operationId": "b",
+                                 "responses": {"200": {"description": "ok"}}}},
+           }}
+    out = _valid(src)
+    assert any("collide" in m for m in out["x-s2o"]["lossy"])
+    assert len(out["paths"]) == 1  # one survives at the normalized key
+    assert "get" in out["paths"]["/pets"] or "post" in out["paths"]["/pets"]
+
+
 def test_strict_raises_with_records_listed():
     from spec2openapi import ConversionError
     src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},

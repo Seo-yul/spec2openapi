@@ -1103,6 +1103,22 @@ class _Upgrader:
             )
         return params
 
+    def _place_path(self, out_paths: dict, out_path: str, path: str,
+                    value: dict) -> None:
+        """Assign a converted path item, recording (not silently
+        overwriting) when two source path keys normalize to the same
+        OpenAPI 3 Paths-object key — e.g. 'pets' and '/pets' both become
+        '/pets' (#141 C); the later source key wins, matching the
+        duplicate-parameter/operationId 'later wins' policy used
+        elsewhere in this file."""
+        if out_path in out_paths:
+            self.lossy.append(
+                f"path '{path}' normalizes to '{out_path}', which "
+                "collides with an already-converted path; the later "
+                "definition overwrote the earlier one"
+            )
+        out_paths[out_path] = value
+
     def convert(self) -> dict[str, Any]:
         src = self.src
         out: dict[str, Any] = {
@@ -1147,7 +1163,8 @@ class _Upgrader:
                 )
                 continue
             if "$ref" in item:  # path item is a $ref (legal in OpenAPI 3)
-                out["paths"][out_path] = {"$ref": self._fix_ref(item["$ref"])}
+                self._place_path(out["paths"], out_path, path,
+                                 {"$ref": self._fix_ref(item["$ref"])})
                 continue
             new_item: dict[str, Any] = {}
             shared_raw = item.get("parameters", [])
@@ -1217,7 +1234,7 @@ class _Upgrader:
                 new_op["responses"] = responses
 
                 new_item[method] = new_op
-            out["paths"][out_path] = new_item
+            self._place_path(out["paths"], out_path, path, new_item)
 
         components: dict[str, Any] = {}
         if src.get("definitions"):
