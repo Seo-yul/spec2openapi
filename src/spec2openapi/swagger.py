@@ -920,11 +920,28 @@ class _Upgrader:
         if "headers" in resp:
             headers = {}
             for hname, h in resp["headers"].items():
+                if not isinstance(h, dict):
+                    self.lossy.append(
+                        f"{ctx}: response header '{hname}' is not an "
+                        "object; dropped"
+                    )
+                    continue
                 hh = {k: v for k, v in h.items() if k == "description"}
-                hh["schema"] = {
-                    k: self._fix_schema(v) for k, v in h.items()
-                    if k in _SCHEMA_FIELDS
-                } or {"type": "string"}
+                # run the whole assembled schema through _fix_schema (not
+                # per-field) so its fixups apply as a unit: a multi-type
+                # 'type' array collapses correctly, and collectionFormat
+                # (not a real OpenAPI 3 schema field) is preserved as
+                # x-collectionFormat and recorded in x-s2o.lossy via
+                # _fix_schema's own handling instead of being silently
+                # dropped by the old per-field _SCHEMA_FIELDS filter
+                raw_schema = {
+                    k: v for k, v in h.items()
+                    if k in _SCHEMA_FIELDS or k == "collectionFormat"
+                }
+                hh["schema"] = (
+                    self._fix_schema(raw_schema) if raw_schema
+                    else {"type": "string"}
+                )
                 headers[hname] = hh
             out["headers"] = headers
         return out

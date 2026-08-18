@@ -533,6 +533,44 @@ def test_operationid_dedup_recorded():
     assert any("renamed to 'same_2'" in a for a in out["x-s2o"]["assumptions"])
 
 
+# -- response header schema fixups + collectionFormat recording (#141 C) ------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_response_header_multitype_array_collapses(version):
+    # a response header's schema fields were fixed one field at a time,
+    # so a multi-type array on 'type' never reached _fix_schema's
+    # collapse logic and stayed an invalid JSON-Schema type array.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a",
+               "responses": {"200": {"description": "ok",
+                   "headers": {"X-Count": {"type": ["integer", "null"]}}}}}}}}
+    out = _valid(src, version)
+    schema = out["paths"]["/a"]["get"]["responses"]["200"][
+        "headers"]["X-Count"]["schema"]
+    if version == "3.0":
+        assert schema["type"] == "integer" and schema["nullable"] is True
+    else:
+        assert set(schema["type"]) == {"integer", "null"}
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_response_header_collection_format_recorded(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a",
+               "responses": {"200": {"description": "ok",
+                   "headers": {"X-Tags": {
+                       "type": "array", "items": {"type": "string"},
+                       "collectionFormat": "csv"}}}}}}}}
+    out = _valid(src, version)
+    schema = out["paths"]["/a"]["get"]["responses"]["200"][
+        "headers"]["X-Tags"]["schema"]
+    assert "collectionFormat" not in schema
+    assert schema["x-collectionFormat"] == "csv"
+    assert any("collectionFormat" in m for m in out["x-s2o"]["lossy"])
+
+
 # -- path collision after leading-slash normalization is recorded (#141 C) -----
 
 def test_path_collision_after_normalization_recorded():
