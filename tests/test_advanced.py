@@ -267,6 +267,93 @@ def test_any_only_complextype_not_misjudged_as_simple_content():
     assert "value" not in payload.get("properties", {})
 
 
+# -- metadata scrapers must honor huge_tree like zeep's own parse (#141 C) ----
+
+def _deep_wsdl(depth: int) -> str:
+    """A WSDL whose input type nests `depth` levels of wrapper elements —
+    enough to exceed libxml2's default (huge_tree=False) depth limit of
+    256, so parsing it at all requires huge_tree=True. The innermost
+    type is a documented, faceted named simpleType — metadata only the
+    raw-XML scraper (not zeep's own type resolution) can supply."""
+    inner = '<xsd:element name="leaf" type="tns:Leaf"/>'
+    for i in range(depth):
+        inner = (
+            f'<xsd:element name="w{i}"><xsd:complexType><xsd:sequence>'
+            f"{inner}</xsd:sequence></xsd:complexType></xsd:element>"
+        )
+    return f"""<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:deeptest" targetNamespace="urn:deeptest">
+  <types>
+    <xsd:schema targetNamespace="urn:deeptest" elementFormDefault="qualified">
+      <xsd:simpleType name="Leaf">
+        <xsd:annotation><xsd:documentation>A leaf value.</xsd:documentation></xsd:annotation>
+        <xsd:restriction base="xsd:string">
+          <xsd:minLength value="3"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:element name="DeepOp">
+        <xsd:complexType>
+          <xsd:sequence>{inner}</xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="DeepOpResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="ok" type="xsd:boolean"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+  <message name="DeepOpIn"><part name="p" element="tns:DeepOp"/></message>
+  <message name="DeepOpOut"><part name="p" element="tns:DeepOpResponse"/></message>
+  <portType name="pt"><operation name="DeepOp">
+    <input message="tns:DeepOpIn"/><output message="tns:DeepOpOut"/>
+  </operation></portType>
+  <binding name="b" type="tns:pt">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="DeepOp"><soap:operation soapAction="urn:DeepOp"/>
+      <input><soap:body use="literal"/></input>
+      <output><soap:body use="literal"/></output>
+    </operation>
+  </binding>
+  <service name="s"><port name="p" binding="tns:b">
+    <soap:address location="http://x/y"/></port></service>
+</definitions>
+"""
+
+
+def _deref(spec, node):
+    """Follow a bare or allOf-wrapped $ref one hop against components.schemas."""
+    if "$ref" not in node and "allOf" in node:
+        node = node["allOf"][0]
+    if "$ref" in node:
+        name = node["$ref"].rsplit("/", 1)[-1]
+        return spec["components"]["schemas"][name]
+    return node
+
+
+def _drill_to_leaf(spec, schema, depth):
+    node = schema
+    for i in range(depth - 1, -1, -1):
+        node = _deref(spec, node["properties"][f"w{i}"])
+    return _deref(spec, node["properties"]["leaf"])
+
+
+def test_metadata_scraper_honors_huge_tree():
+    # the raw-XML metadata scraper (facets, docs) used its own always-
+    # huge_tree=False parser regardless of what the caller passed, so a
+    # document only parseable with huge_tree=True (the same document
+    # zeep's own client successfully parses) silently lost its facets
+    # and documentation instead of raising or recording the gap.
+    spec = convert_wsdl(content=_deep_wsdl(100), huge_tree=True)
+    schema = _input_schema(spec, "DeepOp")
+    leaf = _drill_to_leaf(spec, schema, 100)
+    assert leaf["minLength"] == 3
+    assert leaf["description"] == "A leaf value."
+
+
 def test_facets_from_imported_xsd(adv_spec):
     props = _input_schema(adv_spec, "SubmitApplication")["properties"]
     discount = props["discount"]

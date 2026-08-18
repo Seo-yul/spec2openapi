@@ -101,6 +101,19 @@ _SAFE_XML = etree.XMLParser(
 )
 
 
+def _safe_xml_parser(huge_tree: bool) -> etree.XMLParser:
+    """The metadata scrapers below (facets, documentation) used to parse
+    with _SAFE_XML unconditionally, ignoring whatever huge_tree the
+    caller passed to parse_wsdl — so a document only parseable with
+    huge_tree=True (the same document zeep's own client parses
+    successfully) silently lost its facets/docs instead of scraping them
+    (#141 C). Reuse the shared instance for the common (False) case."""
+    if huge_tree:
+        return etree.XMLParser(resolve_entities=False, load_dtd=False,
+                               no_network=True, huge_tree=True)
+    return _SAFE_XML
+
+
 def _load_raw(location: str, *, allow_remote: bool = True) -> bytes | None:
     try:
         if os.path.exists(location):
@@ -313,7 +326,8 @@ def _scan_schema_root(root: etree._Element, meta: XsdMeta) -> None:
 
 
 def _collect_xsd_meta(client: Client, source: str,
-                      *, forbid_external: bool = False) -> XsdMeta:
+                      *, forbid_external: bool = False,
+                      huge_tree: bool = False) -> XsdMeta:
     meta = XsdMeta(facets={}, type_docs={}, child_docs={})
     locations: list[str] = []
     try:
@@ -327,6 +341,7 @@ def _collect_xsd_meta(client: Client, source: str,
         logger.debug("schema document introspection failed: %s", exc)
     if source not in locations:
         locations.append(source)
+    parser = _safe_xml_parser(huge_tree)
     for loc in locations:
         # the source itself was chosen by the caller; imported locations
         # are attacker-controllable and honor forbid_external
@@ -334,7 +349,7 @@ def _collect_xsd_meta(client: Client, source: str,
         if not raw:
             continue
         try:
-            root = etree.fromstring(raw, parser=_SAFE_XML)
+            root = etree.fromstring(raw, parser=parser)
         except Exception:
             continue
         _scan_schema_root(root, meta)
@@ -351,12 +366,13 @@ def _collect_xsd_meta(client: Client, source: str,
     return meta
 
 
-def _extract_wsdl_docs(source: str) -> tuple[str | None, dict[str, str]]:
+def _extract_wsdl_docs(source: str, *, huge_tree: bool = False
+                       ) -> tuple[str | None, dict[str, str]]:
     raw = _load_raw(source)
     if not raw:
         return None, {}
     try:
-        tree = etree.fromstring(raw, parser=_SAFE_XML)
+        tree = etree.fromstring(raw, parser=_safe_xml_parser(huge_tree))
     except Exception:
         return None, {}
     ns = {"wsdl": WSDL_NS}
@@ -647,8 +663,9 @@ def _parse_wsdl_location(
             f"could not parse WSDL '{label}': {exc}"
         ) from exc
 
-    svc_doc, op_docs = _extract_wsdl_docs(source)
-    xsd_meta = _collect_xsd_meta(client, source, forbid_external=forbid_external)
+    svc_doc, op_docs = _extract_wsdl_docs(source, huge_tree=huge_tree)
+    xsd_meta = _collect_xsd_meta(client, source, forbid_external=forbid_external,
+                                 huge_tree=huge_tree)
 
     operations: list[ParsedOperation] = []
     skipped: list[tuple[str, str]] = []
