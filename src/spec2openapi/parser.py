@@ -184,6 +184,19 @@ def _coerce_enum_value(raw: str, kind: str) -> Any:
     return raw
 
 
+def _anchor_pattern(pattern: str) -> str:
+    """XSD pattern facets implicitly match the *whole* lexical value (the
+    XSD regex language has no start/end-of-string metacharacters of its
+    own — the entire pattern is always a full match). JSON Schema's
+    'pattern' keyword follows ECMA-262 and is an unanchored *search* by
+    default, so copying an XSD pattern verbatim silently accepts values
+    that only partially match (e.g. "xxAAxx" against "[A-Z]{2}") (#141
+    C). Wrapping in a non-capturing group + ^...$ restores XSD's
+    full-match semantics; this is safe to apply unconditionally since a
+    literal '^'/'$' has no special meaning as an XSD pattern anchor."""
+    return f"^(?:{pattern})$"
+
+
 def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
     """xsd:simpleType node -> JSON Schema facet fragment (3.0 flavored)."""
     out: dict[str, Any] = {}
@@ -219,7 +232,7 @@ def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
             except ValueError:
                 pass
         elif local == "pattern":
-            out["pattern"] = value
+            out["pattern"] = _anchor_pattern(value)
         elif local in ("minLength", "maxLength"):
             try:
                 out[local] = int(value)

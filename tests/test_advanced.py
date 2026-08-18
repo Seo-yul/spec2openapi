@@ -281,8 +281,23 @@ def test_facets_from_imported_xsd(adv_spec):
     assert name_schema["maxLength"] == 80
 
     country = person["properties"]["country"]
-    assert country["pattern"] == "[A-Z]{2}"
+    # XSD patterns implicitly match the whole lexical value; JSON
+    # Schema/ECMA-262 'pattern' is an unanchored search by default, so
+    # the copied pattern must be anchored to keep XSD semantics (#141 C)
+    assert country["pattern"] == "^(?:[A-Z]{2})$"
     assert country["minLength"] == 2 and country["maxLength"] == 2
+
+
+def test_pattern_facet_is_anchored_for_json_schema_semantics(adv_spec):
+    import re
+
+    person = adv_spec["components"]["schemas"]["Person"]
+    pattern = person["properties"]["country"]["pattern"]
+    # the anchored pattern rejects what the unanchored original would
+    # wrongly accept (a match embedded in a longer, invalid string)
+    assert re.search(pattern, "xxAAxx") is None
+    assert re.search("[A-Z]{2}", "xxAAxx") is not None  # unanchored: false positive
+    assert re.search(pattern, "AA") is not None  # a genuinely valid value still matches
 
 
 def test_inheritance_flattened(adv_spec):
