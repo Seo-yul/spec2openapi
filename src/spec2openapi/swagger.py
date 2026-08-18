@@ -20,13 +20,21 @@ from urllib.parse import unquote
 
 from . import __version__ as _version
 from .errors import ConversionError
-from .openapi import _normalize_openapi_version, _unique_id, to_openapi_31
+from .openapi import (
+    _DATA_KEYWORDS,
+    _TOOL_ID_RE,
+    _normalize_openapi_version,
+    _unescape_pointer_token,
+    _unique_id,
+    to_openapi_31,
+)
 
 _METHODS = ("get", "put", "post", "delete", "options", "head", "patch")
 
-# schema keywords whose *values* are data, not sub-schemas — never rewrite
-# $ref/x-nullable/discriminator inside them
-_DATA_KEYWORDS = ("example", "examples", "default", "enum")
+# _DATA_KEYWORDS (imported above): schema keywords whose *values* are
+# data, not sub-schemas — never rewrite $ref/x-nullable/discriminator
+# inside them. Its canonical definition lives in openapi.py, shared with
+# to_openapi_31 and checks.py's $ref scanner.
 
 # keys whose *value* is a name -> schema-ish-object map: the map's own keys
 # are opaque identifiers (a definition/parameter/header literally named
@@ -61,9 +69,11 @@ _SCHEMA_FIELDS = (
     "maxItems", "minItems", "uniqueItems", "enum", "multipleOf",
 )
 
-# FastMCP normalizes tool names to [A-Za-z0-9_]; generate ids accordingly
-# so that tool name == operationId holds after the round-trip.
-_ID_RE = re.compile(r"[^A-Za-z0-9_]+")
+# _TOOL_ID_RE (imported above): FastMCP normalizes tool names to
+# [A-Za-z0-9_]; generate ids accordingly so that tool name == operationId
+# holds after the round-trip. Same alphabet, same job as openapi.py's
+# _tool_id, which owns the canonical definition.
+
 # OpenAPI 3 component keys allow letters, digits, '.', '-', '_'
 _COMPONENT_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -263,8 +273,9 @@ class _Upgrader:
     @staticmethod
     def _pointer_token(raw: str) -> str:
         """Decode a JSON-Pointer reference token: percent-encoding first,
-        then the ~1 (/) and ~0 (~) escapes (RFC 6901)."""
-        return unquote(raw).replace("~1", "/").replace("~0", "~")
+        then the ~1 (/) and ~0 (~) escapes (RFC 6901, shared with
+        openapi.py's resolve_pointer via _unescape_pointer_token)."""
+        return _unescape_pointer_token(unquote(raw))
 
     def _source_name(self, mapping: dict[str, str], raw: str) -> str:
         """Resolve a ref token to the source name it addresses: prefer a
@@ -1067,7 +1078,7 @@ class _Upgrader:
     def _gen_operation_id(self, method: str, path: str) -> str:
         raw = f"{method}_{path.strip('/') or 'root'}"
         raw = raw.replace("{", "").replace("}", "")
-        return _ID_RE.sub("_", raw).strip("_")[:64]
+        return _TOOL_ID_RE.sub("_", raw).strip("_")[:64]
 
     def _build_info(self) -> dict[str, Any]:
         # title and version are REQUIRED in OpenAPI 3; fill whichever is
@@ -1218,7 +1229,7 @@ class _Upgrader:
                         f"{ctx}: no operationId; generated '{op_id}'"
                     )
                 else:
-                    normalized = _ID_RE.sub("_", op_id).strip("_")[:64]
+                    normalized = _TOOL_ID_RE.sub("_", op_id).strip("_")[:64]
                     if not normalized:  # e.g. operationId was "!!!"
                         normalized = self._gen_operation_id(method, path)
                     if normalized != op_id:

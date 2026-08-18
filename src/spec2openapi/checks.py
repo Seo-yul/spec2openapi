@@ -12,8 +12,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from .errors import MCP_HINT
-from .openapi import _FASTMCP_NORM_RE, _SAFE_TOOL_RE, _operations
-from .swagger import _DATA_KEYWORDS, is_swagger2
+from .openapi import (
+    _DATA_KEYWORDS,
+    _FASTMCP_NORM_RE,
+    _SAFE_TOOL_RE,
+    _SCHEMA_REF_PREFIX,
+    _operations,
+    schema_ref_name,
+)
+from .swagger import is_swagger2
 
 
 @dataclass(frozen=True)
@@ -422,14 +429,12 @@ def _check_xsoap_mixed_rest(spec):
     return []
 
 
-_SCHEMA_REF_PREFIX = "#/components/schemas/"
-
 # schema keywords whose *values* are data, not sub-schemas, so a
 # dict shaped like {"$ref": ...} inside them is a data value, not an
-# actual reference to resolve. Reuses swagger.py's _DATA_KEYWORDS (the
+# actual reference to resolve. Reuses openapi.py's _DATA_KEYWORDS (the
 # set applied when the upgrader protects data values from schema
-# rewriting) plus "const", a 3.1/2020-12 data keyword swagger.py's
-# Swagger-2.0-only upgrader has no reason to know about.
+# rewriting) plus "const", a 3.1/2020-12 data keyword the Swagger-2.0-
+# only upgrader has no reason to know about.
 _DATA_SUBTREE_KEYS = frozenset(_DATA_KEYWORDS) | {"const"}
 
 
@@ -465,12 +470,10 @@ def _check_xsoap_refs(spec):
     schemas = _component_schemas(spec)
 
     def _resolvable(ref: str) -> bool:
-        if not ref.startswith(_SCHEMA_REF_PREFIX):
-            return False
         # a pointer into a component (.../A/properties/b) only needs its
         # first segment (the component name) to exist
-        name = ref[len(_SCHEMA_REF_PREFIX):].split("/", 1)[0]
-        return name in schemas
+        name = schema_ref_name(ref)
+        return name is not None and name in schemas
 
     for path, method, op, xsoap in _soap_operations(spec):
         oid = _op_display(op, path, method)
