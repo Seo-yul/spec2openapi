@@ -26,6 +26,112 @@ def _input_schema(spec, op):
         "content"]["application/json"]["schema"]
 
 
+# -- numeric XSD enum / large bounds must not lose type or precision (#141 A7) -
+
+_ENUM_WSDL = """<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:enumtest" targetNamespace="urn:enumtest">
+  <types>
+    <xsd:schema targetNamespace="urn:enumtest" elementFormDefault="qualified">
+      <xsd:simpleType name="Level">
+        <xsd:restriction base="xsd:int">
+          <xsd:enumeration value="1"/>
+          <xsd:enumeration value="2"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:simpleType name="BigBound">
+        <xsd:restriction base="xsd:long">
+          <xsd:minInclusive value="0"/>
+          <xsd:maxInclusive value="9223372036854775807"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:simpleType name="Ratio">
+        <xsd:restriction base="xsd:decimal">
+          <xsd:enumeration value="0.5"/>
+          <xsd:enumeration value="1.5"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:simpleType name="Code">
+        <xsd:restriction base="xsd:string">
+          <xsd:enumeration value="A"/>
+          <xsd:enumeration value="B"/>
+        </xsd:restriction>
+      </xsd:simpleType>
+      <xsd:element name="EnumOp">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="level" type="tns:Level"/>
+            <xsd:element name="bound" type="tns:BigBound"/>
+            <xsd:element name="ratio" type="tns:Ratio"/>
+            <xsd:element name="code" type="tns:Code"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="EnumOpResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="ok" type="xsd:boolean"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+  <message name="EnumOpIn"><part name="p" element="tns:EnumOp"/></message>
+  <message name="EnumOpOut"><part name="p" element="tns:EnumOpResponse"/></message>
+  <portType name="pt"><operation name="EnumOp">
+    <input message="tns:EnumOpIn"/><output message="tns:EnumOpOut"/>
+  </operation></portType>
+  <binding name="b" type="tns:pt">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="EnumOp"><soap:operation soapAction="urn:EnumOp"/>
+      <input><soap:body use="literal"/></input>
+      <output><soap:body use="literal"/></output>
+    </operation>
+  </binding>
+  <service name="s"><port name="p" binding="tns:b">
+    <soap:address location="http://x/y"/></port></service>
+</definitions>
+"""
+
+
+@pytest.fixture(scope="module")
+def enum_spec():
+    return convert_wsdl(content=_ENUM_WSDL)
+
+
+def test_int_based_enum_coerced_to_integer(enum_spec):
+    level = _input_schema(enum_spec, "EnumOp")["properties"]["level"]
+    assert level["type"] == "integer"
+    assert level["enum"] == [1, 2]  # not the unsatisfiable ["1", "2"]
+
+
+def test_long_based_bounds_keep_int64_precision(enum_spec):
+    bound = _input_schema(enum_spec, "EnumOp")["properties"]["bound"]
+    assert bound["type"] == "integer"
+    assert bound["minimum"] == 0
+    assert bound["maximum"] == 9223372036854775807
+    assert isinstance(bound["maximum"], int)  # not a float (precision loss)
+
+
+def test_decimal_based_enum_coerced_to_number(enum_spec):
+    ratio = _input_schema(enum_spec, "EnumOp")["properties"]["ratio"]
+    assert ratio["type"] == "number"
+    assert ratio["enum"] == [0.5, 1.5]
+
+
+def test_string_based_enum_stays_string(enum_spec):
+    code = _input_schema(enum_spec, "EnumOp")["properties"]["code"]
+    assert code["type"] == "string"
+    assert code["enum"] == ["A", "B"]
+
+
+def test_openapi_31_enum_spec_still_validates():
+    from openapi_spec_validator import validate as osv_validate
+
+    spec = convert_wsdl(content=_ENUM_WSDL, openapi_version="3.1")
+    osv_validate(spec)
+
+
 def test_facets_from_imported_xsd(adv_spec):
     props = _input_schema(adv_spec, "SubmitApplication")["properties"]
     discount = props["discount"]

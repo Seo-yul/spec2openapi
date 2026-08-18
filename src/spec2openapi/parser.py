@@ -122,15 +122,66 @@ def _doc_text(node: etree._Element) -> str | None:
     return None
 
 
-_FACET_MAP = {
-    "pattern": ("pattern", str),
-    "minLength": ("minLength", int),
-    "maxLength": ("maxLength", int),
-    "minInclusive": ("minimum", float),
-    "maxInclusive": ("maximum", float),
-    "minExclusive": ("exclusiveMinimumValue", float),
-    "maxExclusive": ("exclusiveMaximumValue", float),
+# facets whose value is a numeric bound (minInclusive/etc.) -> the JSON
+# Schema keyword it becomes. Cast is picked dynamically from the
+# restriction's base type (see _restriction_number_kind): int for an
+# integer base (exact, no float precision loss for e.g. int64 bounds),
+# float otherwise.
+_BOUND_FACET_MAP = {
+    "minInclusive": "minimum",
+    "maxInclusive": "maximum",
+    "minExclusive": "exclusiveMinimumValue",
+    "maxExclusive": "exclusiveMaximumValue",
 }
+
+# xs: base type local names whose lexical values are exact integers /
+# floating-point numbers; anything else (string, date, boolean, a
+# reference to another named simpleType, ...) is left as text.
+_XSD_INTEGER_BASES = frozenset({
+    "integer", "int", "long", "short", "byte",
+    "nonNegativeInteger", "nonPositiveInteger",
+    "positiveInteger", "negativeInteger",
+    "unsignedLong", "unsignedInt", "unsignedShort", "unsignedByte",
+})
+_XSD_NUMBER_BASES = frozenset({"decimal", "float", "double"})
+
+
+def _restriction_number_kind(restriction: etree._Element) -> str:
+    """Classify a restriction's base type for facet coercion: 'integer'
+    (cast via int — exact, no float precision loss), 'number' (cast via
+    float), or 'string' (base is non-numeric, or is a reference to
+    another named simpleType this raw-XML metadata pass does not chase —
+    left as the original text rather than guessing)."""
+    base = restriction.get("base")
+    if not base:
+        return "string"
+    resolved = _resolve_qname_ref(base, restriction)
+    if resolved is None or resolved[0] != XSD_NS:
+        return "string"
+    local = resolved[1]
+    if local in _XSD_INTEGER_BASES:
+        return "integer"
+    if local in _XSD_NUMBER_BASES:
+        return "number"
+    return "string"
+
+
+def _coerce_enum_value(raw: str, kind: str) -> Any:
+    """Convert an enumeration's lexical value toward its restriction's
+    base type; keep the original text when it doesn't parse as that type
+    (a garbage/mismatched XSD value must not crash the parser — the
+    original text stays available for a human to fix) (#141 A7)."""
+    if kind == "integer":
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
+    if kind == "number":
+        try:
+            return float(raw)
+        except ValueError:
+            return raw
+    return raw
 
 
 def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
@@ -139,13 +190,15 @@ def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
     restriction = st.find(f"{{{XSD_NS}}}restriction")
     if restriction is None:
         return out
+    kind = _restriction_number_kind(restriction)
     enums = [
-        e.get("value")
+        _coerce_enum_value(e.get("value"), kind)
         for e in restriction.findall(f"{{{XSD_NS}}}enumeration")
         if e.get("value") is not None
     ]
     if enums:
         out["enum"] = enums
+    bound_cast = int if kind == "integer" else float
     for facet in restriction:
         if not isinstance(facet.tag, str):
             continue
@@ -165,10 +218,21 @@ def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
                     out["multipleOf"] = round(10 ** -digits, digits)
             except ValueError:
                 pass
-        elif local in _FACET_MAP:
-            key, cast = _FACET_MAP[local]
+        elif local == "pattern":
+            out["pattern"] = value
+        elif local in ("minLength", "maxLength"):
             try:
-                out[key] = cast(value)
+                out[local] = int(value)
+            except ValueError:
+                pass
+        elif local in _BOUND_FACET_MAP:
+            # minimum/maximum are numeric-only JSON Schema keywords: a
+            # value that doesn't parse as a number is dropped exactly as
+            # before, never smuggled through as a string (which would be
+            # schema-invalid, unlike an enum value of the same shape)
+            key = _BOUND_FACET_MAP[local]
+            try:
+                out[key] = bound_cast(value)
             except ValueError:
                 pass
     # OpenAPI 3.0 exclusive bounds are boolean flags on minimum/maximum
