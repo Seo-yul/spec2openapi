@@ -330,21 +330,32 @@ def _extract_faults(op: Any) -> list[ParsedFault]:
 _BUNDLE_SIZE_CAP = 256 * 1024 * 1024  # total uncompressed bytes
 
 
+def _size_cap_error() -> ConversionError:
+    return ConversionError(
+        f"bundle exceeds the {_BUNDLE_SIZE_CAP // (1024 * 1024)} MB "
+        "uncompressed size cap"
+    )
+
+
+def _unsafe_name_error(name: str) -> ConversionError:
+    return ConversionError(
+        f"unsafe bundle member name '{name}' (absolute paths and "
+        "'..' segments are not allowed)"
+    )
+
+
 def _check_bundle_names(members: dict[str, bytes]) -> None:
     total = 0
     for name, data in members.items():
-        parts = name.replace("\\", "/").split("/")
-        if os.path.isabs(name) or ".." in parts or not parts[-1]:
-            raise ConversionError(
-                f"unsafe bundle member name '{name}' (absolute paths and "
-                "'..' segments are not allowed)"
-            )
+        # check the normalized name: _parse_bundle joins backslash-normalized
+        # names, so '\tmp\x' becomes the absolute '/tmp/x' at write time
+        norm = name.replace("\\", "/")
+        parts = norm.split("/")
+        if os.path.isabs(norm) or ".." in parts or not parts[-1]:
+            raise _unsafe_name_error(name)
         total += len(data)
     if total > _BUNDLE_SIZE_CAP:
-        raise ConversionError(
-            f"bundle exceeds the {_BUNDLE_SIZE_CAP // (1024 * 1024)} MB "
-            "uncompressed size cap"
-        )
+        raise _size_cap_error()
 
 
 def _resolve_entry(members: dict[str, bytes], entry: str | None) -> str:
@@ -370,15 +381,29 @@ def _resolve_entry(members: dict[str, bytes], entry: str | None) -> str:
 
 
 def _zip_members(fh: Any) -> dict[str, bytes]:
+    """Read an archive into memory under the uncompressed-size cap.
+
+    The cap is enforced *while* decompressing, not after: a zip bomb must
+    be refused without ever allocating the memory the cap bounds."""
+    members: dict[str, bytes] = {}
     try:
         with zipfile.ZipFile(fh) as zf:
-            return {
-                info.filename: zf.read(info)
-                for info in zf.infolist()
-                if not info.is_dir()
-            }
+            infos = [i for i in zf.infolist() if not i.is_dir()]
+            if sum(i.file_size for i in infos) > _BUNDLE_SIZE_CAP:
+                raise _size_cap_error()  # fast reject on declared sizes
+            budget = _BUNDLE_SIZE_CAP
+            for info in infos:
+                with zf.open(info) as member:
+                    # one byte past the budget: a header understating
+                    # file_size must not smuggle a larger payload through
+                    data = member.read(budget + 1)
+                if len(data) > budget:
+                    raise _size_cap_error()
+                budget -= len(data)
+                members[info.filename] = data
     except zipfile.BadZipFile as exc:
         raise ConversionError(f"could not read zip archive: {exc}") from exc
+    return members
 
 
 def _parse_bundle(members: dict[str, bytes], entry: str, label: str,
@@ -388,8 +413,14 @@ def _parse_bundle(members: dict[str, bytes], entry: str, label: str,
     real file locations, then relabel the temp path."""
     _check_bundle_names(members)
     with tempfile.TemporaryDirectory(prefix="spec2openapi-") as td:
+        root = os.path.realpath(td)
         for name, data in members.items():
             path = os.path.join(td, name.replace("\\", "/"))
+            # belt and braces: whatever the name looked like, refuse to
+            # write anywhere but inside the temp dir
+            resolved = os.path.realpath(path)
+            if resolved == root or os.path.commonpath([root, resolved]) != root:
+                raise _unsafe_name_error(name)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "wb") as f:
                 f.write(data)
