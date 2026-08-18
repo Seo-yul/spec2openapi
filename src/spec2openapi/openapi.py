@@ -15,6 +15,7 @@ be preserved (do not alphabetize the document).
 """
 from __future__ import annotations
 
+import copy
 import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -170,9 +171,12 @@ def build_spec(
     used_ids: set[str] = set()
 
     # reserve the built-in fault schema name up front so a WSDL type also
-    # named "SoapFault" is deduped to another name instead of clobbering it
+    # named "SoapFault" is deduped to another name instead of clobbering it.
+    # deep-copied: conv.components[...] used to alias the module-level
+    # SOAP_FAULT_SCHEMA dict by reference, so every conversion (and the
+    # template itself) shared and could corrupt one mutable object (#142)
     fault_ref_name = "SoapFault"
-    conv.components[fault_ref_name] = SOAP_FAULT_SCHEMA
+    conv.components[fault_ref_name] = copy.deepcopy(SOAP_FAULT_SCHEMA)
     fault_ref = f"#/components/schemas/{fault_ref_name}"
 
     for op in parsed.operations:

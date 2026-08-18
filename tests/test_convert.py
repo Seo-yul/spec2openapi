@@ -90,6 +90,34 @@ def test_xml_annotations_carry_namespace(orders_wsdl):
     )
 
 
+def test_soap_fault_schema_independent_per_conversion(calculator_wsdl):
+    """#142: build_spec() aliased the module-level SOAP_FAULT_SCHEMA dict
+    into conv.components by reference, and the shallow dict(conv.components)
+    kept that identity — every 3.0 spec shared one process-global mutable
+    SoapFault schema. Each conversion (and the template itself) must own
+    an independent object; mutating one must not leak into another
+    conversion or into the global template."""
+    from spec2openapi.openapi import SOAP_FAULT_SCHEMA
+
+    spec1 = convert_wsdl(calculator_wsdl)
+    spec2 = convert_wsdl(calculator_wsdl)
+    fault1 = spec1["components"]["schemas"]["SoapFault"]
+    fault2 = spec2["components"]["schemas"]["SoapFault"]
+
+    assert fault1 is not SOAP_FAULT_SCHEMA
+    assert fault1 is not fault2
+
+    # mutate spec1's copy, including a nested dict (guards against a
+    # shallow copy that would still alias the "properties" sub-dict)
+    fault1["properties"]["faultcode"]["type"] = "integer"
+    fault1["description"] = "mutated"
+
+    assert SOAP_FAULT_SCHEMA["properties"]["faultcode"]["type"] == "string"
+    assert SOAP_FAULT_SCHEMA["description"] != "mutated"
+    assert fault2["properties"]["faultcode"]["type"] == "string"
+    assert fault2["description"] != "mutated"
+
+
 def test_forbid_external_allows_local_imports():
     """forbid_external blocks remote fetches only; local imports still work."""
     from pathlib import Path
