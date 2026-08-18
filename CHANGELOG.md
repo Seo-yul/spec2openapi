@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The SOAP bridge no longer reports a failed call as a success (#140): an
+  HTTP 4xx/5xx response whose body is a well-formed non-Fault envelope was
+  answered as HTTP 200, telling the model an operation that never ran had
+  succeeded. It now returns the real status with a fault payload, like the
+  empty / non-XML / no-Body branches always did.
+- Declared `soap:header` parts are serialized instead of silently dropped
+  (#140). Values are injected at deployment level — `BridgeOptions(
+  soap_headers=...)` or `SPEC2OPENAPI_SOAP_HEADERS` (a JSON object keyed by
+  part or element name) — and a header the spec declares but the runtime
+  cannot supply now logs a warning once per operation instead of producing
+  an envelope the server rejects.
+- Response values are coerced on OpenAPI 3.1 specs too (#140): `_coerce`
+  compared `type` only to the 3.0 string form, so a spec converted with
+  `--openapi-version 3.1` returned numbers and booleans to the model as
+  JSON strings.
+- `NaN`/`INF` values from the wire are left as strings rather than coerced
+  to non-finite floats that serialize as invalid JSON (#140).
+- `components:`, `components.schemas:`, and `paths:` present-but-null no
+  longer crash the bridge's spec index with `AttributeError` (#140).
+- A null `soapAction` no longer sends the literal `SOAPAction: "None"`, and
+  an unquoted `soapVersion: 1.2` (which YAML reads as a float) no longer
+  falls back to 1.1 framing (#140). Version normalization is now shared by
+  envelope construction, request headers, and response parsing, so framing
+  and namespace cannot disagree.
+
 ### Security
 - Bundle member names are now validated after backslash normalization, and
   every write is confined to the extraction directory by an absolute-path
