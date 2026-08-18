@@ -152,6 +152,13 @@ def test_spec_index_null_component_schemas_no_crash():
     assert index.components == {}
 
 
+def test_spec_index_null_paths_no_crash():
+    """paths: (no value) is the same null-tolerance class as components."""
+    spec = _minimal_spec(None)
+    spec["paths"] = None
+    assert _SpecIndex(spec).ops == {}
+
+
 def test_soap_bridge_transport_null_components_no_crash():
     from spec2openapi.bridge import SoapBridgeTransport
 

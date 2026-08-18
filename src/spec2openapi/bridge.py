@@ -150,7 +150,7 @@ class _SpecIndex:
         # fixed for cmd_validate — reuse its null-tolerant lookup
         self.components: dict[str, Any] = _component_schemas(spec)
         self.ops: dict[str, dict[str, Any]] = {}
-        for path, item in spec.get("paths", {}).items():
+        for path, item in (spec.get("paths") or {}).items():
             post = (item or {}).get("post") or {}
             xsoap = post.get("x-soap")
             if not xsoap:
