@@ -940,8 +940,22 @@ class _Upgrader:
     }
 
     def _convert_security_schemes(self) -> dict:
+        raw = self.src.get("securityDefinitions")
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise ConversionError(
+                "securityDefinitions must be a mapping of scheme name -> "
+                f"security scheme object, got {type(raw).__name__}"
+            )
         out: dict[str, Any] = {}
-        for name, sd in (self.src.get("securityDefinitions") or {}).items():
+        for name, sd in raw.items():
+            if not isinstance(sd, dict):
+                self.lossy.append(
+                    f"securityDefinitions.{name}: not an object; "
+                    "dropped from securitySchemes"
+                )
+                continue
             t = sd.get("type")
             entry = self._one_security_scheme(name, t, sd)
             if entry is not None:
@@ -1034,7 +1048,12 @@ class _Upgrader:
     def _build_info(self) -> dict[str, Any]:
         # title and version are REQUIRED in OpenAPI 3; fill whichever is
         # missing (a present-but-partial info must still be completed)
-        info = dict(self.src.get("info") or {})
+        raw_info = self.src.get("info")
+        if raw_info is not None and not isinstance(raw_info, dict):
+            raise ConversionError(
+                f"info must be a mapping, got {type(raw_info).__name__}"
+            )
+        info = dict(raw_info or {})
         for field in ("title", "version"):
             val = info.get(field)
             if val is not None and not isinstance(val, str):
@@ -1228,11 +1247,17 @@ class _Upgrader:
             components["parameters"] = conv_params
         if request_bodies:
             components["requestBodies"] = request_bodies
-        if src.get("responses"):
+        responses_raw = src.get("responses")
+        if responses_raw:
+            if not isinstance(responses_raw, dict):
+                raise ConversionError(
+                    "top-level responses must be a mapping of name -> "
+                    f"Response Object, got {type(responses_raw).__name__}"
+                )
             components["responses"] = {
                 self._resp_key.get(name, name):
                     self._convert_response(r, {}, f"responses.{name}")
-                for name, r in src["responses"].items()
+                for name, r in responses_raw.items()
             }
         schemes = self._convert_security_schemes()
         if schemes:
