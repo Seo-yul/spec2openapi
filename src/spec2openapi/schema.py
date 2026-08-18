@@ -186,9 +186,14 @@ class SchemaConverter:
         object (used for request/response bodies)."""
         if isinstance(xsd_type, zx.ComplexType):
             return self._complex_to_schema(xsd_type, hint, qkey=qkey)
+        # a wrapper element whose type is a simple type serializes the
+        # same way xsd:simpleContent does: the value IS the element's own
+        # text, not a nested <value> child (#141 B1)
+        value_schema = self._simple_to_schema(xsd_type)
+        value_schema["xml"] = {"x-text": True}
         return {
             "type": "object",
-            "properties": {"value": self._simple_to_schema(xsd_type)},
+            "properties": {"value": value_schema},
             "required": ["value"],
         }
 

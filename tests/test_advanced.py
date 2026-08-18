@@ -188,6 +188,23 @@ def test_simple_content_value_plus_attribute(adv_spec):
     assert set(money["required"]) == {"value", "currency"}
 
 
+# -- simple-type wrapper 'value' needs the same x-text annotation (#141 B1) ----
+
+def test_simple_type_wrapper_value_has_x_text_annotation():
+    # a wrapper element whose type is a plain simple type (not a
+    # complexType) must annotate its "value" property like the
+    # simpleContent path does above, or the bridge serializes it as a
+    # <value> child element instead of the wrapper element's own text.
+    from zeep import xsd as zx
+
+    from spec2openapi.schema import SchemaConverter
+
+    conv = SchemaConverter()
+    schema = conv.element_type_to_object_schema(zx.String(), hint="EchoInput")
+    assert schema["properties"]["value"]["xml"] == {"x-text": True}
+    assert schema["required"] == ["value"]
+
+
 def test_default_value(adv_spec):
     props = _input_schema(adv_spec, "SubmitApplication")["properties"]
     assert props["mode"]["default"] == "standard"
