@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from spec2openapi import convert_swagger, convert_wsdl
-from spec2openapi.openapi import to_openapi_31
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 EDGE = str(FIXTURES / "edgecases.wsdl")

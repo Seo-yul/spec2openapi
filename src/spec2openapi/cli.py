@@ -14,8 +14,9 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .errors import MCP_HINT
 
-_MCP_HINT = "install the MCP runtime extras first: pip install 'spec2openapi[mcp]'"
+_MCP_HINT = f"install the MCP runtime extras first: {MCP_HINT}"
 
 
 def _is_wsdl_source(src: str) -> bool:

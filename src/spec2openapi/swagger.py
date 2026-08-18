@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import re
 from http import HTTPStatus
-from urllib.parse import unquote
 from typing import Any
+from urllib.parse import unquote
 
 from . import __version__ as _version
 from .errors import ConversionError

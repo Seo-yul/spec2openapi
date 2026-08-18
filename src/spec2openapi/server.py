@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from .convert import convert_wsdl, load_spec, spec_has_soap  # noqa: F401
+from .errors import MCP_HINT
 
 logger = logging.getLogger("spec2openapi")
 
@@ -33,7 +34,7 @@ def _spec_has_rest(spec: dict[str, Any]) -> bool:
 
 _MCP_HINT = (
     "the MCP runtime requires optional dependencies; "
-    "install them with: pip install 'spec2openapi[mcp]'"
+    f"install them with: {MCP_HINT}"
 )
 
 

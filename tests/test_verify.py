@@ -1,10 +1,24 @@
 """tests/test_verify.py — verify()/checks.py의 구조화 검증 테스트."""
 from __future__ import annotations
 
+import dataclasses
 import sys
-import pytest
+from pathlib import Path
 
-from spec2openapi.checks import CheckRef, CheckResult, VerifyReport, verify
+import pytest
+import yaml
+
+from spec2openapi.checks import (
+    _READY_IDS,
+    _STATIC_CHECKS,
+    REGISTRY,
+    CheckRef,
+    CheckResult,
+    VerifyReport,
+    _result,
+    fastmcp_ready_problems,
+    verify,
+)
 
 
 def test_report_ok_and_complete_flags():
@@ -40,11 +54,9 @@ def test_report_to_dict_shape():
 
 def test_results_are_immutable():
     res = CheckResult(id="a", status="pass")
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         res.status = "fail"
 
-
-from spec2openapi.checks import REGISTRY, _result
 
 ALL_CHECK_IDS = {
     "document.mapping", "document.has-paths", "document.has-operations",
@@ -73,7 +85,10 @@ def test_result_helper_attaches_registry_refs():
     assert any(ref.id == "SEP-986" for ref in r.refs)
 
 
-from spec2openapi.checks import fastmcp_ready_problems
+def test_ready_ids_subset_of_static_checks():
+    # check_fastmcp_ready's frozen id set must only ever name checks that
+    # verify()'s static registry actually runs.
+    assert _READY_IDS <= {cid for cid, _ in _STATIC_CHECKS}
 
 
 def _spec(paths):
@@ -724,10 +739,6 @@ def test_deep_invalid_document_fails_schema_valid():
     (osv,) = [r for r in report.results if r.id == "openapi.schema-valid"]
     assert osv.status == "fail"
 
-
-from pathlib import Path
-
-import yaml
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 

@@ -1,14 +1,12 @@
 """Swagger 2.0 -> OpenAPI 3.x upgrade tests."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 from fastmcp import Client, FastMCP
 
-from spec2openapi import (ConversionError, convert_swagger, is_swagger2,
-                          load_spec)
+from spec2openapi import ConversionError, convert_swagger, is_swagger2, load_spec
 from spec2openapi.cli import main as cli_main
 
 FIXTURES = Path(__file__).parent / "fixtures"
