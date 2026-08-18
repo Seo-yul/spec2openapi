@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Bundle member names are now validated after backslash normalization, and
+  every write is confined to the extraction directory by an absolute-path
+  containment check (#139). A member named `\tmp\x` previously passed the
+  guard (not absolute on POSIX, no `..`) and then escaped the temp
+  directory when the name was normalized for `os.path.join` — an arbitrary
+  file write for callers converting untrusted bundles.
+- The uncompressed-size cap is enforced *while* decompressing an archive
+  instead of after (#139): declared member sizes are rejected up front and
+  each member is read one byte past the remaining budget, so a zip bomb is
+  refused without ever allocating the memory the cap is meant to bound.
+- A set-but-empty `SPEC2OPENAPI_VERIFY` no longer disables TLS certificate
+  verification (#139). Empty now means "leave the default" for every
+  boolean env var, matching `SPEC2OPENAPI_TIMEOUT` and the string vars;
+  previously the common `VERIFY=""` manifest idiom silently turned
+  certificate validation off for every SOAP call.
+
 ## [0.6.0] - 2026-08-16
 
 ### Added

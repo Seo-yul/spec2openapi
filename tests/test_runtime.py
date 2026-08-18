@@ -69,6 +69,19 @@ def test_env_bool_variants(monkeypatch):
         assert _env_bool("X", False) is True
 
 
+def test_env_bool_empty_is_unset_not_false(monkeypatch):
+    """An empty value means "leave the default" — it must never turn TLS
+    verification off (matching _env_float and the string env vars)."""
+    from spec2openapi.bridge import BridgeOptions
+
+    for v in ("", "   "):
+        monkeypatch.setenv("X", v)
+        assert _env_bool("X", True) is True
+        assert _env_bool("X", False) is False
+    monkeypatch.setenv("SPEC2OPENAPI_VERIFY", "")
+    assert BridgeOptions.from_env().verify is True
+
+
 # -- bridge: choice enforcement ----------------------------------------------
 
 def test_choice_violations():

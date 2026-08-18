@@ -37,13 +37,15 @@ PASSWORD_TEXT = (
 )
 
 
-_FALSEY = {"0", "false", "no", "off", ""}
+_FALSEY = {"0", "false", "no", "off"}
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
-    if raw is None:
+    # an empty value means "leave the default" (as for _env_float and the
+    # string vars); it must never read as False and disable TLS verification
+    if raw is None or not raw.strip():
         return default
     v = raw.strip().lower()
     if v in _FALSEY:
