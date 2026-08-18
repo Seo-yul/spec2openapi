@@ -6,6 +6,8 @@ build/
 dist/
 .venv/
 uv.lock
+.ruff_cache/
+.env
 
 # Local-only workspace: never tracked, never pushed (see .local/README.md)
 .local/
