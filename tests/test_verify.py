@@ -519,6 +519,53 @@ def test_choice_marker_group_not_a_dict_fails():
     assert res[0] == "fail"
 
 
+def test_choice_marker_accepts_bundled_sequence_branch():
+    # a members[] entry may itself be a list of names — a branch that is
+    # a bundled xsd:sequence of 2+ elements inside the choice — and must
+    # not be flagged as referencing "unknown properties" (#141 B2).
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}, "b": {}, "c": {}},
+        "x-soap-choice": [{"members": [["a", "b"], "c"], "required": True}],
+    }}}
+    report = verify(spec, deep=False)
+    assert _statuses(report, "x-soap.choice") == [("pass", "")]
+
+
+def test_choice_marker_flags_unknown_name_inside_bundled_branch():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}, "b": {}},
+        "x-soap-choice": [{"members": [["a", "ghost"]], "required": True}],
+    }}}
+    report = verify(spec, deep=False)
+    (res,) = [(s, m) for s, m in _statuses(report, "x-soap.choice")]
+    assert res[0] == "fail" and "ghost" in res[1]
+
+
+def test_choice_marker_flags_empty_bundled_branch():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}},
+        "x-soap-choice": [{"members": [[]], "required": True}],
+    }}}
+    report = verify(spec, deep=False)
+    (res,) = [(s, m) for s, m in _statuses(report, "x-soap.choice")]
+    assert res[0] == "fail"
+
+
+def test_choice_marker_passes_on_sequence_branch_fixture():
+    # tests/fixtures/edgecases.wsdl's SeqChoice is the real-world shape
+    # that motivated the bundled-branch representation; the check must
+    # not false-positive on schema.py's actual output for it.
+    from spec2openapi import convert_wsdl
+
+    fixtures = Path(__file__).resolve().parent / "fixtures"
+    spec = convert_wsdl(str(fixtures / "edgecases.wsdl"))
+    report = verify(spec, deep=False)
+    assert all(s == "pass" for s, _ in _statuses(report, "x-soap.choice"))
+
+
 def test_choice_marker_passes_on_real_world_example():
     # examples/advanced.openapi.yaml uses the real x-soap-choice marker
     # shape emitted by schema.py; the check must not false-positive on it.
