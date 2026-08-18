@@ -118,6 +118,35 @@ def test_soap_fault_schema_independent_per_conversion(calculator_wsdl):
     assert fault2["description"] != "mutated"
 
 
+def test_trace_method_predicates_agree():
+    """#142: openapi._operations, convert.spec_has_soap, and
+    server._spec_has_rest reimplemented "iterate operations" three ways
+    that disagreed — _spec_has_rest's method list omitted 'trace', so a
+    spec whose only operation was a non-SOAP 'trace' call was invisible
+    to it (a false "no REST operation" verdict). All three must now
+    agree, with _operations as the single source of truth for what
+    counts as an operation."""
+    from spec2openapi.convert import spec_has_soap
+    from spec2openapi.openapi import _operations
+    from spec2openapi.server import _spec_has_rest
+
+    # a SOAP spec whose only operation uses 'trace': _operations must see
+    # it, spec_has_soap must call it SOAP, and _spec_has_rest must agree
+    # there is no plain-REST operation present.
+    soap_trace_spec = {"paths": {"/t": {"trace": {"x-soap": {"op": "T"}}}}}
+    assert [m for _, m, _ in _operations(soap_trace_spec)] == ["trace"]
+    assert spec_has_soap(soap_trace_spec) is True
+    assert _spec_has_rest(soap_trace_spec) is False
+
+    # a plain REST spec whose only operation uses 'trace': the old
+    # _spec_has_rest (no 'trace' in its method list) wrongly returned
+    # False here -- the bug this consolidation fixes (#142).
+    rest_trace_spec = {"paths": {"/t": {"trace": {}}}}
+    assert [m for _, m, _ in _operations(rest_trace_spec)] == ["trace"]
+    assert spec_has_soap(rest_trace_spec) is False
+    assert _spec_has_rest(rest_trace_spec) is True
+
+
 def test_forbid_external_allows_local_imports():
     """forbid_external blocks remote fetches only; local imports still work."""
     from pathlib import Path

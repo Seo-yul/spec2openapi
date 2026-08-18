@@ -13,6 +13,7 @@ from typing import Any
 from .errors import ConversionError
 from .openapi import (  # noqa: F401  (re-exported)
     _normalize_openapi_version,
+    _operations,
     build_spec,
     dump_spec,
 )
@@ -116,14 +117,11 @@ def load_spec(path: str | Path) -> dict[str, Any]:
 
 def spec_has_soap(spec: dict[str, Any]) -> bool:
     """True if any operation carries the x-soap extension (i.e. calling
-    it requires the SOAP bridge). A malformed document is simply False."""
-    paths = spec.get("paths") if isinstance(spec, dict) else None
-    if not isinstance(paths, dict):
-        return False
-    for item in paths.values():
-        if not isinstance(item, dict):
-            continue
-        for method in item.values():
-            if isinstance(method, dict) and method.get("x-soap"):
-                return True
-    return False
+    it requires the SOAP bridge). A malformed document is simply False.
+
+    Built on openapi._operations, the single source of truth for "what is
+    an operation" (#142): an earlier hand-rolled version of this loop
+    walked every value under a path item with no method-name filter at
+    all, so a non-operation dict entry with a coincidentally truthy
+    'x-soap' key could produce a false positive."""
+    return any(op.get("x-soap") for _, _, op in _operations(spec))
