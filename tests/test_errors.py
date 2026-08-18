@@ -5,8 +5,7 @@ import logging
 
 import pytest
 
-from spec2openapi import (ConversionError, convert_swagger, convert_wsdl,
-                          load_spec)
+from spec2openapi import ConversionError, convert_swagger, convert_wsdl, load_spec
 from spec2openapi.cli import main as cli_main
 from spec2openapi.schema import SchemaConverter
 
@@ -160,8 +159,8 @@ def test_is_swagger2_false_for_non_mapping():
 
 def test_load_spec_accepts_url(monkeypatch):
     """load_spec fetches http(s) sources (no real network: urlopen mocked)."""
-    import io
     import contextlib
+    import io
 
     payload = b'{"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {}}'
 

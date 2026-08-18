@@ -13,7 +13,6 @@ from __future__ import annotations
 import datetime
 import decimal
 import logging
-import re
 from typing import Any
 
 from zeep import xsd as zx

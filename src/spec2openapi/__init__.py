@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 
 from .checks import CheckRef, CheckResult, VerifyReport, verify  # noqa: E402,F401
 from .convert import convert_wsdl, load_spec, spec_has_soap  # noqa: E402,F401
-from .errors import ConversionError  # noqa: E402,F401
+from .errors import MCP_HINT, ConversionError  # noqa: E402,F401
 from .minify import minify_for_mcp  # noqa: E402,F401
 from .openapi import (  # noqa: E402,F401
     build_spec,
@@ -90,7 +90,7 @@ def __getattr__(name: str):
         except ImportError as exc:
             raise ImportError(
                 f"spec2openapi.{name} requires optional dependencies; "
-                "install them with: pip install 'spec2openapi[mcp]'"
+                f"install them with: {MCP_HINT}"
             ) from exc
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

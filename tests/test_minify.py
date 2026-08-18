@@ -10,10 +10,12 @@ which spec locations reach tool payloads.
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 from pathlib import Path
 
 import pytest
+import yaml
 from fastmcp import Client, FastMCP
 
 from spec2openapi import (
@@ -385,10 +387,6 @@ _EXPECTED_LEAKS = {
 
 # --- review-hardening regressions (PR #129) ---------------------------------
 # One test per confirmed finding of the PR review, in its severity order.
-
-import datetime
-
-import yaml
 
 
 def _tiny(op_extra: dict | None = None, **root_extra) -> dict:
