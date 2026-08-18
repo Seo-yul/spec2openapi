@@ -295,10 +295,17 @@ class SchemaConverter:
         attributes = list(getattr(t, "attributes", []))
 
         # xsd:simpleContent: a text value plus attributes
+        # zeep names an xsd:any particle "_value_1" too — the same
+        # synthetic name it gives xsd:simpleContent's implicit text
+        # value — so a complexType containing only <xsd:any/> must be
+        # excluded here or it is misjudged as simpleContent (#141 C);
+        # the elements loop below already handles Any/AnyObject
+        # correctly (additionalProperties: true) once it actually runs.
         is_simple_content = (
             len(elements) == 1
             and elements[0][0] == "_value_1"
             and not isinstance(elements[0][1].type, zx.ComplexType)
+            and type(elements[0][1]).__name__ not in ("Any", "AnyObject")
         )
         if is_simple_content:
             value_schema = self._simple_to_schema(elements[0][1].type)

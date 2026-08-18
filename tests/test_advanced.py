@@ -208,6 +208,65 @@ def test_nillable_complex_ref_valid_in_31():
     osv_validate(spec)
 
 
+# -- complexType with only xsd:any must not be misjudged as simpleContent -----
+# (#141 C: zeep names an xsd:any particle "_value_1", same as the
+# synthetic name it gives xsd:simpleContent's implicit text value)
+
+_ANY_ONLY_WSDL = """<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:anytest" targetNamespace="urn:anytest">
+  <types>
+    <xsd:schema targetNamespace="urn:anytest" elementFormDefault="qualified">
+      <xsd:complexType name="AnyOnly">
+        <xsd:sequence>
+          <xsd:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+        </xsd:sequence>
+      </xsd:complexType>
+      <xsd:element name="AnyOp">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="payload" type="tns:AnyOnly"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="AnyOpResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="ok" type="xsd:boolean"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+  <message name="AnyOpIn"><part name="p" element="tns:AnyOp"/></message>
+  <message name="AnyOpOut"><part name="p" element="tns:AnyOpResponse"/></message>
+  <portType name="pt"><operation name="AnyOp">
+    <input message="tns:AnyOpIn"/><output message="tns:AnyOpOut"/>
+  </operation></portType>
+  <binding name="b" type="tns:pt">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="AnyOp"><soap:operation soapAction="urn:AnyOp"/>
+      <input><soap:body use="literal"/></input>
+      <output><soap:body use="literal"/></output>
+    </operation>
+  </binding>
+  <service name="s"><port name="p" binding="tns:b">
+    <soap:address location="http://x/y"/></port></service>
+</definitions>
+"""
+
+
+def test_any_only_complextype_not_misjudged_as_simple_content():
+    spec = convert_wsdl(content=_ANY_ONLY_WSDL)
+    schema = _input_schema(spec, "AnyOp")
+    payload_ref = schema["properties"]["payload"]["allOf"][0]  # $ref wrapper
+    payload = spec["components"]["schemas"][
+        payload_ref["$ref"].rsplit("/", 1)[-1]]
+    assert "x-soap-simple-content" not in payload
+    assert payload.get("additionalProperties") is True
+    assert "value" not in payload.get("properties", {})
+
+
 def test_facets_from_imported_xsd(adv_spec):
     props = _input_schema(adv_spec, "SubmitApplication")["properties"]
     discount = props["discount"]
