@@ -398,6 +398,30 @@ def test_string_media_types_wrapped_not_split(kind, where):
     assert any("was a string" in a for a in out["x-s2o"]["assumptions"])
 
 
+# -- operation-level empty consumes/produces clears the global (#141 C) --------
+
+@pytest.mark.parametrize("kind", ["consumes", "produces"])
+def test_operation_level_empty_media_types_does_not_inherit_global(kind):
+    # an operation-level `consumes: []`/`produces: []` is a deliberate
+    # override, not "unspecified" — it must not fall back to the global
+    # declaration (previously `op.get(kind) or self.src.get(kind)`
+    # treated the empty list as falsy and inherited the global anyway).
+    op = {"operationId": "a", kind: [],
+          "parameters": [{"name": "b", "in": "body",
+                          "schema": {"type": "object"}}],
+          "responses": {"200": {"description": "ok",
+                                "schema": {"type": "string"}}}}
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           kind: ["application/xml"], "paths": {"/a": {"post": op}}}
+    out = _valid(src)
+    post = out["paths"]["/a"]["post"]
+    content = (post["requestBody"]["content"] if kind == "consumes"
+               else post["responses"]["200"]["content"])
+    # falls back to the documented application/json default, NOT the
+    # global 'application/xml'
+    assert list(content.keys()) == ["application/json"]
+
+
 # -- more GIGO hardening (#57) -------------------------------------------------
 
 def test_boolean_required_hoisted_to_parent():

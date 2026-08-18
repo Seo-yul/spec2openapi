@@ -627,7 +627,14 @@ class _Upgrader:
                 )
 
     def _media_types(self, kind: str, op: dict, ctx: str) -> list[str]:
-        types = op.get(kind) or self.src.get(kind) or []
+        # an operation-level key that is *present* (even an empty list)
+        # is a deliberate override and must not inherit the global
+        # value — `op.get(kind) or self.src.get(kind)` used to treat an
+        # explicit `consumes: []`/`produces: []` the same as "absent"
+        # (#141 C), silently inheriting a global the operation meant to
+        # clear.
+        op_types = op.get(kind)
+        types = op_types if op_types is not None else (self.src.get(kind) or [])
         if isinstance(types, str):
             # spec violation seen in the wild: a bare string instead of an
             # array — list(str) would split it into characters
