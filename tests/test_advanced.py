@@ -132,6 +132,82 @@ def test_openapi_31_enum_spec_still_validates():
     osv_validate(spec)
 
 
+# -- nillable complex/$ref elements must not lose the annotation (#141 C) -----
+
+_NIL_WSDL = """<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+  xmlns:tns="urn:nilltest" targetNamespace="urn:nilltest">
+  <types>
+    <xsd:schema targetNamespace="urn:nilltest" elementFormDefault="qualified">
+      <xsd:complexType name="Address">
+        <xsd:sequence>
+          <xsd:element name="city" type="xsd:string"/>
+        </xsd:sequence>
+      </xsd:complexType>
+      <xsd:element name="NilOp">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="home" type="tns:Address" nillable="true"/>
+            <xsd:element name="note" type="xsd:string" nillable="true"/>
+            <xsd:element name="stops" type="tns:Address" nillable="true"
+                         minOccurs="0" maxOccurs="unbounded"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="NilOpResponse">
+        <xsd:complexType>
+          <xsd:sequence><xsd:element name="ok" type="xsd:boolean"/></xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+  <message name="NilOpIn"><part name="p" element="tns:NilOp"/></message>
+  <message name="NilOpOut"><part name="p" element="tns:NilOpResponse"/></message>
+  <portType name="pt"><operation name="NilOp">
+    <input message="tns:NilOpIn"/><output message="tns:NilOpOut"/>
+  </operation></portType>
+  <binding name="b" type="tns:pt">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="NilOp"><soap:operation soapAction="urn:NilOp"/>
+      <input><soap:body use="literal"/></input>
+      <output><soap:body use="literal"/></output>
+    </operation>
+  </binding>
+  <service name="s"><port name="p" binding="tns:b">
+    <soap:address location="http://x/y"/></port></service>
+</definitions>
+"""
+
+
+def test_nillable_complex_ref_element_preserved():
+    # nillable was silently dropped whenever the element's type was
+    # complex (a $ref): OpenAPI 3.0 ignores 'nullable' as a bare $ref
+    # sibling, so it must be wrapped in allOf like other $ref-sibling
+    # cases in this codebase, not just discarded.
+    spec = convert_wsdl(content=_NIL_WSDL)
+    schema = _input_schema(spec, "NilOp")
+
+    home = schema["properties"]["home"]
+    assert home["nullable"] is True
+    assert home["allOf"][0]["$ref"].endswith("/Address")
+
+    note = schema["properties"]["note"]  # simple type: baseline, unaffected
+    assert note["nullable"] is True
+
+    stops_items = schema["properties"]["stops"]["items"]
+    assert stops_items["nullable"] is True
+    assert stops_items["allOf"][0]["$ref"].endswith("/Address")
+
+
+def test_nillable_complex_ref_valid_in_31():
+    from openapi_spec_validator import validate as osv_validate
+
+    spec = convert_wsdl(content=_NIL_WSDL, openapi_version="3.1")
+    osv_validate(spec)
+
+
 def test_facets_from_imported_xsd(adv_spec):
     props = _input_schema(adv_spec, "SubmitApplication")["properties"]
     discount = props["discount"]

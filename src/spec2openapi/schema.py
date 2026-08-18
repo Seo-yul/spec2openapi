@@ -511,8 +511,13 @@ class SchemaConverter:
         if qname is not None and getattr(qname, "namespace", None):
             xml_meta["name"] = qname.localname
             xml_meta["namespace"] = qname.namespace
-        if getattr(el, "nillable", False) and "$ref" not in base:
+        # a complex ($ref) type can't take 'nullable' as a bare sibling
+        # (OpenAPI 3.0 ignores siblings next to a schema $ref); defer to
+        # the allOf-wrap sites below instead of just dropping it (#141 C)
+        nillable = bool(getattr(el, "nillable", False))
+        if nillable and "$ref" not in base:
             base["nullable"] = True
+            nillable = False
 
         doc = self._child_doc(qkey, el_name)
 
@@ -535,6 +540,8 @@ class SchemaConverter:
             if "$ref" not in items:
                 items = dict(items)
                 items["xml"] = dict(xml_meta)
+            elif nillable:
+                items = {"allOf": [items], "nullable": True}
             arr: dict[str, Any] = {"type": "array", "items": items, "xml": xml_meta}
             try:
                 mn = int(getattr(el, "min_occurs", 0))
@@ -553,6 +560,8 @@ class SchemaConverter:
 
         if "$ref" in base:
             out: dict[str, Any] = {"allOf": [base], "xml": xml_meta}
+            if nillable:
+                out["nullable"] = True
             if doc:
                 out["description"] = doc
             return out
