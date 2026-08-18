@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-16
+
+### Added
+- `verify` — structured, library-level verification of a converted spec.
+  Runs a registry of checks (document shape, MCP tool-name rules, the
+  project's `x-soap` contract, and — when the optional dependencies are
+  installed — openapi-spec-validator and a FastMCP in-memory round-trip)
+  and returns a `VerifyReport`: deterministic, JSON-serializable
+  (`to_dict()`), with per-check id, status (`pass`/`warn`/`fail`/`skip`),
+  location, and normative citations (`refs`, e.g. SEP-986 for tool-name
+  rules). Every check id appears in the report at least once, so "checked
+  and passed" is always distinguishable from "could not check";
+  `report.ok` ignores skips while `report.complete` exposes them.
+  `verify` never raises. `check_fastmcp_ready` is unchanged (frozen check
+  set and messages) and now delegates to the same engine.
+- `spec2openapi validate --format json` prints the `verify()` report as
+  JSON for CI pipelines.
+
+### Changed
+- `spec2openapi validate` now also fails (exit 1) on x-soap contract
+  violations and non-3.x documents that previously passed; warn-level
+  notes (missing descriptions, missing endpoint) print as `note:` lines.
+  Use `--format json` to gate on specific check ids.
+
 ## [0.5.0] - 2026-08-08
 
 ### Added
@@ -387,7 +411,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.2.2...v0.3.0

@@ -37,6 +37,7 @@ The fixed-runtime deployment model — build one image, swap the spec via a Kube
 - **Swagger 2.0 → OpenAPI 3.x upgrade** — full mechanical mapping (servers, requestBody, formData/multipart, parameter schema wrapping, `collectionFormat` → `style`/`explode`, `$ref` rewriting, security schemes, `type: file`, `x-nullable`, discriminator), hardened against real-world documents: deep local `$ref`s are hoisted to components, dangling refs and duplicate parameters are neutralized, type-mismatched defaults are coerced, and common vendor extensions (`x-example`, `x-oneOf`, `x-anyOf`) are promoted to native keywords. Every assumption made for missing information is recorded in `x-s2o.assumptions`; untranslatable constructs are preserved as `x-` extensions and listed in `x-s2o.lossy`.
 - **Real OpenAPI 3.1 output** — `--openapi-version 3.1` is a semantic conversion to JSON Schema 2020-12 style (`nullable` → `type` arrays, boolean `exclusiveMinimum`/`exclusiveMaximum` → numeric bounds), not a version-string bump.
 - **FastMCP compatibility, guaranteed and verifiable** — operationIds are generated in FastMCP's tool-name alphabet (`[A-Za-z0-9_]`, unique, ≤64 chars) so *tool name == operationId*. `spec2openapi validate` proves it: static checks, `openapi-spec-validator`, and a real `FastMCP.from_openapi()` round-trip listing the resulting tools.
+- **Structured verification (`verify`)** — a library API that runs 21 checks over a converted document (Swagger- and WSDL-converted alike): document shape, MCP tool-name rules (SEP-986), tool descriptions, the full `x-soap` contract, and — with the optional deps installed — `openapi-spec-validator` plus the FastMCP in-memory round-trip. Returns a deterministic, JSON-serializable report in which every check carries normative citations and "could not check" (`skip`) is always distinguishable from "checked and passed". `verify` never raises; `spec2openapi validate --format json` exposes the same report on the CLI.
 - **MCP tool-payload minification (optional)** — `minify_for_mcp()` shrinks and enriches what FastMCP actually sends the model: foreign vendor extensions are stripped from schema subtrees, and error responses / payload examples — which the MCP tool shape otherwise drops — can be folded into tool descriptions deterministically. Serving behavior is unchanged. See [Minifying the LLM-facing surface](#minifying-the-llm-facing-surface-optional).
 - **SOAP bridge — required to *serve* SOAP specs** — `pip install "spec2openapi[mcp]"` adds the bridge (custom httpx transport) that implements the `x-soap` contract, plus FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors. **Swagger-converted (pure REST) specs do not need this** — any OpenAPI runtime serves them. Only SOAP-converted specs require the bridge at runtime.
 
@@ -71,6 +72,7 @@ spec2openapi upgrade swagger2.json -o service.openapi.yaml
 
 # Prove the spec converts cleanly into MCP tools
 spec2openapi validate orders.openapi.yaml
+spec2openapi validate orders.openapi.yaml --format json   # machine-readable report
 
 # Reference MCP runtime (requires the [mcp] extra)
 spec2openapi serve orders.openapi.yaml --transport http --port 8000
@@ -109,6 +111,13 @@ report.get("lossy", [])             # e.g. "collectionFormat 'tsv' preserved as 
 
 # the FastMCP-readiness contract as a function (empty list == ready)
 problems = spec2openapi.check_fastmcp_ready(spec)
+
+# structured verification: the same contract plus the x-soap checks,
+# openapi-spec-validator, and a FastMCP in-memory round-trip
+result = spec2openapi.verify(spec)   # Swagger- and WSDL-converted alike
+result.ok          # no failed checks
+result.complete    # nothing skipped (deep deps installed, so they ran)
+result.to_dict()   # JSON-serializable report with per-check citations
 
 # WSDL -> OpenAPI dict (zeep loads on first SOAP use, not at import)
 spec = spec2openapi.convert_wsdl(
@@ -205,7 +214,7 @@ WSDL-converted specs tag every operation with its service name, so service-per-a
 ## Kubernetes: one image, many MCP servers
 
 ```bash
-docker build -t spec2openapi:0.2.2 .
+docker build -t spec2openapi:0.6.0 .
 spec2openapi convert <wsdl> -o openapi.yaml
 kubectl create configmap my-mcp-spec --from-file=openapi.yaml
 kubectl apply -f k8s/example.yaml    # Deployment mounts /config/openapi.yaml
@@ -249,6 +258,7 @@ src/spec2openapi/
   openapi.py   OpenAPI 3.0/3.1 assembly + x-soap extensions
   swagger.py   Swagger 2.0 -> OpenAPI 3.x upgrader (x-s2o report)
   convert.py   core public API
+  checks.py    structured verification (verify / VerifyReport)
   cli.py       convert / upgrade / inspect / validate / serve
   bridge.py    [mcp] SOAP bridge (httpx transport)
   server.py    [mcp] FastMCP glue

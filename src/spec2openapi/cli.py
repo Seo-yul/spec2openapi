@@ -162,72 +162,56 @@ def cmd_upgrade(args) -> int:
 
 
 def cmd_validate(args) -> int:
-    """Static checks + optional FastMCP round-trip on a spec (or WSDL)."""
-    from .openapi import _FASTMCP_NORM_RE, _operations, check_fastmcp_ready
+    """verify() as a CLI: static checks + optional deep validation."""
+    from .checks import _component_schemas, verify
+    from .openapi import _operations
 
     spec = _load_or_convert(args.source)
-    problems = check_fastmcp_ready(spec)
+    report = verify(spec)
+
+    if args.format == "json":
+        import json
+
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+        return 0 if report.ok else 1
+
+    by_id = {}
+    for r in report.results:
+        by_id.setdefault(r.id, []).append(r)
+
     op_ids = [op.get("operationId")
               for _, _, op in _operations(spec) if op.get("operationId")]
-
+    # components (or components.schemas) may be null (`components:` with
+    # no value) rather than absent; _component_schemas tolerates both
+    schemas = _component_schemas(spec) if isinstance(spec, dict) else {}
     print(f"operations        : {len(op_ids)}")
-    print(f"component schemas : {len(spec.get('components', {}).get('schemas', {}))}")
+    print(f"component schemas : {len(schemas)}")
 
-    try:  # optional deep validation
-        from openapi_spec_validator import validate as osv_validate
-
-        osv_validate(spec)
+    osv = by_id.get("openapi.schema-valid", [None])[0]
+    if osv is not None and osv.status == "pass":
         print("openapi-spec-validator: OK")
-    except ImportError:
+    elif osv is not None and osv.status == "skip":
         print("openapi-spec-validator: not installed (skipped)")
-    except Exception as exc:
-        problems.append(f"openapi-spec-validator: {exc}")
 
-    try:  # FastMCP round-trip: the compatibility this project guarantees
-        import anyio
-        import httpx
-        from fastmcp import Client, FastMCP
-
-        # supply a dummy client so specs without a `servers` entry still
-        # convert — validate measures tool convertibility, not deployment
-        dummy = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
-        mcp = FastMCP.from_openapi(
-            openapi_spec=spec, name="validate", client=dummy
-        )
-
-        async def _tools():
-            async with Client(mcp) as client:
-                return await client.list_tools()
-
-        tools = anyio.run(_tools)
+    rt = by_id.get("fastmcp.roundtrip", [None])[0]
+    if rt is not None and rt.status == "pass":
+        tools = (rt.data or {}).get("tools", [])
         print(f"FastMCP round-trip: OK ({len(tools)} tools)")
-        for tool in sorted(tools, key=lambda t: t.name):
-            schema = getattr(tool, "inputSchema", None) or {}
-            params = ", ".join((schema.get("properties") or {}).keys())
-            print(f"  - {tool.name}({params})")
-        tool_names = {t.name for t in tools}
+        for tool in tools:
+            print(f"  - {tool['name']}({', '.join(tool['params'])})")
+    elif rt is not None and rt.status == "skip":
+        print(f"FastMCP round-trip: fastmcp not installed (skipped) "
+              f"- {_MCP_HINT}")
 
-        def _norm(s: str) -> str:  # FastMCP tool-name normalization
-            return _FASTMCP_NORM_RE.sub("_", s)
+    for r in report.results:
+        if r.status == "warn":
+            print(f"note: {r.message}")
 
-        renamed = {o for o in op_ids
-                   if o not in tool_names and _norm(o) in tool_names}
-        for o in sorted(renamed):
-            print(f"note: operationId '{o}' is exposed as tool "
-                  f"'{_norm(o)}' (FastMCP normalization)")
-        missing = {o for o in op_ids
-                   if o not in tool_names and _norm(o) not in tool_names}
-        if missing:
-            problems.append(f"operations not materialized as tools: {sorted(missing)}")
-    except ImportError:
-        print(f"FastMCP round-trip: fastmcp not installed (skipped) - {_MCP_HINT}")
-    except Exception as exc:
-        problems.append(f"FastMCP round-trip failed: {exc}")
-
-    if problems:
+    fails = [r for r in report.results if r.status == "fail"]
+    if fails:
         print("\nFAIL")
-        for p in problems:
-            print(f"  ! {p}")
+        for r in fails:
+            print(f"  ! {r.message}")
         return 1
     print("\nOK: spec is FastMCP-convertible")
     return 0
@@ -309,6 +293,9 @@ def main(argv: list[str] | None = None) -> int:
     v = sub.add_parser("validate",
                        help="check a spec (or WSDL) for FastMCP convertibility")
     v.add_argument("source", help="OpenAPI spec (.yaml/.json) or WSDL path/URL")
+    v.add_argument("--format", choices=["text", "json"], default="text",
+                   help="output format: human text or the verify() report "
+                        "as JSON")
     v.set_defaults(fn=cmd_validate)
 
     s = sub.add_parser("serve",
