@@ -123,15 +123,9 @@ def _keep_fn(keep_extensions: Iterable[str]) -> Callable[[str], bool]:
 
 def _resolve(spec: dict[str, Any], ref: Any) -> Any:
     """Resolve an internal '#/...' JSON pointer; None if unresolvable."""
-    if not (isinstance(ref, str) and ref.startswith("#/")):
-        return None
-    node: Any = spec
-    for part in ref[2:].split("/"):
-        part = part.replace("~1", "/").replace("~0", "~")
-        if not isinstance(node, dict) or part not in node:
-            return None
-        node = node[part]
-    return node
+    from .openapi import resolve_pointer
+
+    return resolve_pointer(spec, ref)
 
 
 def _truncate(text: str, cap: int) -> str:

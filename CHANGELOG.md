@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verification check understand both shapes.
 
 ### Fixed
+- Each converted spec gets its own SOAP fault schema (#142). Every 3.0
+  document from `convert_wsdl` previously aliased one process-global
+  dict, so editing `components.schemas.SoapFault` on one spec silently
+  changed every later conversion in the same process.
+- `spec_has_soap` and the runtime's REST detection now agree with the
+  canonical operation walk (#142): the REST check skipped the `trace`
+  method entirely, and `spec_has_soap` had no method filter, so a value
+  under a path item that was not an operation could read as SOAP.
 - Conversion no longer silently drops a `$ref` that has sibling keys
   including `allOf` (#141) — the sibling spread overwrote the wrapper, so
   the referenced schema vanished with no `x-s2o.lossy` record.

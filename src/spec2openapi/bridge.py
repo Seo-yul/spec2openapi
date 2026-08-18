@@ -22,6 +22,7 @@ import httpx
 from lxml import etree
 
 from .checks import _component_schemas
+from .openapi import schema_ref_name
 
 logger = logging.getLogger("spec2openapi")
 
@@ -137,6 +138,30 @@ class BridgeOptions:
         )
 
 
+def _basic_auth(options: BridgeOptions) -> tuple[str, str] | None:
+    """The (username, password) tuple for httpx's `auth=` kwarg, or None
+    when basic auth isn't configured."""
+    if options.auth == "basic" and options.username is not None:
+        return (options.username, options.password or "")
+    return None
+
+
+def _client_kwargs(options: BridgeOptions) -> dict[str, Any]:
+    """httpx.AsyncClient kwargs derived from BridgeOptions: auth, timeout,
+    TLS verify, extra headers, proxy-env trust. Shared by the SOAP
+    bridge's own outbound client below and the plain-REST client
+    server.py builds for non-SOAP specs (a caller adds base_url itself —
+    only the REST client needs one; the bridge posts to a per-call
+    endpoint instead)."""
+    return {
+        "auth": _basic_auth(options),
+        "timeout": options.timeout,
+        "verify": options.verify,
+        "headers": options.headers or {},
+        "trust_env": options.trust_env,
+    }
+
+
 # --------------------------------------------------------------------------
 # spec indexing helpers
 # --------------------------------------------------------------------------
@@ -178,7 +203,14 @@ class _SpecIndex:
         xml = schema.get("xml")
         while seen < 32:
             if "$ref" in schema:
-                name = schema["$ref"].rsplit("/", 1)[-1]
+                ref = schema["$ref"]
+                # every real ref here is '#/components/schemas/NAME'
+                # (schema.py never emits anything deeper); fall back to
+                # the old last-segment extraction for anything else so
+                # behavior is unchanged for a non-schemas/malformed ref
+                name = schema_ref_name(ref)
+                if name is None:
+                    name = ref.rsplit("/", 1)[-1]
                 schema = self.components.get(name, {})
             elif "allOf" in schema and len(schema["allOf"]) == 1:
                 inner = schema["allOf"][0]
@@ -675,16 +707,7 @@ class SoapBridgeTransport(httpx.AsyncBaseTransport):
     def __init__(self, spec: dict[str, Any], options: BridgeOptions | None = None):
         self.index = _SpecIndex(spec)
         self.options = options or BridgeOptions.from_env()
-        auth = None
-        if self.options.auth == "basic" and self.options.username is not None:
-            auth = (self.options.username, self.options.password or "")
-        self._client = httpx.AsyncClient(
-            auth=auth,
-            timeout=self.options.timeout,
-            verify=self.options.verify,
-            headers=self.options.headers or {},
-            trust_env=self.options.trust_env,
-        )
+        self._client = httpx.AsyncClient(**_client_kwargs(self.options))
 
     async def aclose(self) -> None:
         await self._client.aclose()

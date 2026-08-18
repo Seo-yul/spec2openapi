@@ -15,6 +15,7 @@ be preserved (do not alphabetize the document).
 """
 from __future__ import annotations
 
+import copy
 import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -65,6 +66,12 @@ _HTTP_METHODS = frozenset(
 _SAFE_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 # FastMCP's tool-name normalization (per character, no run collapsing)
 _FASTMCP_NORM_RE = re.compile(r"[^A-Za-z0-9_]")
+# schema keywords whose *values* are data, not sub-schemas — a $ref (or
+# nullable/enum/...) inside them is a data value, never something to walk
+# or rewrite as schema. Shared by to_openapi_31 below, swagger.py's
+# upgrader, and checks.py's $ref scanner (which adds "const", a 3.1-only
+# data keyword the Swagger-2.0-only upgrader has no reason to know about).
+_DATA_KEYWORDS = ("example", "examples", "default", "enum")
 
 
 def _operations(spec: dict[str, Any]):
@@ -79,6 +86,57 @@ def _operations(spec: dict[str, Any]):
             # only HTTP methods are operations; skip parameters/$ref/x- keys
             if str(method).lower() in _HTTP_METHODS and isinstance(op, dict):
                 yield path, method, op
+
+
+# --------------------------------------------------------------------------
+# '#/...' ref / JSON-Pointer resolution
+#
+# Shared home for what used to be four diverging implementations (#142):
+# bridge.py's schema-$ref dereference, minify.py's generic pointer walk,
+# swagger.py's source-document pointer walk, and checks.py's schemas-only
+# existence check. Each caller's job differs enough (bridge also unwraps
+# single-member allOf and carries xml annotations; swagger also percent-
+# decodes and indexes into lists, because it walks a hand-authored source
+# document; checks only needs the first path segment, not a full walk) that
+# full unification would change behavior, so callers delegate the part
+# that is genuinely identical and keep their own extra logic layered on
+# top — see each module for the specifics.
+# --------------------------------------------------------------------------
+
+_SCHEMA_REF_PREFIX = "#/components/schemas/"
+
+
+def schema_ref_name(ref: Any) -> str | None:
+    """The component name addressed by a '#/components/schemas/NAME...'
+    ref — only the segment right after the prefix, so a deeper pointer
+    (e.g. '.../NAME/properties/x') still yields NAME. None if `ref` isn't
+    a string, or doesn't address components.schemas at all."""
+    if not (isinstance(ref, str) and ref.startswith(_SCHEMA_REF_PREFIX)):
+        return None
+    return ref[len(_SCHEMA_REF_PREFIX):].split("/", 1)[0]
+
+
+def _unescape_pointer_token(token: str) -> str:
+    """Undo RFC 6901 JSON Pointer escaping ('~1' -> '/', '~0' -> '~')."""
+    return token.replace("~1", "/").replace("~0", "~")
+
+
+def resolve_pointer(root: Any, ref: Any) -> Any:
+    """Resolve an internal '#/...' JSON Pointer against `root`.
+
+    Dict traversal only (no list indexing) with RFC 6901 ~0/~1 token
+    unescaping and no percent-decoding — root is always a generated-or-
+    loaded OpenAPI document here, never a URI fragment. None if
+    unresolvable (or if the pointer legitimately addresses a null)."""
+    if not (isinstance(ref, str) and ref.startswith("#/")):
+        return None
+    node: Any = root
+    for part in ref[2:].split("/"):
+        part = _unescape_pointer_token(part)
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
 
 
 def check_fastmcp_ready(spec: dict[str, Any]) -> list[str]:
@@ -170,9 +228,12 @@ def build_spec(
     used_ids: set[str] = set()
 
     # reserve the built-in fault schema name up front so a WSDL type also
-    # named "SoapFault" is deduped to another name instead of clobbering it
+    # named "SoapFault" is deduped to another name instead of clobbering it.
+    # deep-copied: conv.components[...] used to alias the module-level
+    # SOAP_FAULT_SCHEMA dict by reference, so every conversion (and the
+    # template itself) shared and could corrupt one mutable object (#142)
     fault_ref_name = "SoapFault"
-    conv.components[fault_ref_name] = SOAP_FAULT_SCHEMA
+    conv.components[fault_ref_name] = copy.deepcopy(SOAP_FAULT_SCHEMA)
     fault_ref = f"#/components/schemas/{fault_ref_name}"
 
     for op in parsed.operations:
@@ -321,7 +382,7 @@ def to_openapi_31(spec: dict[str, Any]) -> dict[str, Any]:
     """Convert the generated 3.0 document to OpenAPI 3.1 JSON Schema style."""
 
     # keywords whose values are data, not sub-schemas — don't descend
-    data_kw = ("example", "examples", "default", "enum")
+    data_kw = _DATA_KEYWORDS
     # keys whose value is a name -> schema map: the map's own keys are
     # opaque property names, not schema keywords — a property literally
     # named "nullable"/"enum"/"exclusiveMinimum" must not trigger the

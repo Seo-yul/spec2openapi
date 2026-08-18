@@ -21,16 +21,16 @@ BRIDGE_BASE_URL = "http://spec2openapi.bridge.local"
 
 
 def _spec_has_rest(spec: dict[str, Any]) -> bool:
-    """True if any operation lacks x-soap (i.e. is a plain REST call)."""
-    methods = ("get", "put", "post", "delete", "options", "head", "patch")
-    for item in (spec.get("paths") or {}).values():
-        if not isinstance(item, dict):
-            continue
-        for method, op in item.items():
-            if method.lower() in methods and isinstance(op, dict):
-                if "x-soap" not in op:
-                    return True
-    return False
+    """True if any operation lacks x-soap (i.e. is a plain REST call).
+
+    Built on openapi._operations, the single source of truth for "what is
+    an operation" (#142): this used to filter to a hand-rolled method
+    list that omitted 'trace', so a spec whose only operation was a
+    non-SOAP 'trace' call was invisible here (a false "no REST operation"
+    verdict, silently skipping the mixed-SOAP-and-REST warning below)."""
+    from .openapi import _operations
+
+    return any("x-soap" not in op for _, _, op in _operations(spec))
 
 _MCP_HINT = (
     "the MCP runtime requires optional dependencies; "
@@ -57,7 +57,7 @@ def from_openapi_spec(
     except ImportError as exc:  # pragma: no cover
         raise ImportError(_MCP_HINT) from exc
 
-    from .bridge import BridgeOptions, SoapBridgeTransport
+    from .bridge import BridgeOptions, SoapBridgeTransport, _client_kwargs
 
     if spec_has_soap(spec):
         if _spec_has_rest(spec):
@@ -72,15 +72,7 @@ def from_openapi_spec(
     else:
         options = options or BridgeOptions.from_env()
         base = options.endpoint or (spec.get("servers") or [{}])[0].get("url", "")
-        auth = None
-        if options.auth == "basic" and options.username is not None:
-            auth = (options.username, options.password or "")
-        client = httpx.AsyncClient(
-            base_url=base, auth=auth,
-            timeout=options.timeout, verify=options.verify,
-            headers=options.headers or {},
-            trust_env=options.trust_env,
-        )
+        client = httpx.AsyncClient(base_url=base, **_client_kwargs(options))
 
     return FastMCP.from_openapi(
         openapi_spec=spec,
