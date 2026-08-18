@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `verify` — structured, library-level verification of a converted spec.
+  Runs a registry of checks (document shape, MCP tool-name rules, the
+  project's `x-soap` contract, and — when the optional dependencies are
+  installed — openapi-spec-validator and a FastMCP in-memory round-trip)
+  and returns a `VerifyReport`: deterministic, JSON-serializable
+  (`to_dict()`), with per-check id, status (`pass`/`warn`/`fail`/`skip`),
+  location, and normative citations (`refs`, e.g. SEP-986 for tool-name
+  rules). Every check id appears in the report at least once, so "checked
+  and passed" is always distinguishable from "could not check";
+  `report.ok` ignores skips while `report.complete` exposes them.
+  `verify` never raises. `check_fastmcp_ready` is unchanged (frozen check
+  set and messages) and now delegates to the same engine.
+- `spec2openapi validate --format json` prints the `verify()` report as
+  JSON for CI pipelines.
+
+### Changed
+- `spec2openapi validate` now also fails (exit 1) on x-soap contract
+  violations and non-3.x documents that previously passed; warn-level
+  notes (missing descriptions, missing endpoint) print as `note:` lines.
+  Use `--format json` to gate on specific check ids.
+
 ## [0.5.0] - 2026-08-08
 
 ### Added
