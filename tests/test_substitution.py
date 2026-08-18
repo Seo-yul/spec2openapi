@@ -95,7 +95,7 @@ def test_response_wraps_wire_element_back(spec):
         "</urgentNotice>"
         "</PayResponse></soapenv:Body></soapenv:Envelope>"
     ).encode()
-    status, data = parse_response(soap, op, index, BridgeOptions())
+    status, data = parse_response(soap, op, index)
     assert status == 200
     assert data["ok"] is True
     assert data["notice"] == {

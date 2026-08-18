@@ -158,6 +158,8 @@ The generated paths (`/operations/...`) are *not* real REST endpoints — a SOAP
 | `headers[]` | `soap:header` parts with schema refs |
 | `faults[]` | declared faults with schema refs |
 
+Declared `soap:header` values (`headers[]`) never come from tool arguments — the runtime supplies them via `BridgeOptions.soap_headers` / `SPEC2OPENAPI_SOAP_HEADERS` (a JSON object keyed by part or element name). An operation that declares a header with no configured value is sent without it and logs a warning (once per operation/header).
+
 Serialization rules (schema `xml` annotations): `xml.name`/`xml.namespace` (absent namespace = unqualified), `xml.attribute: true`, `xml.x-text: true` (simpleContent text), arrays repeat the element, and **property order = XSD sequence order** (do not alphabetize the document). `x-soap-choice` lists mutually exclusive property groups. `x-soap-substitution` marks a substitution-group value: the JSON is a self-describing single-key object (`{"creditCard": {…}}`) and the wire carries that member element itself — the head element never appears.
 
 The `[mcp]` extra contains a verified implementation of this contract (`src/spec2openapi/bridge.py`) — use it directly (via `spec2openapi serve`) or as the reference for your own runtime. **There is no way to serve a SOAP-converted spec without an implementation of this contract**; a standard OpenAPI runtime cannot do it.
@@ -220,7 +222,7 @@ kubectl create configmap my-mcp-spec --from-file=openapi.yaml
 kubectl apply -f k8s/example.yaml    # Deployment mounts /config/openapi.yaml
 ```
 
-Only the ConfigMap changes per service; credentials live in a Secret (`SPEC2OPENAPI_ENDPOINT`, `SPEC2OPENAPI_AUTH` = `basic`|`wsse`, `SPEC2OPENAPI_USERNAME`/`PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`). The MCP endpoint is `http://<service>:8000/mcp` (streamable HTTP).
+Only the ConfigMap changes per service; credentials live in a Secret (`SPEC2OPENAPI_ENDPOINT`, `SPEC2OPENAPI_AUTH` = `basic`|`wsse`, `SPEC2OPENAPI_USERNAME`/`PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`, `SPEC2OPENAPI_SOAP_HEADERS`). The MCP endpoint is `http://<service>:8000/mcp` (streamable HTTP).
 
 ## Limitations
 
