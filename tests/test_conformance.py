@@ -593,6 +593,130 @@ def test_ref_siblings_wrapped_in_allof(version):
     assert any("allOf" in a for a in out["x-s2o"]["assumptions"])
 
 
+# -- $ref + sibling allOf must merge, not clobber (#141 A1) --------------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_ref_with_sibling_allof_merged_not_overwritten(version):
+    # a $ref alongside a sibling *allOf* (not just plain keys like
+    # 'description') must not have the $ref silently dropped by the
+    # dict-spread `{"allOf": [ref], **out}` when `out` already has its
+    # own 'allOf' key.
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {
+               "A": {"type": "object"},
+               "B": {"type": "object", "properties": {
+                   "x": {"$ref": "#/definitions/A",
+                         "allOf": [{"description": "extra"}]}}}}}
+    out = _valid(src, version)
+    allof = out["components"]["schemas"]["B"]["properties"]["x"]["allOf"]
+    refs = [m["$ref"] for m in allof if isinstance(m, dict) and "$ref" in m]
+    assert refs == ["#/components/schemas/A"]
+    assert {"description": "extra"} in allof
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deep_ref_with_sibling_allof_merged(version):
+    # same bug, deep-$ref hoisting path (swagger.py's other copy of the
+    # allOf-wrap logic).
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a",
+               "responses": {"200": {"description": "ok", "schema": {
+                   "type": "object", "properties": {
+                       "word": {"type": "string"}}}}}}}},
+           "definitions": {"Uses": {"type": "object", "properties": {
+               "w": {"$ref": "#/paths/~1a/get/responses/200/schema"
+                             "/properties/word",
+                     "allOf": [{"description": "extra"}]}}}}}
+    out = _valid(src, version)
+    allof = out["components"]["schemas"]["Uses"]["properties"]["w"]["allOf"]
+    assert any(isinstance(m, dict) and "$ref" in m for m in allof)
+    assert {"description": "extra"} in allof
+
+
+# -- multi-type collapse must not skip file/items fixups (#141 A2) -------------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_multitype_array_collapse_still_gets_items(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {"T": {"type": ["array", "null"]}}}
+    out = _valid(src, version)
+    t = out["components"]["schemas"]["T"]
+    assert t.get("items") == {}
+    if version == "3.0":
+        assert t["type"] == "array" and t["nullable"] is True
+    else:
+        assert set(t["type"]) == {"array", "null"}
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_multitype_file_collapse_still_gets_binary_fixup(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {"T": {"type": ["file"]}}}
+    out = _valid(src, version)
+    t = out["components"]["schemas"]["T"]
+    assert t["type"] == "string"
+    assert t["format"] == "binary"
+
+
+# -- 'default' response key must not be treated as opaque data (#141 A3) -------
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_default_response_key_not_treated_as_opaque_data(version):
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {"/a": {"get": {
+               "operationId": "a",
+               "responses": {
+                   "200": {"description": "ok", "schema": {
+                       "type": "object", "properties": None}},
+                   "default": {"description": "err", "schema": {
+                       "type": "object", "properties": None}},
+               }}}}}
+    out = _valid(src, version)
+    resps = out["paths"]["/a"]["get"]["responses"]
+    s200 = resps["200"]["content"]["application/json"]["schema"]
+    sdef = resps["default"]["content"]["application/json"]["schema"]
+    assert "properties" not in s200
+    assert "properties" not in sdef
+    assert sdef == s200
+
+
+# -- deep documents must not RecursionError (#141 A4) ---------------------------
+
+def _deep_swagger_definition(depth):
+    node = {"type": "string"}
+    for _ in range(depth):
+        node = {"type": "object", "properties": {"a": node}}
+    return node
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_deeply_nested_definition_does_not_crash(version):
+    # _strip_nulls/_fix_schema/to_openapi_31.walk used to recurse via raw
+    # Python call-stack frames; a ~1000-deep schema raised a bare
+    # RecursionError instead of the documented ConversionError contract.
+    from spec2openapi import ConversionError
+
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {"Deep": _deep_swagger_definition(1000)}}
+    try:
+        out = convert_swagger(src, openapi_version=version)
+    except ConversionError:
+        return  # a clean, documented refusal is an acceptable outcome
+    validate(out)  # or a full, valid conversion is also acceptable
+
+
+def test_moderately_nested_definition_converts_successfully():
+    # a realistic depth must never be falsely rejected by a depth cap
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"},
+           "paths": {}, "definitions": {"Deep": _deep_swagger_definition(50)}}
+    out = _valid(src)
+    node = out["components"]["schemas"]["Deep"]
+    for _ in range(50):
+        node = node["properties"]["a"]
+    assert node["type"] == "string"
+
+
 # -- component-key sanitization beyond schemas (#72) ---------------------------
 
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
