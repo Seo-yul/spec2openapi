@@ -189,6 +189,18 @@ SCHEMA_FIELDS = {
     "additionalProperties": False,
 }
 
+_PARAM_FIELD = {
+    "type": "object",
+    "properties": {
+        "description": {"type": "string"},
+        "grounding": {"type": "string",
+                      "enum": ["named", "documented", "inferred",
+                               "speculative"]},
+    },
+    "required": ["description", "grounding"],
+    "additionalProperties": False,
+}
+
 SCHEMA_OPERATION = {
     "type": "object",
     "properties": {
@@ -197,9 +209,19 @@ SCHEMA_OPERATION = {
         "grounding": {"type": "string",
                       "enum": ["named", "documented", "inferred",
                                "speculative"]},
+        "parameters": {"type": "object", "additionalProperties": _PARAM_FIELD},
     },
     "required": ["description", "grounding"],
     "additionalProperties": False,
+}
+
+#: --rename-tools 를 켰을 때만 쓰는 변형. 항상 operationId 를 허용하면
+#: 쓰지도 않을 값을 매번 생성시켜 낭비다. rename_tools 는 실행 중
+#: 바뀌지 않으므로 캐시 prefix 안정성에는 영향이 없다.
+SCHEMA_OPERATION_RENAME = {
+    **SCHEMA_OPERATION,
+    "properties": {**SCHEMA_OPERATION["properties"],
+                   "operationId": {"type": "string"}},
 }
 
 
@@ -214,7 +236,6 @@ def build_system(outline: dict, glossary: dict | None, language: str) -> str:
         "생성하고 스펙의 구조는 절대 바꾸지 않는다.",
         _GROUNDING_RULES,
         f"설명은 {language}로 쓴다.",
-        f"대상 서비스: {outline.get('service') or '(제목 없음)'}",
     ]
     if glossary:
         parts.append("서비스 개요: " + str(glossary.get("overview", "")))

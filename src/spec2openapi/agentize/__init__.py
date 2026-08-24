@@ -19,7 +19,7 @@ from typing import Any, Iterable
 from ..checks import _component_schemas, verify
 from ..errors import ConversionError
 from ..minify import minify_for_mcp
-from ..openapi import _operations
+from ..openapi import _operations, _unescape_pointer_token
 from .apply import (
     ApplyReport,
     already_generated,
@@ -31,6 +31,7 @@ from .prompts import (
     SCHEMA_FIELDS,
     SCHEMA_GLOSSARY,
     SCHEMA_OPERATION,
+    SCHEMA_OPERATION_RENAME,
     build_system,
     digest_operation,
     digest_schema,
@@ -66,7 +67,32 @@ def _schema_targets(targets: Iterable[Target]) -> dict[str, list[str]]:
         # #/components/schemas/<S>/properties/<P>/description
         if len(parts) < 7 or parts[1] != "components":
             continue
-        out.setdefault(parts[3], []).append(t.name)
+        out.setdefault(_unescape_pointer_token(parts[3]), []).append(t.name)
+    return out
+
+
+def _param_pointers(targets: Iterable[Target]) -> dict[str, dict[str, str]]:
+    """operation base -> {parameter 이름: 포인터}.
+
+    targets 가 이미 원본 리스트 인덱스를 담은 포인터를 갖고 있으므로
+    인덱스를 다시 계산하지 않는다 - digest_operation 은 $ref 파라미터를
+    건너뛰어 인덱스가 어긋난다. 한 operation 안에서 이름이 겹치면 어느
+    파라미터인지 모호하므로 그 이름은 아예 제외한다 - 엉뚱한 파라미터에
+    설명을 쓰는 것보다 비워두는 편이 낫다.
+    """
+    out: dict[str, dict[str, str]] = {}
+    seen: dict[str, set[str]] = {}
+    for t in targets:
+        if t.kind != "params":
+            continue
+        base = t.pointer.rsplit("/parameters/", 1)[0]
+        names = seen.setdefault(base, set())
+        slot = out.setdefault(base, {})
+        if t.name in names:
+            slot.pop(t.name, None)
+        else:
+            names.add(t.name)
+            slot[t.name] = t.pointer
     return out
 
 
@@ -144,15 +170,22 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
     # --- pass 2b: operation ---
     op_ptrs = {t.pointer.rsplit("/", 1)[0] for t in targets
                if t.kind == "desc"}
+    param_ptrs = _param_pointers(targets)
+    op_schema = SCHEMA_OPERATION_RENAME if rename_tools else SCHEMA_OPERATION
     for path, method, op in _operations(working):
         base = f"#/paths/{escape_token(path)}/{method}"
-        if base not in op_ptrs:
+        # desc target 이 없어도 이 operation의 parameter target 이 있으면
+        # 여전히 질의해야 한다 - 그렇지 않으면 params kind는 절대 채워지지
+        # 않는다.
+        if base not in op_ptrs and base not in param_ptrs:
             continue
+        digested = digest_operation(path, method, op, working)
+        wanted_params = sorted((param_ptrs.get(base) or {}))
+        if wanted_params:
+            digested["parameters_needed"] = wanted_params
         try:
-            reply = provider.complete(
-                system, user_operation(digest_operation(path, method, op,
-                                                        working)),
-                SCHEMA_OPERATION)
+            reply = provider.complete(system, user_operation(digested),
+                                      op_schema)
         except Exception as exc:
             failures.append(f"pass 2b operation {op.get('operationId')}: {exc}")
             continue
@@ -166,6 +199,13 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
         if rename_tools and reply.get("operationId"):
             suggestions.append(Suggestion(f"{base}/operationId",
                                           reply["operationId"], grounding))
+        # Ruling 25 와 같은 원칙: 요청한 이름만 받아들인다.
+        for pname, body in (reply.get("parameters") or {}).items():
+            ptr = (param_ptrs.get(base) or {}).get(pname)
+            if not ptr or not isinstance(body, dict):
+                continue
+            suggestions.append(Suggestion(
+                ptr, body.get("description"), str(body.get("grounding"))))
 
     out, report = apply_suggestions(
         working, suggestions, allow_speculative=allow_speculative,
