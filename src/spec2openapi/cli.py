@@ -347,6 +347,12 @@ def cmd_agentize(args) -> int:
     if rep.dropped_speculative:
         print("      (--allow-speculative 로 유지할 수 있다)", file=sys.stderr)
 
+    if result.self_check:
+        print(f"self-check: {len(result.self_check)}건이 여전히 모호하다",
+              file=sys.stderr)
+        for note in result.self_check:
+            print(f"  - {note}", file=sys.stderr)
+
     fmt = args.format or ("json" if (args.output or "").lower()
                           .endswith(".json") else "yaml")
     text = dump_spec(result.spec, fmt)

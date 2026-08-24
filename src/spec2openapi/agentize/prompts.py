@@ -262,3 +262,32 @@ def user_schema(name: str, digested: Any, fields: list[str]) -> str:
 def user_operation(digested: dict) -> str:
     return json.dumps({"kind": "operation", **digested},
                       ensure_ascii=False, sort_keys=True)
+
+
+SCHEMA_SELFCHECK = {
+    "type": "object",
+    "properties": {
+        "callable": {"type": "boolean"},
+        "problem": {"type": "string"},
+    },
+    "required": ["callable"],
+    "additionalProperties": False,
+}
+
+_SELFCHECK_SYSTEM = """\
+너는 MCP tool을 호출하려는 agent다. 아래는 네가 실제로 받게 될 tool
+정의 전부다 - 다른 문서는 없다.
+
+이 tool을 값을 짐작하지 않고 정확히 호출할 수 있으면 callable: true를,
+의미나 허용 값을 알 수 없는 인자가 있으면 callable: false 와 그 인자를
+problem에 적는다. 설명을 새로 만들지 않는다.
+"""
+
+
+def selfcheck_system() -> str:
+    return _SELFCHECK_SYSTEM
+
+
+def user_toolcheck(tool: dict) -> str:
+    return json.dumps({"kind": "toolcheck", **tool},
+                      ensure_ascii=False, sort_keys=True)

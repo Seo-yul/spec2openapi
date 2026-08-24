@@ -328,3 +328,63 @@ def test_rename_schema_does_not_alias_the_default_schema():
     a = SCHEMA_OPERATION["properties"]["grounding"]
     b = SCHEMA_OPERATION_RENAME["properties"]["grounding"]
     assert a == b and a is not b
+
+
+# --- pass 3 self-check ------------------------------------------------------
+
+def test_self_check_reports_ambiguous_tools_without_editing_spec():
+    from spec2openapi.agentize import run_self_check
+
+    spec = pipeline_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["name"][
+        "description"] = "반려동물의 표시용 이름"
+    before = copy.deepcopy(spec)
+
+    def respond(user):
+        return {"callable": False, "problem": "tag 의 허용 값이 불명확하다"}
+
+    notes = run_self_check(spec, FP(respond))
+    assert notes and "tag" in notes[0]
+    assert spec == before  # 스펙은 변경되지 않는다
+
+
+def test_self_check_is_silent_when_all_tools_are_callable():
+    from spec2openapi.agentize import run_self_check
+
+    notes = run_self_check(pipeline_spec(),
+                           FP(lambda user: {"callable": True}))
+    assert notes == []
+
+
+def test_self_check_runs_only_when_requested():
+    result = agentize_spec(pipeline_spec(), scripted_provider())
+    assert result.self_check is None
+
+
+def test_self_check_reports_that_it_could_not_run(monkeypatch):
+    """검사하지 못한 것을 빈 결과(=이상 없음)로 보고하면 안 된다."""
+    from spec2openapi.agentize import run_self_check
+
+    monkeypatch.setattr("spec2openapi.agentize._tool_payloads",
+                        lambda spec: None)
+    notes = run_self_check(pipeline_spec(), FP(lambda user: {"callable": True}))
+    assert notes and "수행하지 못했다" in notes[0]
+
+
+def test_self_check_runs_even_when_nothing_was_filled():
+    """채울 것이 없어도 --self-check 는 답을 준다 - 그때가 오히려
+    '이 tool 쓸 만한가'가 유일하게 남는 질문이다."""
+    spec = pipeline_spec()
+    for name in ("name", "tag"):
+        spec["components"]["schemas"]["Pet"]["properties"][name][
+            "description"] = f"사람이 직접 쓴 {name} 설명입니다"
+    spec["paths"]["/pets"]["post"]["summary"] = "반려동물을 새로 등록한다"
+
+    def respond(user):
+        if '"kind": "toolcheck"' in user:
+            return {"callable": False, "problem": "tag 의 허용 값이 불명확하다"}
+        return {"domain": "d", "overview": "o", "glossary": {}}
+
+    result = agentize_spec(spec, FP(respond), self_check=True)
+    assert result.report.applied == {}
+    assert result.self_check and "tag" in result.self_check[0]

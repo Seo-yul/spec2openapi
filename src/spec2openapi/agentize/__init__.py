@@ -32,13 +32,16 @@ from .prompts import (
     SCHEMA_GLOSSARY,
     SCHEMA_OPERATION,
     SCHEMA_OPERATION_RENAME,
+    SCHEMA_SELFCHECK,
     build_system,
     digest_operation,
     digest_schema,
+    selfcheck_system,
     spec_outline,
     user_glossary,
     user_operation,
     user_schema,
+    user_toolcheck,
 )
 from .providers import Suggestion
 from .targets import KINDS, Target, escape_token, find_targets
@@ -98,6 +101,58 @@ def _param_pointers(targets: Iterable[Target]) -> dict[str, dict[str, str]]:
     return {base: names for base, names in out.items() if names}
 
 
+def _tool_payloads(spec: dict) -> list[dict] | None:
+    """FastMCP 가 실제로 보낼 tool 목록.
+
+    payload 를 만들 수 없으면(=[mcp] extra 부재, 또는 round-trip 실패)
+    None 을 돌려준다. 빈 리스트와 구분해야 한다 - 빈 리스트는 "검사했고
+    문제가 없다"로 읽히지만 None 은 "검사하지 못했다"이다.
+    """
+    try:
+        import asyncio
+
+        import httpx
+        from fastmcp import Client, FastMCP
+    except ImportError:
+        return None
+
+    async def _list():
+        mcp = FastMCP.from_openapi(
+            spec, client=httpx.AsyncClient(
+                base_url="http://spec2openapi.invalid"))
+        async with Client(mcp) as client:
+            return [{"name": t.name, "description": t.description,
+                     "inputSchema": t.inputSchema}
+                    for t in await client.list_tools()]
+
+    try:
+        return asyncio.run(_list())
+    except Exception:
+        return None
+
+
+def run_self_check(spec: dict, provider: Any) -> list[str]:
+    """tool payload만 보여주고 호출 가능성을 묻는다. 스펙은 수정하지 않는다."""
+    tools = _tool_payloads(spec)
+    if tools is None:
+        return ["self-check 를 수행하지 못했다: FastMCP tool payload 를 "
+                "만들 수 없다 (MCP 런타임 extra 가 필요하다)"]
+
+    notes: list[str] = []
+    system = selfcheck_system()
+    for tool in tools:
+        try:
+            reply = provider.complete(system, user_toolcheck(tool),
+                                      SCHEMA_SELFCHECK)
+        except Exception as exc:
+            notes.append(f"{tool['name']}: self-check 실패 ({exc})")
+            continue
+        if not reply.get("callable"):
+            notes.append(f"{tool['name']}: "
+                         f"{reply.get('problem') or '모호함'}")
+    return notes
+
+
 def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
                   policy: str = "default", allow_speculative: bool = False,
                   rename_tools: bool = False, self_check: bool = False,
@@ -123,10 +178,20 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
         raise AgentizeError(
             f"--max-ops {max_ops} 초과: 이 스펙은 operation이 {op_count}개다")
 
-    if not targets:
-        return AgentizeResult(spec=working, report=ApplyReport(), targets=[])
-
     failures: list[str] = []
+
+    def _finish(spec_out: dict, rep: ApplyReport,
+               tgts: list[Target]) -> AgentizeResult:
+        # self-check 는 이 실행이 무엇을 썼는지와 무관하게 "이 tool 을
+        # 호출할 수 있는가"를 묻는다. 채울 것이 없었던 실행에서도
+        # 사용자가 답을 원할 수 있으므로 모든 경로에서 실행한다.
+        checks = run_self_check(spec_out, provider) if self_check else None
+        return AgentizeResult(spec=spec_out, report=rep, targets=tgts,
+                              failures=failures, self_check=checks)
+
+    if not targets:
+        return _finish(working, ApplyReport(), [])
+
     outline = spec_outline(working)
 
     # --- pass 1: 용어집 ---
@@ -223,8 +288,7 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
         # 따른다: 아무것도 바꾸지 않은 실행은 동일한 문서를 반환한다.
         # targets 가 애초에 없을 때의 조기 반환과 같은 원칙이며, 문서가
         # 그대로이므로 verify 판정도 입력과 같다.
-        return AgentizeResult(spec=working, report=report, targets=targets,
-                              failures=failures)
+        return _finish(working, report, targets)
 
     verdict = verify(out)
     if not verdict.ok:
@@ -235,5 +299,4 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
 
     record_provenance(out, report, provider=getattr(provider, "name", "?"),
                       model=getattr(provider, "model", "?"), targets=kinds)
-    return AgentizeResult(spec=out, report=report, targets=targets,
-                          failures=failures)
+    return _finish(out, report, targets)
