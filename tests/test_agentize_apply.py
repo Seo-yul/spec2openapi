@@ -302,3 +302,30 @@ def test_bracketed_text_is_not_mistaken_for_an_escape_sequence():
         "array[2] 형식의 [0-9;]* 패턴을 쓴다", "named")])
     assert out["components"]["schemas"]["Pet"]["properties"]["name"][
         "description"] == "array[2] 형식의 [0-9;]* 패턴을 쓴다"
+
+
+def test_example_field_is_cleaned_like_a_description():
+    """같은 문자열이 example= 필드로 오든 /example 포인터로 오든
+    동일하게 정리되어야 한다."""
+    spec = base_spec()
+    dirty = "\x1b[31m빨강\x1b[0m 텍스트\r"
+    by_field, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description",
+        "반려동물의 표시용 이름", "named", example=dirty)])
+    by_pointer, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/example", dirty, "named")])
+    got = by_field["components"]["schemas"]["Pet"]["properties"]["name"][
+        "example"]
+    assert got == "빨강 텍스트"
+    assert got == by_pointer["components"]["schemas"]["Pet"]["properties"][
+        "name"]["example"]
+
+
+def test_nested_example_structures_are_cleaned_recursively():
+    spec = base_spec()
+    out, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description",
+        "반려동물의 표시용 이름", "named",
+        example={"이름": "\x1b[2J바둑이", "목록": ["가\r나"]})])
+    assert out["components"]["schemas"]["Pet"]["properties"]["name"][
+        "example"] == {"이름": "바둑이", "목록": ["가나"]}

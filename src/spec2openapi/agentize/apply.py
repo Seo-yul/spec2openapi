@@ -133,6 +133,22 @@ def _clean(text: str) -> str:
     return _CONTROL_RE.sub("", _ANSI_RE.sub("", text))
 
 
+def _clean_value(value: Any) -> Any:
+    """example 값 안의 문자열을 재귀적으로 정리한다.
+
+    example 은 스칼라일 수도 객체·배열일 수도 있다. 어느 쪽이든 그 안의
+    문자열은 description 과 똑같이 스펙 문서와 tool payload 에 실리므로
+    같은 정리를 받아야 한다.
+    """
+    if isinstance(value, str):
+        return _clean(value)
+    if isinstance(value, dict):
+        return {k: _clean_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clean_value(v) for v in value]
+    return value
+
+
 def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                       allow_speculative: bool = False,
                       rename_tools: bool = False) -> tuple[dict, ApplyReport]:
@@ -197,8 +213,9 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
         # example 이 붙는 것을 막을 수 있다.
         if (sug.example is not None and key == "description"
                 and _SCHEMA_TARGET.match(ptr)):
-            if _example_ok(sug.example):
-                parent.setdefault("example", copy.deepcopy(sug.example))
+            cleaned = _clean_value(copy.deepcopy(sug.example))
+            if _example_ok(cleaned):
+                parent.setdefault("example", cleaned)
             else:
                 report.rejected.append(
                     f"{_safe(ptr)}: example 이 직렬화 불가이거나 "
