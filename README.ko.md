@@ -196,6 +196,47 @@ mcp = spec2openapi.from_openapi_spec(
 
 WSDL에서 변환된 스펙은 모든 operation에 서비스 이름이 태그로 붙어 있으므로, 서비스 단위 서브셋에는 별도 태깅이 필요 없다. 참조 CLI(`spec2openapi serve`)는 route map을 노출하지 않으므로, 서브셋이 필요하면 파이썬 진입점을 쓴다.
 
+## LLM으로 빈틈 채우기 (선택 기능)
+
+변환은 원본에 충실하지만, 원본에 없던 내용을 지어낼 수는 없다. APIs.guru의
+실제 Swagger 2.0 스펙 179개를 실측한 결과, operation summary와 parameter
+설명은 대체로 완비돼 있는 반면(중앙값 100%), **스키마 property 설명은
+중앙값 52%**에 그치고 20%의 스펙은 property 설명이 아예 없다. 그런데
+agent가 요청 본문을 조립할 때 실제로 읽는 것이 바로 이 부분이다.
+
+`spec2openapi agentize`가 LLM으로 그 빈틈을 채운다.
+
+```bash
+pip install 'spec2openapi[llm-anthropic]'
+export ANTHROPIC_API_KEY=...          # 또는: ant auth login
+
+# Swagger 2.0 / OpenAPI 3.x
+spec2openapi agentize petstore.json --dry-run          # 무엇이 바뀔지 미리 본다
+spec2openapi agentize petstore.json -o petstore.openapi.json
+
+# WSDL — 명령은 동일하다; 변환이 먼저 일어날 뿐이다
+spec2openapi agentize service.wsdl -o service.openapi.yaml
+```
+
+의도적으로 보수적으로 동작한다.
+
+- 모델은 **문자열만** 돌려준다. 어디에 쓸 수 있는지는 고정된
+  화이트리스트로 제한된다 — `type`, `required`, `$ref`, `x-soap`,
+  `xml`은 어떤 응답으로도 도달할 수 없다.
+- 모든 제안은 **grounding** 등급(`named` / `documented` / `inferred` /
+  `speculative`)을 달고 온다. 근거 없는 추측은 기본적으로 폐기한다 —
+  자신 있게 틀린 enum 설명은 agent를 잘못된 호출로 이끄는데, 이는
+  설명이 없는 것보다 나쁘다.
+- 결과는 여전히 `verify()`를 통과해야 한다. 통과하지 못하면 아무것도
+  쓰지 않는다.
+- 무엇이 생성됐는지는 `x-s2o.agentize`에 기록된다(JSON Pointer 형태이며
+  스키마 노드 안에는 절대 넣지 않는다 — 그러면 tool payload가
+  오염된다). 그래서 재실행은 멱등이고, 리뷰어는 기계가 만든 문장과
+  모델이 쓴 문장을 구분할 수 있다.
+
+`--dry-run`은 비용이 들지 않고 API 호출도 하지 않는다. 결과는 `git
+diff`로 확인한다 — 출력은 텍스트 스펙이다.
+
 ## x-soap 확장 명세 (런타임 구현 계약)
 
 오퍼레이션 레벨 `paths.*.post.x-soap`:

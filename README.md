@@ -213,6 +213,48 @@ mcp = spec2openapi.from_openapi_spec(
 
 WSDL-converted specs tag every operation with its service name, so service-per-agent subsets need no extra tagging. The reference CLI (`spec2openapi serve`) does not expose route maps — use the Python entry point when you need a subset.
 
+## Filling the gaps with an LLM (optional)
+
+Conversion is faithful, but it cannot invent what the source never had.
+Across 179 real-world Swagger 2.0 definitions from APIs.guru, operation
+summaries and parameter descriptions are typically complete (median
+100%), while **schema property descriptions sit at a median of 52%** —
+and 20% of specs have none at all. That is exactly what an agent reads
+when it assembles a request body.
+
+`spec2openapi agentize` fills those gaps with an LLM:
+
+```bash
+pip install 'spec2openapi[llm-anthropic]'
+export ANTHROPIC_API_KEY=...          # or: ant auth login
+
+# Swagger 2.0 / OpenAPI 3.x
+spec2openapi agentize petstore.json --dry-run          # what would change
+spec2openapi agentize petstore.json -o petstore.openapi.json
+
+# WSDL — the same command; conversion happens first
+spec2openapi agentize service.wsdl -o service.openapi.yaml
+```
+
+It is deliberately conservative:
+
+- The model returns **strings only**. Where they may be written is a
+  fixed whitelist — `type`, `required`, `$ref`, `x-soap` and `xml` are
+  unreachable by any response.
+- Every suggestion carries a **grounding** grade (`named` /
+  `documented` / `inferred` / `speculative`). Ungrounded guesses are
+  dropped by default: a confidently wrong enum description steers an
+  agent into invalid calls, which is worse than no description.
+- The result must still pass `verify()`. If it does not, nothing is
+  written.
+- What was generated is recorded under `x-s2o.agentize` (JSON Pointers,
+  never inside schema nodes — that would pollute the tool payload), so
+  re-runs are idempotent and a reviewer can tell machine-derived prose
+  from model-written prose.
+
+`--dry-run` costs nothing and makes no API call. Review the result with
+`git diff` — the output is a text spec.
+
 ## Kubernetes: one image, many MCP servers
 
 ```bash
