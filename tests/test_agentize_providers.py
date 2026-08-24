@@ -182,7 +182,7 @@ def test_openai_parses_structured_output():
 
     client = _OAIStub({"fields": {"n": {"description": "d",
                                         "grounding": "inferred"}}})
-    p = OpenAIProvider(client=client)
+    p = OpenAIProvider(model="gpt-5", client=client)
     got = p.complete("SYS", "USER", {"type": "object"})
     assert got["fields"]["n"]["grounding"] == "inferred"
     assert p.name == "openai"
@@ -192,7 +192,8 @@ def test_openai_keeps_external_data_out_of_system_role():
     from spec2openapi.agentize.openai_provider import OpenAIProvider
 
     client = _OAIStub({"fields": {}})
-    OpenAIProvider(client=client).complete("SYS-ONLY", "EXTERNAL", {})
+    OpenAIProvider(model="gpt-5", client=client).complete(
+        "SYS-ONLY", "EXTERNAL", {})
     msgs = client.seen[0]["messages"]
     system = [m for m in msgs if m["role"] == "system"]
     user = [m for m in msgs if m["role"] == "user"]
@@ -204,7 +205,8 @@ def test_openai_requests_strict_json_schema():
     from spec2openapi.agentize.openai_provider import OpenAIProvider
 
     client = _OAIStub({"fields": {}})
-    OpenAIProvider(client=client).complete("S", "U", {"type": "object"})
+    OpenAIProvider(model="gpt-5", client=client).complete(
+        "S", "U", {"type": "object"})
     fmt = client.seen[0]["response_format"]
     assert fmt["type"] == "json_schema"
     assert fmt["json_schema"]["strict"] is True
@@ -222,7 +224,7 @@ def test_openai_raises_provider_error_on_bad_json():
         "R", (), {"choices": [type("C", (), {"message": type(
             "M", (), {"content": "not json"})()})()]})()
     with pytest.raises(ProviderError):
-        OpenAIProvider(client=client).complete("S", "U", {})
+        OpenAIProvider(model="gpt-5", client=client).complete("S", "U", {})
 
 
 def test_openai_passes_the_schema_through_to_json_schema():
@@ -233,7 +235,8 @@ def test_openai_passes_the_schema_through_to_json_schema():
     client = _OAIStub({"fields": {}})
     schema = {"type": "object", "properties": {"x": {"type": "string"}},
               "required": ["x"], "additionalProperties": False}
-    OpenAIProvider(client=client).complete("SYS", "USER", schema)
+    OpenAIProvider(model="gpt-5", client=client).complete(
+        "SYS", "USER", schema)
     assert client.seen[0]["response_format"]["json_schema"]["schema"] == schema
 
 
@@ -250,4 +253,22 @@ def test_openai_local_programming_errors_propagate():
                     raise TypeError("create() got an unexpected keyword")
 
     with pytest.raises(TypeError):
-        OpenAIProvider(client=_Broken()).complete("S", "U", {})
+        OpenAIProvider(model="gpt-5", client=_Broken()).complete("S", "U", {})
+
+
+def test_openai_requires_an_explicit_model():
+    """확인되지 않은 기본 모델을 추정하지 않는다 (Ruling 62) - 잘못된
+    기본값은 --model 을 넘기지 않은 모든 사용자에게 첫 호출부터 404 를
+    내는 provider 를 만든다."""
+    from spec2openapi.agentize.openai_provider import OpenAIProvider
+
+    with pytest.raises(ValueError, match="--model"):
+        OpenAIProvider(client=_OAIStub({}))
+
+
+def test_openai_module_does_not_define_a_default_model():
+    """DEFAULT_MODEL 자체를 모듈에서 없앤다 - 남아 있으면 나중에 누군가
+    다시 기본값으로 쓰게 된다."""
+    from spec2openapi.agentize import openai_provider
+
+    assert not hasattr(openai_provider, "DEFAULT_MODEL")

@@ -118,6 +118,50 @@ def _example_ok(value: Any) -> bool:
     return len(rendered) <= MAX_EXAMPLE
 
 
+#: example 값의 declared type 검사를 건너뛰는 type. 없음/"string"이면
+#: example이 property의 선언된 type과 모순될 수 없다.
+_UNCHECKED_EXAMPLE_TYPES = (None, "string")
+
+_NUMERIC_EXAMPLE_TYPES = ("integer", "number")
+
+
+def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
+    """example 값을 부모 스키마의 선언된 type과 맞춰 검사한다 (Ruling 53).
+
+    property가 "type": "integer"인데 model이 "twelve" 같은 문자열을
+    example으로 주면, FastMCP는 그 example을 tool payload에 그대로
+    복사한다 - agent는 정수 필드에 문자열 example을 보고 잘못 조립한다.
+    verify()도 openapi-spec-validator도 example의 type을 검사하지
+    않으므로, 여기가 유일한 방어선이다.
+
+    반환: (허용 여부, 쓸 값).
+
+    - type이 없거나 "string"이면 그대로 통과시킨다 (모순 가능성이 없다).
+    - "boolean"이면 문자열 "true"/"false"(대소문자 무관)만 통과시키고
+      실제 bool로 파싱해 돌려준다.
+    - "integer"/"number"면 문자열이 그 type으로 파싱될 때만 통과시키고
+      파싱된 값을 돌려준다.
+    - 그 외 type(object/array 등)은 model이 판단할 영역이 아니므로
+      막지 않는다 - 이 함수는 스칼라 type 모순만 잡는다.
+    """
+    if not isinstance(declared_type, str) or declared_type in _UNCHECKED_EXAMPLE_TYPES:
+        return True, raw
+    if declared_type == "boolean":
+        if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+            return True, raw.strip().lower() == "true"
+        return False, None
+    if declared_type in _NUMERIC_EXAMPLE_TYPES:
+        if not isinstance(raw, str):
+            return False, None
+        try:
+            parsed = (int(raw.strip()) if declared_type == "integer"
+                      else float(raw.strip()))
+        except ValueError:
+            return False, None
+        return True, parsed
+    return True, raw
+
+
 def _safe(pointer: str) -> str:
     """거부 메시지용: 길이를 자르고 repr 로 제어문자를 이스케이프한다."""
     return repr(pointer[:_PTR_IN_MESSAGE])
@@ -198,12 +242,17 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                 report.renamed[ptr.rsplit("/", 1)[0]] = prior
             parent[key] = text
         elif key == "example":
-            if not _example_ok(text):
+            ok_type, typed = _typed_example(text, parent.get("type"))
+            if not ok_type:
+                report.rejected.append(
+                    f"{_safe(ptr)}: example 이 선언된 type과 맞지 않음")
+                continue
+            if not _example_ok(typed):
                 report.rejected.append(
                     f"{_safe(ptr)}: example 이 직렬화 불가이거나 "
                     f"{MAX_EXAMPLE}자를 넘음")
                 continue
-            parent[key] = text
+            parent[key] = typed
         else:
             parent[key] = _truncate(text)
         report.applied[ptr] = sug.grounding
@@ -214,8 +263,12 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
         if (sug.example is not None and key == "description"
                 and _SCHEMA_TARGET.match(ptr)):
             cleaned = _clean_value(copy.deepcopy(sug.example))
-            if _example_ok(cleaned):
-                parent.setdefault("example", cleaned)
+            ok_type, typed = _typed_example(cleaned, parent.get("type"))
+            if not ok_type:
+                report.rejected.append(
+                    f"{_safe(ptr)}: example 이 선언된 type과 맞지 않음")
+            elif _example_ok(typed):
+                parent.setdefault("example", typed)
             else:
                 report.rejected.append(
                     f"{_safe(ptr)}: example 이 직렬화 불가이거나 "
@@ -253,6 +306,12 @@ def record_provenance(spec: dict, report: ApplyReport, *, provider: str,
     스키마 노드 안에는 아무것도 쓰지 않는다: 스키마 레벨 확장은 tool
     payload에 그대로 복사되므로, 거기에 provenance를 넣으면 이 기능이
     줄이려는 노이즈를 오히려 늘리게 된다.
+
+    generated의 각 항목은 그것을 쓴 provider/model을 함께 담는다
+    (Ruling 64) - 서로 다른 provider/model로 재실행하면 최상위
+    provider/model은 마지막 실행 값으로 덮이지만, 개별 포인터는 자신을
+    쓴 provider/model을 그대로 유지해야 "어느 문장을 어느 모델이
+    썼는가"를 사후에 구분할 수 있다.
     """
     if not can_record(spec):
         return
@@ -260,7 +319,8 @@ def record_provenance(spec: dict, report: ApplyReport, *, provider: str,
     prior = root.get("agentize")
     prior = prior if isinstance(prior, dict) else {}
     generated = dict(prior.get("generated") or {})
-    generated.update({p: {"grounding": g} for p, g in report.applied.items()})
+    generated.update({p: {"grounding": g, "provider": provider, "model": model}
+                      for p, g in report.applied.items()})
     renamed = dict(prior.get("renamed") or {})
     renamed.update({p: {"from": old} for p, old in report.renamed.items()})
 
@@ -269,8 +329,10 @@ def record_provenance(spec: dict, report: ApplyReport, *, provider: str,
         "model": model,
         "targets": list(targets),
         "generated": generated,
-        "dropped_speculative": (int(prior.get("dropped_speculative") or 0)
-                                + report.dropped_speculative),
+        # 이전 실행의 누적이 아니라 이번 실행에서 실제로 폐기한 값이다
+        # (Ruling 60) - 누적이면 재실행할 때마다 실제 상태와 어긋난 수가
+        # 남는다.
+        "dropped_speculative": report.dropped_speculative,
     }
     if renamed:
         block["renamed"] = renamed

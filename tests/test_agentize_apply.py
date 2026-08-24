@@ -350,7 +350,7 @@ def test_provenance_lives_only_at_root():
     assert block["provider"] == "fake" and block["model"] == "fake-1"
     assert block["generated"] == {
         "#/components/schemas/Pet/properties/name/description":
-            {"grounding": "named"}}
+            {"grounding": "named", "provider": "fake", "model": "fake-1"}}
     # 스키마 노드에는 어떤 키도 추가되지 않는다
     node = out["components"]["schemas"]["Pet"]["properties"]["name"]
     assert set(node) == {"type", "description"}
@@ -397,3 +397,148 @@ def test_rename_is_recorded():
                       targets=("desc",))
     assert out["x-s2o"]["agentize"]["renamed"] == {
         "#/paths/~1pets/post": {"from": "createPet"}}
+
+
+def test_dropped_speculative_reflects_only_the_current_run():
+    """이전 실행의 누적이 아니라 이번 실행의 값이어야 한다 (Ruling 60) -
+    누적이면 재실행할 때마다 실제와 어긋난 수가 영구히 남는다."""
+    spec = base_spec()
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/tag/description",
+        "01=강아지, 02=고양이", "speculative")])
+    record_provenance(out, rep, provider="fake", model="fake-1",
+                      targets=("properties",))
+    assert out["x-s2o"]["agentize"]["dropped_speculative"] == 1
+
+    # 두 번째 실행에서 아무것도 폐기하지 않았다면 기록도 0 이어야 한다 -
+    # 첫 실행의 1 이 남아 있으면 안 된다.
+    out2, rep2 = apply_suggestions(out, [], allow_speculative=True)
+    record_provenance(out2, rep2, provider="fake", model="fake-1",
+                      targets=("properties",))
+    assert out2["x-s2o"]["agentize"]["dropped_speculative"] == 0
+
+
+def test_generated_entries_keep_their_own_provider_and_model():
+    """서로 다른 provider/model 로 두 번 실행하면 각 포인터는 자신을 쓴
+    provider/model 을 유지해야 한다 - 최상위 필드는 마지막 실행 값이지만
+    개별 포인터가 last-write-wins 로 덮이면 어느 문장을 어느 모델이
+    썼는지 사후에 구분할 수 없다 (Ruling 64)."""
+    spec = base_spec()
+    out1, rep1 = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description",
+        "표시용 이름", "named")])
+    record_provenance(out1, rep1, provider="anthropic", model="claude-opus-5",
+                      targets=("properties",))
+
+    out2, rep2 = apply_suggestions(out1, [Suggestion(
+        "#/components/schemas/Pet/properties/tag/description",
+        "분류용 태그", "named")])
+    record_provenance(out2, rep2, provider="openai", model="gpt-5",
+                      targets=("properties",))
+
+    block = out2["x-s2o"]["agentize"]
+    assert block["provider"] == "openai" and block["model"] == "gpt-5"
+    name_entry = block["generated"][
+        "#/components/schemas/Pet/properties/name/description"]
+    tag_entry = block["generated"][
+        "#/components/schemas/Pet/properties/tag/description"]
+    assert name_entry["provider"] == "anthropic"
+    assert name_entry["model"] == "claude-opus-5"
+    assert tag_entry["provider"] == "openai"
+    assert tag_entry["model"] == "gpt-5"
+
+
+# --- example type 모순 방어 (Ruling 53) --------------------------------------
+
+def test_string_example_on_integer_property_is_rejected():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["qty"] = {
+        "type": "integer"}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/qty/description",
+        "재고 수량", "named", example="twelve")])
+    node = out["components"]["schemas"]["Pet"]["properties"]["qty"]
+    assert "example" not in node
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_numeric_string_example_on_integer_property_is_parsed_and_written():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["qty"] = {
+        "type": "integer"}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/qty/description",
+        "재고 수량", "named", example="12")])
+    node = out["components"]["schemas"]["Pet"]["properties"]["qty"]
+    assert node["example"] == 12
+    assert isinstance(node["example"], int) and not isinstance(
+        node["example"], bool)
+    assert rep.rejected == []
+
+
+def test_string_example_on_boolean_property_is_rejected():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["active"] = {
+        "type": "boolean"}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/active/description",
+        "판매 가능 여부", "named", example="yes please")])
+    node = out["components"]["schemas"]["Pet"]["properties"]["active"]
+    assert "example" not in node
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_boolean_string_example_on_boolean_property_is_parsed():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["active"] = {
+        "type": "boolean"}
+    out, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/active/description",
+        "판매 가능 여부", "named", example="true")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["active"][
+        "example"] is True
+
+
+def test_string_example_on_string_property_is_unaffected():
+    spec = base_spec()
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description",
+        "표시용 이름", "named", example="바둑이")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["name"][
+        "example"] == "바둑이"
+    assert rep.rejected == []
+
+
+def test_example_on_property_without_a_declared_type_is_unaffected():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["misc"] = {}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/misc/description",
+        "기타 필드", "named", example="아무값")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["misc"][
+        "example"] == "아무값"
+    assert rep.rejected == []
+
+
+def test_example_terminal_pointer_also_rejects_a_type_mismatch():
+    """side channel(example=) 뿐 아니라 /example 로 끝나는 포인터
+    경로도 같은 검사를 받아야 한다 (Ruling 53)."""
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["active"] = {
+        "type": "boolean"}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/active/example",
+        "yes please", "named")])
+    assert "example" not in out["components"]["schemas"]["Pet"][
+        "properties"]["active"]
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_example_terminal_pointer_parses_a_matching_numeric_string():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["qty"] = {
+        "type": "integer"}
+    out, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/qty/example", "12", "named")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["qty"][
+        "example"] == 12

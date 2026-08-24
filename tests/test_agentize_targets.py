@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from spec2openapi.agentize.targets import (
+    KINDS,
     Target,
     find_targets,
     low_value_reason,
@@ -106,6 +107,25 @@ def test_policy_overwrite_targets_everything():
     assert find_targets(spec, kinds=("properties",), policy="default") == []
     got = find_targets(spec, kinds=("properties",), policy="overwrite")
     assert [t.reason for t in got] == ["overwrite"]
+
+
+def test_enums_has_no_producer_and_is_not_a_kind():
+    """"enums"는 KINDS에서 빠져 있어야 한다 - find_targets()가 만들어낸
+    적이 없는데도 CLI 기본값에 실려 있던 죽은 옵션이었다 (Ruling 54).
+    enum 의미는 property description(=properties kind)에 문장으로
+    들어간다."""
+    assert "enums" not in KINDS
+    assert KINDS == ("properties", "desc", "params", "examples")
+
+
+def test_examples_kind_produces_no_targets():
+    """"examples"는 find_targets()가 만들어내는 대상 종류가 아니라
+    permission이다 (Ruling 54) - properties의 부산물인 example 적용
+    여부를 결정할 뿐, 그 자체로는 아무 대상도 만들지 않는다."""
+    spec = _spec(components={"schemas": {
+        "Pet": {"type": "object", "properties": {
+            "name": {"type": "string"}}}}})
+    assert find_targets(spec, kinds=("examples",)) == []
 
 
 def test_kind_filter_excludes_unrequested_kinds():

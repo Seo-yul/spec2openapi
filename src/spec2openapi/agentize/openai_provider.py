@@ -13,17 +13,27 @@ from typing import Any
 
 from .providers import ProviderError
 
-DEFAULT_MODEL = "gpt-4.1"
 _SCHEMA_NAME = "descriptions"
 
 
 class OpenAIProvider:
-    """EnrichProvider 구현."""
+    """EnrichProvider 구현.
+
+    기본 모델을 추정하지 않는다 (Ruling 62) - 확인되지 않은 기본값은
+    --model 을 넘기지 않은 모든 사용자에게 첫 호출부터 404 를 내는
+    "죽어서 도착하는" provider 를 만든다. anthropic 은 문서로 검증된
+    기본값이 있어 예외지만, openai 는 그런 검증이 없었으므로 짐작
+    대신 명시적인 에러로 --model 을 요구한다.
+    """
 
     name = "openai"
 
     def __init__(self, model: str | None = None, client: Any = None):
-        self.model = model or DEFAULT_MODEL
+        if not model:
+            raise ValueError(
+                "openai provider 는 기본 모델을 추정하지 않는다; "
+                "--model 로 사용할 모델 ID를 직접 지정하라")
+        self.model = model
         if client is not None:
             self._client = client
             return

@@ -245,15 +245,20 @@ It is deliberately conservative:
   `documented` / `inferred` / `speculative`). Ungrounded guesses are
   dropped by default: a confidently wrong enum description steers an
   agent into invalid calls, which is worse than no description.
-- The result must still pass `verify()`. If it does not, nothing is
-  written.
+- Any run that **writes something new** must still pass `verify()`; if
+  it does not, nothing is written. A run that ends up changing nothing
+  (no targets, or every suggestion rejected) skips `verify()` and
+  returns the input unchanged — there is nothing new to check.
 - What was generated is recorded under `x-s2o.agentize` (JSON Pointers,
   never inside schema nodes — that would pollute the tool payload), so
   re-runs are idempotent and a reviewer can tell machine-derived prose
   from model-written prose.
 
 `--dry-run` costs nothing and makes no API call. Review the result with
-`git diff` — the output is a text spec.
+`git diff` — the output is a text spec. That diff also carries
+`minify_for_mcp`'s own deterministic clean-up (it drops foreign vendor
+`x-*` keys from schema subtrees) — `agentize` is the only CLI path that
+runs it, and it applies regardless of what the model wrote.
 
 ## Kubernetes: one image, many MCP servers
 

@@ -13,6 +13,7 @@ import 시점에 어떤 LLM SDK도 끌어오지 않는다 - provider 어댑터�
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -43,7 +44,7 @@ from .prompts import (
     user_schema,
     user_toolcheck,
 )
-from .providers import Suggestion
+from .providers import ProviderError, Suggestion
 from .targets import KINDS, Target, escape_token, find_targets
 
 
@@ -101,6 +102,40 @@ def _param_pointers(targets: Iterable[Target]) -> dict[str, dict[str, str]]:
     return {base: names for base, names in out.items() if names}
 
 
+def plan(spec: dict, *, kinds: Iterable[str] = KINDS,
+        policy: str = "default") -> tuple[dict, list[Target]]:
+    """LLM 호출 없이 실제 실행이 볼 것과 같은 대상 목록을 계산한다.
+
+    agentize_spec()이 실제로 쓰는 것과 같은 minify_for_mcp() 호출과
+    already_generated() 차감을 거친다 - --dry-run과 사전 안내가 실제
+    실행과 다른 숫자를 보여주면(Ruling 55) 사용자가 낸 판단이 틀린
+    전제 위에 서게 된다.
+    """
+    working = minify_for_mcp(spec, enrich=("errors", "examples"))
+    done = already_generated(working)
+    targets = [t for t in find_targets(working, kinds=kinds, policy=policy)
+              if t.pointer not in done]
+    return working, targets
+
+
+def call_estimate(targets: Iterable[Target]) -> tuple[int, int, int]:
+    """(대상 있는 스키마 수, desc/param 대상 있는 operation 수, 예상 호출 총수).
+
+    pass 2a는 스키마당 1회, pass 2b는 desc나 param 대상이 있는
+    operation당 1회 부른다 - 이 함수의 계산은 그 두 루프가 실제로 도는
+    횟수와 정확히 같아야 한다(Ruling 57). targets가 비어 있으면
+    pass 1(용어집)조차 부르지 않으므로 전부 0이다.
+    """
+    targets = list(targets)
+    if not targets:
+        return 0, 0, 0
+    schemas = len(_schema_targets(targets))
+    op_bases = {t.pointer.rsplit("/", 1)[0] for t in targets if t.kind == "desc"}
+    op_bases |= set(_param_pointers(targets))
+    ops = len(op_bases)
+    return schemas, ops, 1 + schemas + ops
+
+
 def _tool_payloads(spec: dict) -> tuple[list[dict] | None, str]:
     """FastMCP 가 실제로 보낼 tool 목록과, 만들지 못했을 때의 사유.
 
@@ -131,8 +166,15 @@ def _tool_payloads(spec: dict) -> tuple[list[dict] | None, str]:
         return None, ("실행 중인 이벤트 루프 안에서는 FastMCP round-trip 을 "
                       "할 수 없다; 동기 컨텍스트에서 호출하라")
 
-    client = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+    # client 생성 자체를 try 안에 둔다 (Ruling 63) - httpx.AsyncClient()는
+    # 잘못된 proxy 환경변수 등으로 생성 시점에 실패할 수 있고, 이 함수
+    # 바깥의 어떤 호출자도 일반 Exception을 잡지 않는다
+    # (cmd_agentize는 AgentizeError만, main()은 ValueError/OSError만) -
+    # 밖에 두면 완료된 유료 보강 전체를 트레이스백으로 날린다.
+    client = None
     try:
+        client = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+
         async def _list():
             try:
                 mcp = FastMCP.from_openapi(spec, client=client)
@@ -146,8 +188,10 @@ def _tool_payloads(spec: dict) -> tuple[list[dict] | None, str]:
         return asyncio.run(_list()), ""
     except Exception as exc:
         # _list() 가 시작되기 전에 실패했다면 finally 가 안 돌아 client 가
-        # 열린 채로 남는다. checks.py 와 같은 best-effort 정리다.
-        if not client.is_closed:
+        # 열린 채로 남는다. checks.py 와 같은 best-effort 정리다. client
+        # 생성 자체가 실패했으면 client는 여전히 None이라 정리할 것이
+        # 없다.
+        if client is not None and not client.is_closed:
             try:
                 asyncio.run(client.aclose())
             except Exception:
@@ -183,6 +227,10 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
                   language: str = "the language already used in the spec, "
                                   "or English if none") -> AgentizeResult:
     """스펙을 보강한 새 스펙과 보고서를 돌려준다. 입력은 변경하지 않는다."""
+    # kinds 를 즉시 튜플로 고정한다 (Ruling 69) - 아래에서 find_targets()
+    # 에 한 번, record_provenance() 에 또 한 번 넘긴다. generator 였다면
+    # 첫 소비에서 소진되어 provenance 에 targets: [] 가 기록된다.
+    kinds = tuple(kinds)
     if not isinstance(spec, dict):
         raise AgentizeError("agentize_spec expects an OpenAPI 3.x mapping, "
                             f"got {type(spec).__name__}")
@@ -191,10 +239,7 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
             "root x-s2o가 매핑이 아니어서 provenance를 기록할 수 없다; "
             "기록 없이 보강하면 재실행이 중복 생성을 일으키므로 중단한다")
 
-    working = minify_for_mcp(spec, enrich=("errors", "examples"))
-    done = already_generated(working)
-    targets = [t for t in find_targets(working, kinds=kinds, policy=policy)
-               if t.pointer not in done]
+    working, targets = plan(spec, kinds=kinds, policy=policy)
 
     op_count = len(list(_operations(working)))
     if max_ops is not None and op_count > max_ops:
@@ -218,20 +263,31 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
     outline = spec_outline(working)
 
     # --- pass 1: 용어집 ---
+    # 진행 상황을 stderr 로 찍는다 (Ruling 59) - --concurrency 없이
+    # 순차 실행이므로, 스키마·operation 이 많은 스펙에서는 이 세 줄이
+    # 유일한 생존 신호다.
     glossary: dict | None = None
     try:
         glossary = provider.complete(
-            build_system(outline, None, language),
+            build_system(None, language),
             user_glossary(outline), SCHEMA_GLOSSARY)
-    except Exception as exc:  # 용어집 실패는 치명적이지 않다
+    except ProviderError as exc:  # 용어집 실패는 치명적이지 않다
         failures.append(f"pass 1 용어집: {exc}")
+        print(f"pass 1  용어집 생성 ... 실패 ({exc})", file=sys.stderr)
+    else:
+        domain = glossary.get("domain") if isinstance(glossary, dict) else None
+        n_terms = len((glossary or {}).get("glossary") or {})
+        print(f"pass 1  용어집 생성 ... ok (domain={domain!r}, "
+              f"용어 {n_terms}개)", file=sys.stderr)
 
-    system = build_system(outline, glossary, language)
+    system = build_system(glossary, language)
     suggestions: list[Suggestion] = []
 
     # --- pass 2a: 공유 스키마 (operation보다 먼저) ---
     schemas = _component_schemas(working) or {}
-    for sname, wanted in _schema_targets(targets).items():
+    schema_targets = _schema_targets(targets)
+    n_2a_ok = n_2a_fail = 0
+    for sname, wanted in schema_targets.items():
         node = schemas.get(sname)
         if not isinstance(node, dict):
             continue
@@ -239,9 +295,11 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
             reply = provider.complete(
                 system, user_schema(sname, digest_schema(node, working),
                                     sorted(wanted)), SCHEMA_FIELDS)
-        except Exception as exc:
+        except ProviderError as exc:
             failures.append(f"pass 2a 스키마 {sname}: {exc}")
+            n_2a_fail += 1
             continue
+        n_2a_ok += 1
         # 요청하지 않은 필드는 무시한다. provider 가 fields_needed 를
         # 지킬 것이라 신뢰하지 않는다 - 여분 필드를 받아들이면 이미
         # 채워진 설명을 덮어쓰고 재실행이 no-op 이 아니게 된다.
@@ -255,13 +313,21 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
                          "/description"),
                 description=body.get("description"),
                 grounding=str(body.get("grounding")),
-                example=body.get("example")))
+                # "examples" 는 find_targets() 의 생산 대상이 아니라
+                # example 적용 여부를 여는 permission 이다 (Ruling 54) -
+                # kinds 에 없으면 example 을 아예 만들지 않는다.
+                example=body.get("example") if "examples" in kinds else None))
+    if schema_targets:
+        tail = f", {n_2a_fail} 실패" if n_2a_fail else ""
+        print(f"pass 2a 공유 스키마 {n_2a_ok + n_2a_fail}개 ... "
+              f"{n_2a_ok} ok{tail}", file=sys.stderr)
 
     # --- pass 2b: operation ---
     op_ptrs = {t.pointer.rsplit("/", 1)[0] for t in targets
                if t.kind == "desc"}
     param_ptrs = _param_pointers(targets)
     op_schema = SCHEMA_OPERATION_RENAME if rename_tools else SCHEMA_OPERATION
+    n_2b_ok = n_2b_fail = 0
     for path, method, op in _operations(working):
         base = f"#/paths/{escape_token(path)}/{method}"
         # desc target 이 없어도 이 operation의 parameter target 이 있으면
@@ -276,9 +342,11 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
         try:
             reply = provider.complete(system, user_operation(digested),
                                       op_schema)
-        except Exception as exc:
+        except ProviderError as exc:
             failures.append(f"pass 2b operation {op.get('operationId')}: {exc}")
+            n_2b_fail += 1
             continue
+        n_2b_ok += 1
         grounding = str(reply.get("grounding"))
         if base in op_ptrs:
             # 파라미터 때문에 이 패스에 들어온 operation 은 desc 대상이
@@ -301,6 +369,10 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
                 continue
             suggestions.append(Suggestion(
                 ptr, body.get("description"), str(body.get("grounding"))))
+    if op_ptrs or param_ptrs:
+        tail = f", {n_2b_fail} 실패" if n_2b_fail else ""
+        print(f"pass 2b operation {n_2b_ok + n_2b_fail}개 ... "
+              f"{n_2b_ok} ok{tail}", file=sys.stderr)
 
     out, report = apply_suggestions(
         working, suggestions, allow_speculative=allow_speculative,

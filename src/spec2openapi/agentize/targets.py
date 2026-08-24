@@ -28,7 +28,13 @@ from ..openapi import _operations
 MIN_DESCRIPTION = 12
 
 #: --target 이 받는 보강 종류. 나열 순서가 우선순위다.
-KINDS = ("properties", "desc", "params", "examples", "enums")
+#:
+#: "examples"는 find_targets()가 만들어내는 대상 kind가 아니다 - 이미
+#: properties 처리의 부산물로 나오는 example 값을 적용할지 말지 결정하는
+#: permission이다 (agentize_spec()이 kinds에 "examples"가 있을 때만 그
+#: 값을 쓴다). "enums"는 아예 생산자가 없다 - enum 의미는 property
+#: description에 문장으로 들어가므로 "properties" kind가 담당한다.
+KINDS = ("properties", "desc", "params", "examples")
 
 _NORM_RE = re.compile(r"[^a-z0-9]")
 

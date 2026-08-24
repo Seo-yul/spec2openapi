@@ -134,3 +134,186 @@ def test_verify_failure_exits_1(monkeypatch, capsys):
                "-o", "/dev/null"])
     assert rc == 1
     assert "verify" in capsys.readouterr().err
+
+
+# --- Ruling 55/57: dry-run/사전 안내 숫자 정합성 -----------------------------
+
+def test_dry_run_subtracts_already_generated_pointers(tmp_path, capsys):
+    """dry-run은 실제 실행(agentize_spec)이 보는 것과 같은 대상 목록을
+    봐야 한다 - minify_for_mcp를 거치고 이미 채운 포인터
+    (x-s2o.agentize.generated)를 뺀 뒤 세야 한다 (Ruling 55). 여기서는
+    'name'을 이미 채운 것으로 기록해 둔 스펙을 dry-run 하면 'name'은
+    대상에서 빠져야 함을 확인한다."""
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text("""\
+openapi: 3.0.3
+info: {title: t, version: '1'}
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      responses: {'200': {description: ok}}
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        name: {type: string}
+        tag: {type: string}
+x-s2o:
+  agentize:
+    provider: fake
+    model: fake-1
+    targets: [properties]
+    generated:
+      "#/components/schemas/Pet/properties/name/description":
+        {grounding: named, provider: fake, model: fake-1}
+    dropped_speculative: 0
+""", encoding="utf-8")
+    rc = main(["agentize", str(spec_path), "--target", "properties",
+               "--dry-run"])
+    assert rc == 0
+    printed = capsys.readouterr().out
+    # name은 already_generated로 빠지고 tag만 남아야 한다
+    assert "보강 대상 1건" in printed
+
+
+def test_preflight_and_dry_run_report_the_same_schema_and_call_counts(
+        monkeypatch, capsys):
+    """사전 안내(provider=... 줄)와 --dry-run은 같은 schemas/calls 수를
+    보여줘야 한다 - 둘 다 plan()/call_estimate()를 공유하기 때문이다
+    (Ruling 57)."""
+    import re
+
+    from spec2openapi.agentize import AgentizeResult
+    from spec2openapi.agentize.apply import ApplyReport
+
+    spec_path = str(EXAMPLES / "petstore-upgraded.openapi.yaml")
+
+    main(["agentize", spec_path, "--dry-run"])
+    dry_out = capsys.readouterr().out
+    m = re.search(r"대상 스키마 (\d+)건, 예상 LLM 호출 (\d+)회", dry_out)
+    assert m, dry_out
+    dry_schemas, dry_calls = m.group(1), m.group(2)
+    assert int(dry_calls) > 0
+
+    class _Stub:
+        name = "stub"
+        model = "stub-1"
+
+    monkeypatch.setattr("spec2openapi.cli._resolve_provider",
+                        lambda args: _Stub())
+    monkeypatch.setattr(
+        "spec2openapi.cli._agentize_run",
+        lambda *a, **k: AgentizeResult(
+            spec={"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+                  "paths": {}},
+            report=ApplyReport()))
+    main(["agentize", spec_path, "-o", "/dev/null"])
+    err = capsys.readouterr().err
+    assert f"schemas={dry_schemas}" in err
+    assert f"calls={dry_calls}" in err
+
+
+# --- Ruling 56: 전면 실패는 산출물을 내지 않는다 -----------------------------
+
+def test_total_provider_failure_writes_nothing_and_exits_2(
+        monkeypatch, tmp_path, capsys):
+    from spec2openapi.agentize import AgentizeResult
+    from spec2openapi.agentize.apply import ApplyReport
+
+    class _Stub:
+        name = "stub"
+        model = "stub-1"
+
+    out = tmp_path / "out.yaml"
+    monkeypatch.setattr("spec2openapi.cli._resolve_provider",
+                        lambda args: _Stub())
+    monkeypatch.setattr(
+        "spec2openapi.cli._agentize_run",
+        lambda *a, **k: AgentizeResult(
+            spec={"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+                  "paths": {}},
+            report=ApplyReport(),
+            failures=["pass 1 용어집: 모의 실패", "pass 2b operation x: 모의 실패"]))
+    rc = main(["agentize", str(EXAMPLES / "orders.openapi.yaml"),
+               "-o", str(out)])
+    assert rc == 2
+    assert not out.exists()
+    err = capsys.readouterr().err
+    assert "모든 LLM 호출이 실패" in err
+
+
+def test_partial_failure_still_writes_and_exits_0(monkeypatch, tmp_path,
+                                                  capsys):
+    """일부만 실패했으면 - 성공한 게 있으면 - 부분 실패 격리를 유지해
+    산출물을 쓰고 0으로 끝난다. 전부 실패했을 때만 2다 (Ruling 56)."""
+    from spec2openapi.agentize import AgentizeResult
+    from spec2openapi.agentize.apply import ApplyReport
+
+    class _Stub:
+        name = "stub"
+        model = "stub-1"
+
+    out = tmp_path / "out.yaml"
+    report = ApplyReport(applied={
+        "#/components/schemas/Pet/properties/name/description": "named"})
+    monkeypatch.setattr("spec2openapi.cli._resolve_provider",
+                        lambda args: _Stub())
+    monkeypatch.setattr(
+        "spec2openapi.cli._agentize_run",
+        lambda *a, **k: AgentizeResult(
+            spec={"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+                  "paths": {}},
+            report=report,
+            failures=["pass 2b operation x: 모의 실패"]))
+    rc = main(["agentize", str(EXAMPLES / "orders.openapi.yaml"),
+               "-o", str(out)])
+    assert rc == 0
+    assert out.exists()
+
+
+def test_provider_construction_failure_gets_a_clear_hint_and_exits_2(
+        monkeypatch, capsys):
+    """anthropic.Anthropic()이 생성 시점에 예외를 던지면(자격 증명도
+    프로필도 없을 때) main()을 트레이스백 없이 종료 코드 2로 지나가야
+    한다 (Ruling 56)."""
+    class _Boom:
+        def __init__(self, *a, **k):
+            raise RuntimeError("모의: 자격 증명 없음")
+
+    monkeypatch.setattr(
+        "spec2openapi.agentize.anthropic_provider.AnthropicProvider", _Boom)
+    rc = main(["agentize", str(EXAMPLES / "orders.openapi.yaml"),
+               "--provider", "anthropic", "-o", "/dev/null"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "ant auth login" in err and "ANTHROPIC_API_KEY" in err
+
+
+# --- Ruling 61: --rename-tools 결과 보고 -------------------------------------
+
+def test_rename_tools_output_is_reported(monkeypatch, capsys):
+    from spec2openapi.agentize import AgentizeResult
+    from spec2openapi.agentize.apply import ApplyReport
+
+    class _Stub:
+        name = "stub"
+        model = "stub-1"
+
+    spec_out = {
+        "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+        "paths": {"/pets": {"post": {
+            "operationId": "create_pet",
+            "responses": {"200": {"description": "ok"}}}}}}
+    report = ApplyReport(renamed={"#/paths/~1pets/post": "createPet"})
+    monkeypatch.setattr("spec2openapi.cli._resolve_provider",
+                        lambda args: _Stub())
+    monkeypatch.setattr(
+        "spec2openapi.cli._agentize_run",
+        lambda *a, **k: AgentizeResult(spec=spec_out, report=report))
+    rc = main(["agentize", str(EXAMPLES / "orders.openapi.yaml"),
+               "--rename-tools", "-o", "/dev/null"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "createPet" in err and "create_pet" in err

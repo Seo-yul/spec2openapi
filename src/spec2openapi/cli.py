@@ -246,6 +246,15 @@ def _resolve_provider(args):
     키 존재를 미리 검사하지 않는다: Anthropic SDK는 `ant auth login`
     프로필로도 동작하므로, 키가 환경변수에 없다고 막으면 정상 사용자를
     막게 된다. 실패는 실제 호출 시점에 판단한다.
+
+    provider 생성자 호출은 try로 감싼다 - `anthropic.Anthropic()`은
+    자격 증명도 프로필도 없으면 생성 시점에 예외를 던질 수 있는데, 그
+    예외는 ImportError도 ValueError/OSError도 아니라서 감싸지 않으면
+    main()의 핸들러를 그냥 지나쳐 트레이스백으로 나간다 (Ruling 56).
+    ImportError(SDK 미설치 안내)와 ValueError(예: openai 의 --model
+    누락 안내처럼 이미 명확한 메시지)는 그대로 통과시키고, 그 외
+    생성자 실패만 힌트를 붙인 ValueError 로 바꾼다 - main()이
+    ValueError 를 종료 코드 2 로 처리하는 기존 경로를 그대로 탄다.
     """
     import os
 
@@ -257,15 +266,30 @@ def _resolve_provider(args):
             name = "openai"
         else:
             name = "anthropic"  # 프로필 인증 가능성이 있으므로 기본값
+
     if name == "anthropic":
         from .agentize.anthropic_provider import AnthropicProvider
 
-        return AnthropicProvider(model=args.model)
-    if name == "openai":
+        def ctor():
+            return AnthropicProvider(model=args.model)
+    elif name == "openai":
         from .agentize.openai_provider import OpenAIProvider
 
-        return OpenAIProvider(model=args.model)
-    raise ValueError(f"알 수 없는 provider: {name!r}")
+        def ctor():
+            return OpenAIProvider(model=args.model)
+    else:
+        raise ValueError(f"알 수 없는 provider: {name!r}")
+
+    try:
+        return ctor()
+    except (ImportError, ValueError):
+        raise
+    except Exception as exc:
+        key = "ANTHROPIC_API_KEY" if name == "anthropic" else "OPENAI_API_KEY"
+        raise ValueError(
+            f"{name} provider 를 초기화하지 못했다: {exc}; "
+            f"`ant auth login` 으로 인증하거나 {key} 환경변수를 "
+            f"설정하라") from exc
 
 
 def _agentize_run(spec, provider, **kwargs):
@@ -276,10 +300,10 @@ def _agentize_run(spec, provider, **kwargs):
 
 
 def cmd_agentize(args) -> int:
-    from .agentize import AgentizeError
-    from .agentize.targets import KINDS, find_targets
+    from .agentize import AgentizeError, call_estimate, plan
+    from .agentize.targets import KINDS
     from .convert import dump_spec
-    from .openapi import _operations
+    from .openapi import _operations, resolve_pointer
 
     if args.keep_low_value and args.overwrite:
         print("error: --keep-low-value 와 --overwrite 는 상호 배타다",
@@ -300,8 +324,14 @@ def cmd_agentize(args) -> int:
     # 것과 같은 세는 방식이어야 사전 출력이 의미가 있다.
     n_ops = len(list(_operations(spec)))
 
+    # --dry-run 과 사전 안내 둘 다, 실제 실행(agentize_spec)이 보는 것과
+    # 같은 대상 목록을 봐야 한다 - plan()이 그 계산을 공유한다
+    # (Ruling 55). schemas/calls 예상치도 이 목록에서 함께 뽑는다
+    # (Ruling 57).
+    _working, targets = plan(spec, kinds=kinds, policy=policy)
+    schemas, _ops_with_targets, calls = call_estimate(targets)
+
     if args.dry_run:
-        targets = find_targets(spec, kinds=kinds, policy=policy)
         by_kind: dict[str, int] = {}
         for t in targets:
             by_kind[t.kind] = by_kind.get(t.kind, 0) + 1
@@ -311,7 +341,8 @@ def cmd_agentize(args) -> int:
                 print(f"  {kind:12s} {by_kind[kind]:5d}")
         if not targets:
             print("  (이 스펙은 손댈 곳이 없다)")
-        print(f"operation {n_ops}건")
+        print(f"operation {n_ops}건, 대상 스키마 {schemas}건, "
+              f"예상 LLM 호출 {calls}회")
         return 0
 
     if args.max_ops is not None and n_ops > args.max_ops:
@@ -326,7 +357,8 @@ def cmd_agentize(args) -> int:
         return 2
 
     print(f"provider={provider.name} model={provider.model} "
-          f"operations={n_ops}", file=sys.stderr)
+          f"operations={n_ops} schemas={schemas} calls={calls}",
+          file=sys.stderr)
 
     try:
         result = _agentize_run(
@@ -341,11 +373,28 @@ def cmd_agentize(args) -> int:
     for note in result.failures:
         print(f"warn: {note}", file=sys.stderr)
     rep = result.report
+
+    if result.failures and not rep.applied and not rep.renamed:
+        # provider 호출이 전부 실패해 아무것도 적용되지 않았다. 일부라도
+        # 성공했으면 0으로 산출물을 쓰는 부분 실패 격리는 유지하되, 전부
+        # 실패한 빈 산출물을 성공으로 보고하면 안 된다 (Ruling 56).
+        print("error: 모든 LLM 호출이 실패해 적용된 것이 없다; "
+              "출력 파일을 쓰지 않는다", file=sys.stderr)
+        return 2
+
     print(f"applied {len(rep.applied)}건, "
           f"speculative {rep.dropped_speculative}건 폐기, "
           f"거부 {len(rep.rejected)}건", file=sys.stderr)
     if rep.dropped_speculative:
         print("      (--allow-speculative 로 유지할 수 있다)", file=sys.stderr)
+
+    if rep.renamed:
+        # --rename-tools 는 기존 MCP 클라이언트의 tool 이름을 깰 수 있는
+        # 유일한 opt-in 파괴적 동작이다 - 유일하게 보고되지 않던 것을
+        # 고친다 (Ruling 61).
+        for base, old in rep.renamed.items():
+            new = resolve_pointer(result.spec, f"{base}/operationId")
+            print(f"rename  {old} -> {new}", file=sys.stderr)
 
     if result.self_check:
         print(f"self-check: {len(result.self_check)}건", file=sys.stderr)
@@ -444,9 +493,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="적용 없이 보강 대상만 출력한다 (LLM 호출 없음)")
     g.add_argument("--provider", choices=["anthropic", "openai"],
                    help="env SPEC2OPENAPI_LLM_PROVIDER")
-    g.add_argument("--model", help="모델 ID (provider별 기본값 사용)")
-    g.add_argument("--target", default="properties,desc,params,examples,enums",
-                   help="보강 대상 (쉼표 구분). 나열 순서가 우선순위")
+    g.add_argument("--model", help="모델 ID (anthropic은 기본값이 있다; "
+                                   "openai는 잘못된 기본값을 추정하지 "
+                                   "않으므로 반드시 지정해야 한다)")
+    g.add_argument("--target", default="properties,desc,params,examples",
+                   help="보강 대상 (쉼표 구분). 나열 순서가 우선순위. "
+                        "'examples'는 대상 종류가 아니라 permission이다 - "
+                        "properties의 부산물인 example 값을 적용할지를 "
+                        "결정할 뿐 그 자체로는 아무것도 만들어내지 않는다")
     g.add_argument("--rename-tools", action="store_true",
                    help="operationId를 읽기 좋은 이름으로 교체한다 "
                         "(기존 MCP 클라이언트의 tool 이름이 깨질 수 있다)")
