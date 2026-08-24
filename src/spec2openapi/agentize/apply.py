@@ -222,3 +222,56 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                     f"{MAX_EXAMPLE}자를 넘음")
 
     return out, report
+
+
+def can_record(spec: dict) -> bool:
+    """root x-s2o에 기록할 수 있는가.
+
+    기록할 수 없으면 보강을 수행하면 안 된다 - 재실행이 중복 생성을
+    일으킨다. minify_for_mcp가 같은 이유로 enrichment를 건너뛴다.
+    """
+    root = spec.get("x-s2o")
+    return root is None or isinstance(root, dict)
+
+
+def already_generated(spec: dict) -> set[str]:
+    """이전 실행이 채운 포인터 집합. 재실행 시 건너뛸 대상이다."""
+    root = spec.get("x-s2o")
+    if not isinstance(root, dict):
+        return set()
+    block = root.get("agentize")
+    if not isinstance(block, dict):
+        return set()
+    generated = block.get("generated")
+    return set(generated) if isinstance(generated, dict) else set()
+
+
+def record_provenance(spec: dict, report: ApplyReport, *, provider: str,
+                      model: str, targets: Iterable[str]) -> None:
+    """x-s2o.agentize에 기록한다. 스펙을 제자리 수정한다.
+
+    스키마 노드 안에는 아무것도 쓰지 않는다: 스키마 레벨 확장은 tool
+    payload에 그대로 복사되므로, 거기에 provenance를 넣으면 이 기능이
+    줄이려는 노이즈를 오히려 늘리게 된다.
+    """
+    if not can_record(spec):
+        return
+    root = spec.setdefault("x-s2o", {})
+    prior = root.get("agentize")
+    prior = prior if isinstance(prior, dict) else {}
+    generated = dict(prior.get("generated") or {})
+    generated.update({p: {"grounding": g} for p, g in report.applied.items()})
+    renamed = dict(prior.get("renamed") or {})
+    renamed.update({p: {"from": old} for p, old in report.renamed.items()})
+
+    block = {
+        "provider": provider,
+        "model": model,
+        "targets": list(targets),
+        "generated": generated,
+        "dropped_speculative": (int(prior.get("dropped_speculative") or 0)
+                                + report.dropped_speculative),
+    }
+    if renamed:
+        block["renamed"] = renamed
+    root["agentize"] = block

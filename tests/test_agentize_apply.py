@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import copy
 
-from spec2openapi.agentize.apply import MAX_DESCRIPTION, apply_suggestions
+from spec2openapi.agentize.apply import (
+    MAX_DESCRIPTION,
+    already_generated,
+    apply_suggestions,
+    can_record,
+    record_provenance,
+)
 from spec2openapi.agentize.providers import Suggestion
 
 
@@ -329,3 +335,65 @@ def test_nested_example_structures_are_cleaned_recursively():
         example={"이름": "\x1b[2J바둑이", "목록": ["가\r나"]})])
     assert out["components"]["schemas"]["Pet"]["properties"]["name"][
         "example"] == {"이름": "바둑이", "목록": ["가나"]}
+
+
+# --- provenance -------------------------------------------------------------
+
+def test_provenance_lives_only_at_root():
+    spec = base_spec()
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description",
+        "표시용 이름", "named")])
+    record_provenance(out, rep, provider="fake", model="fake-1",
+                      targets=("properties",))
+    block = out["x-s2o"]["agentize"]
+    assert block["provider"] == "fake" and block["model"] == "fake-1"
+    assert block["generated"] == {
+        "#/components/schemas/Pet/properties/name/description":
+            {"grounding": "named"}}
+    # 스키마 노드에는 어떤 키도 추가되지 않는다
+    node = out["components"]["schemas"]["Pet"]["properties"]["name"]
+    assert set(node) == {"type", "description"}
+
+
+def test_already_generated_reads_the_record_back():
+    spec = base_spec()
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description",
+        "표시용 이름", "named")])
+    record_provenance(out, rep, provider="fake", model="fake-1",
+                      targets=("properties",))
+    assert already_generated(out) == {
+        "#/components/schemas/Pet/properties/name/description"}
+    assert already_generated(base_spec()) == set()
+
+
+def test_can_record_rejects_non_mapping_x_s2o():
+    spec = base_spec()
+    assert can_record(spec) is True
+    spec["x-s2o"] = "무언가 다른 값"
+    assert can_record(spec) is False
+
+
+def test_record_preserves_existing_x_s2o_keys():
+    spec = base_spec()
+    spec["x-s2o"] = {"source": "swagger-2.0", "assumptions": ["a"]}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description",
+        "표시용 이름", "named")])
+    record_provenance(out, rep, provider="fake", model="fake-1",
+                      targets=("properties",))
+    assert out["x-s2o"]["source"] == "swagger-2.0"
+    assert out["x-s2o"]["assumptions"] == ["a"]
+    assert "agentize" in out["x-s2o"]
+
+
+def test_rename_is_recorded():
+    spec = base_spec()
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/paths/~1pets/post/operationId", "create_pet", "named")],
+        rename_tools=True)
+    record_provenance(out, rep, provider="fake", model="fake-1",
+                      targets=("desc",))
+    assert out["x-s2o"]["agentize"]["renamed"] == {
+        "#/paths/~1pets/post": {"from": "createPet"}}
