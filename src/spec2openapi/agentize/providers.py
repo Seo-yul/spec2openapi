@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol, runtime_checkable
 
 #: 근거 등급. 앞의 셋만 기본 적용된다.
-GROUNDING = ("named", "documented", "inferred", "speculative")
-TRUSTED = frozenset({"named", "documented", "inferred"})
+GROUNDING: tuple[str, ...] = ("named", "documented", "inferred", "speculative")
+TRUSTED: frozenset[str] = frozenset({"named", "documented", "inferred"})
 
 
 class ProviderError(RuntimeError):
