@@ -145,3 +145,109 @@ def test_the_schema_argument_reaches_the_tool_definition():
               "required": ["x"], "additionalProperties": False}
     AnthropicProvider(client=client).complete("SYS", "USER", schema)
     assert client.messages.seen[0]["tools"][0]["input_schema"] == schema
+
+
+# --- OpenAI -----------------------------------------------------------------
+
+class _OAIStub:
+    def __init__(self, payload):
+        self.payload, self.seen = payload, []
+        outer = self
+
+        class _Completions:
+            @staticmethod
+            def create(**kw):
+                outer.seen.append(kw)
+                import json as _json
+
+                class _Msg:
+                    content = _json.dumps(outer.payload)
+
+                class _Choice:
+                    message = _Msg()
+
+                class _R:
+                    choices = [_Choice()]
+
+                return _R()
+
+        class _Chat:
+            completions = _Completions()
+
+        self.chat = _Chat()
+
+
+def test_openai_parses_structured_output():
+    from spec2openapi.agentize.openai_provider import OpenAIProvider
+
+    client = _OAIStub({"fields": {"n": {"description": "d",
+                                        "grounding": "inferred"}}})
+    p = OpenAIProvider(client=client)
+    got = p.complete("SYS", "USER", {"type": "object"})
+    assert got["fields"]["n"]["grounding"] == "inferred"
+    assert p.name == "openai"
+
+
+def test_openai_keeps_external_data_out_of_system_role():
+    from spec2openapi.agentize.openai_provider import OpenAIProvider
+
+    client = _OAIStub({"fields": {}})
+    OpenAIProvider(client=client).complete("SYS-ONLY", "EXTERNAL", {})
+    msgs = client.seen[0]["messages"]
+    system = [m for m in msgs if m["role"] == "system"]
+    user = [m for m in msgs if m["role"] == "user"]
+    assert "EXTERNAL" not in str(system)
+    assert "EXTERNAL" in str(user)
+
+
+def test_openai_requests_strict_json_schema():
+    from spec2openapi.agentize.openai_provider import OpenAIProvider
+
+    client = _OAIStub({"fields": {}})
+    OpenAIProvider(client=client).complete("S", "U", {"type": "object"})
+    fmt = client.seen[0]["response_format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["json_schema"]["strict"] is True
+
+
+def test_openai_raises_provider_error_on_bad_json():
+    from spec2openapi.agentize.openai_provider import OpenAIProvider
+    from spec2openapi.agentize.providers import ProviderError
+
+    class _Bad(_OAIStub):
+        pass
+
+    client = _Bad({})
+    client.chat.completions.create = lambda **kw: type(
+        "R", (), {"choices": [type("C", (), {"message": type(
+            "M", (), {"content": "not json"})()})()]})()
+    with pytest.raises(ProviderError):
+        OpenAIProvider(client=client).complete("S", "U", {})
+
+
+def test_openai_passes_the_schema_through_to_json_schema():
+    """provider 가 schema 를 조용히 무시하면 구조화 출력이 강제되지
+    않는다 - 그리고 그 결함은 다른 테스트로는 드러나지 않는다."""
+    from spec2openapi.agentize.openai_provider import OpenAIProvider
+
+    client = _OAIStub({"fields": {}})
+    schema = {"type": "object", "properties": {"x": {"type": "string"}},
+              "required": ["x"], "additionalProperties": False}
+    OpenAIProvider(client=client).complete("SYS", "USER", schema)
+    assert client.seen[0]["response_format"]["json_schema"]["schema"] == schema
+
+
+def test_openai_local_programming_errors_propagate():
+    """우리 코드의 버그를 ProviderError 로 감싸면 SDK 장애와 구분되지
+    않아 진단이 불가능해진다."""
+    from spec2openapi.agentize.openai_provider import OpenAIProvider
+
+    class _Broken:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    raise TypeError("create() got an unexpected keyword")
+
+    with pytest.raises(TypeError):
+        OpenAIProvider(client=_Broken()).complete("S", "U", {})
