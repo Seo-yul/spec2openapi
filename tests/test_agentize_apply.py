@@ -89,17 +89,19 @@ def test_cannot_write_into_x_soap():
 
 def test_cannot_change_type():
     spec = base_spec()
-    out, _ = apply_suggestions(spec, [Suggestion(
+    out, rep = apply_suggestions(spec, [Suggestion(
         "#/components/schemas/Pet/properties/name/type", "integer", "named")])
     assert out["components"]["schemas"]["Pet"]["properties"]["name"][
         "type"] == "string"
+    assert rep.rejected
 
 
 def test_cannot_change_required():
     spec = base_spec()
-    out, _ = apply_suggestions(spec, [Suggestion(
+    out, rep = apply_suggestions(spec, [Suggestion(
         "#/components/schemas/Pet/required", "[]", "named")])
     assert out["components"]["schemas"]["Pet"]["required"] == ["name"]
+    assert rep.rejected
 
 
 def test_nonexistent_pointer_is_rejected_not_created():
@@ -194,3 +196,109 @@ def test_object_example_within_bounds_is_kept():
         example={"first": "바둑", "last": "이"})])
     assert out["components"]["schemas"]["Pet"]["properties"]["name"][
         "example"] == {"first": "바둑", "last": "이"}
+
+
+# --- 리뷰 발견: 후행 개행, /example 포인터, operationId 안전성 ---------------
+
+def test_trailing_newline_pointer_is_rejected():
+    """`$` 는 끝 직전 개행에도 매치된다 - 화이트리스트가 승인하지 않은
+    'description\\n' 키가 쓰이면 안 된다."""
+    spec = base_spec()
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description\n",
+        "침투 시도입니다", "named")])
+    assert list(out["components"]["schemas"]["Pet"]["properties"]["name"]) == [
+        "type"]
+    assert rep.applied == {} and rep.rejected
+
+
+def test_example_pointer_is_bounded():
+    spec = base_spec()
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/example",
+        "가" * 10_000, "named")])
+    assert "example" not in out["components"]["schemas"]["Pet"]["properties"][
+        "name"]
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_example_pointer_within_bounds_is_written():
+    spec = base_spec()
+    out, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/example", "바둑이", "named")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["name"][
+        "example"] == "바둑이"
+
+
+def test_example_is_not_written_onto_an_operation():
+    """Operation Object 에는 example 필드가 없다."""
+    spec = base_spec()
+    out, _ = apply_suggestions(spec, [Suggestion(
+        "#/paths/~1pets/post/description", "반려동물을 등록한다", "named",
+        example="예시")])
+    assert "example" not in out["paths"]["/pets"]["post"]
+
+
+def test_unsafe_operation_id_is_rejected():
+    spec = base_spec()
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/paths/~1pets/post/operationId", "x" * 5000, "named")],
+        rename_tools=True)
+    assert out["paths"]["/pets"]["post"]["operationId"] == "createPet"
+    assert rep.rejected
+
+    out2, rep2 = apply_suggestions(spec, [Suggestion(
+        "#/paths/~1pets/post/operationId", "create pet\n", "named")],
+        rename_tools=True)
+    assert out2["paths"]["/pets"]["post"]["operationId"] == "createPet"
+    assert rep2.rejected
+
+
+def test_creating_an_operation_id_is_not_recorded_as_a_rename():
+    spec = base_spec()
+    spec["paths"]["/pets"]["put"] = {"responses": {"200": {"description": "ok"}}}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/paths/~1pets/put/operationId", "update_pet", "named")],
+        rename_tools=True)
+    assert out["paths"]["/pets"]["put"]["operationId"] == "update_pet"
+    assert rep.renamed == {}
+    assert "#/paths/~1pets/put/operationId" in rep.applied
+
+
+def test_rejected_message_bounds_and_escapes_the_pointer():
+    spec = base_spec()
+    nasty = "#/nope/\x1b[2J\r" + "x" * 5000
+    _, rep = apply_suggestions(spec, [Suggestion(nasty, "설명입니다", "named")])
+    assert rep.rejected
+    entry = rep.rejected[0]
+    assert len(entry) < 400
+    assert "\x1b" not in entry and "\r" not in entry
+
+
+def test_control_characters_are_stripped_from_descriptions():
+    spec = base_spec()
+    out, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description",
+        "정상\x1b[2J텍스트\r입니다", "named")])
+    got = out["components"]["schemas"]["Pet"]["properties"]["name"][
+        "description"]
+    assert got == "정상텍스트입니다"
+
+
+def test_out_of_whitelist_pointer_is_reported_even_when_speculative():
+    """프롬프트 인젝션 신호는 등급과 무관하게 보존되어야 한다."""
+    spec = base_spec()
+    _, rep = apply_suggestions(spec, [Suggestion(
+        "#/paths/~1pets/post/x-soap/soapAction", "http://evil", "speculative")])
+    assert rep.rejected and rep.dropped_speculative == 0
+
+
+def test_bracketed_text_is_not_mistaken_for_an_escape_sequence():
+    """제어문자 제거는 리터럴 ESC 접두를 요구한다 - 대괄호만으로는
+    정상 텍스트가 잘리지 않는다."""
+    spec = base_spec()
+    out, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/name/description",
+        "array[2] 형식의 [0-9;]* 패턴을 쓴다", "named")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["name"][
+        "description"] == "array[2] 형식의 [0-9;]* 패턴을 쓴다"
