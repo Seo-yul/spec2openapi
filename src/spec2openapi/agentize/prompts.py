@@ -11,6 +11,7 @@ pass 2b는 $ref를 인라인하지 않는다 - pass 2a가 공유 스키마를 �
 """
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -215,14 +216,11 @@ SCHEMA_OPERATION = {
     "additionalProperties": False,
 }
 
-#: --rename-tools 를 켰을 때만 쓰는 변형. 항상 operationId 를 허용하면
-#: 쓰지도 않을 값을 매번 생성시켜 낭비다. rename_tools 는 실행 중
-#: 바뀌지 않으므로 캐시 prefix 안정성에는 영향이 없다.
-SCHEMA_OPERATION_RENAME = {
-    **SCHEMA_OPERATION,
-    "properties": {**SCHEMA_OPERATION["properties"],
-                   "operationId": {"type": "string"}},
-}
+#: --rename-tools 를 켰을 때만 쓰는 변형. deepcopy 로 중첩 스키마 객체를
+#: 분리한다 - 얕은 복사면 provider 어댑터가 스키마를 제자리 수정할 때
+#: 두 변형이 함께 오염된다.
+SCHEMA_OPERATION_RENAME = copy.deepcopy(SCHEMA_OPERATION)
+SCHEMA_OPERATION_RENAME["properties"]["operationId"] = {"type": "string"}
 
 
 def build_system(outline: dict, glossary: dict | None, language: str) -> str:

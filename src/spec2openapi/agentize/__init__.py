@@ -93,7 +93,9 @@ def _param_pointers(targets: Iterable[Target]) -> dict[str, dict[str, str]]:
         else:
             names.add(t.name)
             slot[t.name] = t.pointer
-    return out
+    # 중복 이름 배제로 비게 된 항목은 내보내지 않는다 - 존재하지만 빈
+    # 항목은 게이트를 통과시켜 채울 것 없는 호출을 낭비한다.
+    return {base: names for base, names in out.items() if names}
 
 
 def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
@@ -190,12 +192,17 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
             failures.append(f"pass 2b operation {op.get('operationId')}: {exc}")
             continue
         grounding = str(reply.get("grounding"))
-        if reply.get("description"):
-            suggestions.append(Suggestion(f"{base}/description",
-                                          reply["description"], grounding))
-        if reply.get("summary"):
-            suggestions.append(Suggestion(f"{base}/summary",
-                                          reply["summary"], grounding))
+        if base in op_ptrs:
+            # 파라미터 때문에 이 패스에 들어온 operation 은 desc 대상이
+            # 아니다. 요청하지 않은 필드는 쓰지 않는다 (Ruling 25 와 같은
+            # 원칙). SCHEMA_OPERATION 이 description 을 필수로 요구하므로
+            # 모델은 항상 값을 주지만, 우리가 받아들일지는 별개다.
+            if reply.get("description"):
+                suggestions.append(Suggestion(f"{base}/description",
+                                              reply["description"], grounding))
+            if reply.get("summary"):
+                suggestions.append(Suggestion(f"{base}/summary",
+                                              reply["summary"], grounding))
         if rename_tools and reply.get("operationId"):
             suggestions.append(Suggestion(f"{base}/operationId",
                                           reply["operationId"], grounding))

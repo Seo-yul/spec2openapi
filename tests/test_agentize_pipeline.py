@@ -284,3 +284,47 @@ def test_schema_targets_unescapes_pointer_tokens():
     t = Target(pointer="#/components/schemas/A~1B/properties/x/description",
                kind="properties", reason="empty", name="x")
     assert _schema_targets([t]) == {"A/B": ["x"]}
+
+
+def test_kinds_allowlist_is_not_bypassed_by_param_only_operations():
+    """파라미터 때문에 pass 2b 에 들어온 operation 이라도 요청하지 않은
+    description/summary 는 쓰지 않는다."""
+    spec = pipeline_spec()
+    spec["paths"]["/pets"]["get"] = {
+        "operationId": "listPets",
+        "summary": "이름과 태그로 반려동물 목록을 조회한다",
+        "parameters": [{"name": "limit", "in": "query",
+                        "schema": {"type": "integer"}}],
+        "responses": {"200": {"description": "ok"}}}
+
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "펫", "overview": "개요", "glossary": {}}
+        return {"description": "모델이 지어낸 operation 설명",
+                "summary": "모델이 지어낸 요약", "grounding": "named",
+                "parameters": {"limit": {"description": "한 번에 받을 최대 건수",
+                                         "grounding": "named"}}}
+
+    result = agentize_spec(spec, FP(respond), kinds=("params",))
+    op = result.spec["paths"]["/pets"]["get"]
+    assert op["parameters"][0]["description"] == "한 번에 받을 최대 건수"
+    assert "description" not in op
+    assert op["summary"] == "이름과 태그로 반려동물 목록을 조회한다"
+
+
+def test_param_pointers_drops_operations_left_empty_by_duplicate_names():
+    from spec2openapi.agentize import _param_pointers
+    from spec2openapi.agentize.targets import Target
+
+    dup = [Target("#/paths/~1x/get/parameters/0/description",
+                  "params", "empty", "dup"),
+           Target("#/paths/~1x/get/parameters/1/description",
+                  "params", "empty", "dup")]
+    assert _param_pointers(dup) == {}
+
+
+def test_rename_schema_does_not_alias_the_default_schema():
+    from spec2openapi.agentize.prompts import SCHEMA_OPERATION, SCHEMA_OPERATION_RENAME
+    a = SCHEMA_OPERATION["properties"]["grounding"]
+    b = SCHEMA_OPERATION_RENAME["properties"]["grounding"]
+    assert a == b and a is not b
