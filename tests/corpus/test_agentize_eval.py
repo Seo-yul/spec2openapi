@@ -70,10 +70,22 @@ def _strip_property_descriptions(spec: dict) -> dict[str, str]:
     return truth
 
 
-def _recall(expected: str, actual: str) -> float:
+def _recall(expected: str, actual: str) -> float | None:
+    """원본 대비 생성문의 토큰 재현율. 채점할 수 없으면 None.
+
+    지표의 한계를 정직하게 적어둔다:
+
+    - 원본에 3자 이상 토큰이 없으면(약어나 ID 같은 짧은 설명) 점수를
+      매길 수 없다. 0.0 으로 치면 완벽한 재현조차 "부정직"으로 오판되어
+      정직성 수치가 오염된다 - 그래서 None 을 돌려주고 집계에서 뺀다.
+    - 한 토큰만 겹쳐도 1.0 이 나올 수 있다. 이것은 의미 유사도가 아니라
+      어휘 겹침이므로, 낮은 점수는 신호지만 높은 점수는 약한 증거다.
+    """
     e = {w for w in _WORD.split(expected.lower()) if len(w) > 2}
+    if not e:
+        return None
     a = {w for w in _WORD.split(actual.lower()) if len(w) > 2}
-    return len(e & a) / len(e) if e else 0.0
+    return len(e & a) / len(e)
 
 
 def _provider():
@@ -99,17 +111,22 @@ def test_strip_and_regenerate(name, swagger):
     generated = result.spec.get("x-s2o", {}).get("agentize", {}).get(
         "generated", {})
 
-    scores, dishonest = [], []
+    scores, dishonest, unscorable = [], [], 0
     for pointer, expected in truth.items():
         parent, key = _resolve_parent(result.spec, pointer)
         actual = (parent or {}).get(key) if isinstance(parent, dict) else None
         if not actual:
             continue
         score = _recall(expected, actual)
+        if score is None:
+            unscorable += 1
+            continue
         scores.append(score)
         grounding = (generated.get(pointer) or {}).get("grounding")
-        # 원본에 설명이 있던 자리다. 근거를 named/documented로 주장했는데
-        # 내용이 전혀 겹치지 않으면 등급이 거짓이다.
+        # named/documented 는 "원본 텍스트에 근거가 있다"고 주장하는
+        # 등급이다. inferred 는 그런 주장을 하지 않으므로(형제 필드나
+        # 컨테이너에서 추론했다는 뜻) 어휘 겹침이 낮아도 부정직의
+        # 증거가 아니다 - 의도적으로 제외한다.
         if grounding in ("named", "documented") and score < 0.15:
             dishonest.append((pointer, grounding, expected, actual))
 
@@ -117,10 +134,10 @@ def test_strip_and_regenerate(name, swagger):
     mean = sum(scores) / len(scores)
     honesty = 1 - len(dishonest) / len(scores)
     print(f"\n{name}: n={len(scores)} 정확도(재현율)={mean:.2%} "
-          f"정직성={honesty:.2%}")
+          f"정직성={honesty:.2%} 채점불가={unscorable}")
     for ptr, g, exp, act in dishonest[:3]:
         print(f"  거짓 등급 {g}: {ptr}\n    원본: {exp}\n    생성: {act}")
 
     # 회귀 감시용 하한. 초기 실행으로 실제 분포를 확인한 뒤 조정한다.
-    assert mean >= 0.20, f"{name}: 정확도가 하한 미만 ({mean:.2%})"
-    assert honesty >= 0.80, f"{name}: grounding 정직성 미달 ({honesty:.2%})"
+    assert mean >= 0.20, f"{name}: 정확도가 하한 미만 ({mean:.2%} < 20%)"
+    assert honesty >= 0.80, f"{name}: grounding 정직성 미달 ({honesty:.2%} < 80%)"
