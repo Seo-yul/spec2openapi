@@ -101,12 +101,14 @@ def _param_pointers(targets: Iterable[Target]) -> dict[str, dict[str, str]]:
     return {base: names for base, names in out.items() if names}
 
 
-def _tool_payloads(spec: dict) -> list[dict] | None:
-    """FastMCP 가 실제로 보낼 tool 목록.
+def _tool_payloads(spec: dict) -> tuple[list[dict] | None, str]:
+    """FastMCP 가 실제로 보낼 tool 목록과, 만들지 못했을 때의 사유.
 
-    payload 를 만들 수 없으면(=[mcp] extra 부재, 또는 round-trip 실패)
-    None 을 돌려준다. 빈 리스트와 구분해야 한다 - 빈 리스트는 "검사했고
-    문제가 없다"로 읽히지만 None 은 "검사하지 못했다"이다.
+    성공하면 (목록, "") 을, 실패하면 (None, 사유) 를 돌려준다. 빈 목록과
+    None 을 구분해야 한다 - 빈 목록은 "검사했고 문제가 없다"이지만 None 은
+    "검사하지 못했다"이다. 사유를 함께 돌려주는 이유는 사유가 하나가
+    아니기 때문이다: extra 부재, 실행 중인 이벤트 루프, round-trip 실패는
+    사용자가 취할 조치가 각각 다르다.
     """
     try:
         import asyncio
@@ -114,29 +116,50 @@ def _tool_payloads(spec: dict) -> list[dict] | None:
         import httpx
         from fastmcp import Client, FastMCP
     except ImportError:
-        return None
+        from ..errors import MCP_HINT
 
-    async def _list():
-        mcp = FastMCP.from_openapi(
-            spec, client=httpx.AsyncClient(
-                base_url="http://spec2openapi.invalid"))
-        async with Client(mcp) as client:
-            return [{"name": t.name, "description": t.description,
-                     "inputSchema": t.inputSchema}
-                    for t in await client.list_tools()]
+        return None, f"MCP 런타임 extra 가 필요하다 ({MCP_HINT})"
 
     try:
-        return asyncio.run(_list())
-    except Exception:
-        return None
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        # checks.py 의 _run_fastmcp_roundtrip 과 같은 방어다: 이미 도는
+        # 루프 안에서는 두 번째 루프를 시작할 수 없다. 이 가드가 없으면
+        # 크래시가 "extra 부재"로 오보된다.
+        return None, ("실행 중인 이벤트 루프 안에서는 FastMCP round-trip 을 "
+                      "할 수 없다; 동기 컨텍스트에서 호출하라")
+
+    client = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+    try:
+        async def _list():
+            try:
+                mcp = FastMCP.from_openapi(spec, client=client)
+                async with Client(mcp) as c:
+                    return [{"name": t.name, "description": t.description,
+                             "inputSchema": t.inputSchema}
+                            for t in await c.list_tools()]
+            finally:
+                await client.aclose()
+
+        return asyncio.run(_list()), ""
+    except Exception as exc:
+        # _list() 가 시작되기 전에 실패했다면 finally 가 안 돌아 client 가
+        # 열린 채로 남는다. checks.py 와 같은 best-effort 정리다.
+        if not client.is_closed:
+            try:
+                asyncio.run(client.aclose())
+            except Exception:
+                pass
+        return None, f"FastMCP round-trip 실패: {exc}"
 
 
 def run_self_check(spec: dict, provider: Any) -> list[str]:
     """tool payload만 보여주고 호출 가능성을 묻는다. 스펙은 수정하지 않는다."""
-    tools = _tool_payloads(spec)
+    tools, reason = _tool_payloads(spec)
     if tools is None:
-        return ["self-check 를 수행하지 못했다: FastMCP tool payload 를 "
-                "만들 수 없다 (MCP 런타임 extra 가 필요하다)"]
+        return [f"self-check 를 수행하지 못했다: {reason}"]
 
     notes: list[str] = []
     system = selfcheck_system()

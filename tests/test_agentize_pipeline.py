@@ -366,9 +366,36 @@ def test_self_check_reports_that_it_could_not_run(monkeypatch):
     from spec2openapi.agentize import run_self_check
 
     monkeypatch.setattr("spec2openapi.agentize._tool_payloads",
-                        lambda spec: None)
+                        lambda spec: (None, "모의 사유"))
     notes = run_self_check(pipeline_spec(), FP(lambda user: {"callable": True}))
     assert notes and "수행하지 못했다" in notes[0]
+
+
+def test_self_check_names_the_real_reason_it_could_not_run():
+    """사유가 하나가 아니다 - extra 부재와 실행 중인 이벤트 루프는
+    사용자가 취할 조치가 다르다. 정적 문구로 뭉뚱그리면 틀린 처방이 된다."""
+    import asyncio
+
+    from spec2openapi.agentize import _tool_payloads
+
+    async def inside():
+        return _tool_payloads(pipeline_spec())
+
+    tools, reason = asyncio.run(inside())
+    assert tools is None
+    assert "이벤트 루프" in reason
+    assert "extra" not in reason
+
+
+def test_tool_payloads_succeeds_in_a_synchronous_context():
+    """같은 스펙이 동기 컨텍스트에서는 정상적으로 payload 를 만든다 -
+    위 테스트의 실패가 환경 탓이 아님을 고정한다."""
+    pytest.importorskip("fastmcp")
+    from spec2openapi.agentize import _tool_payloads
+
+    tools, reason = _tool_payloads(pipeline_spec())
+    assert reason == ""
+    assert isinstance(tools, list)
 
 
 def test_self_check_runs_even_when_nothing_was_filled():
