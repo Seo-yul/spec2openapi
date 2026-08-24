@@ -25,14 +25,6 @@ class _StubMessages:
 
         return _Msg()
 
-    def count_tokens(self, **kw):
-        self.seen.append(kw)
-
-        class _R:
-            input_tokens = 123
-
-        return _R()
-
 
 class _StubClient:
     def __init__(self, payload):
@@ -126,3 +118,30 @@ def test_missing_sdk_raises_import_error_naming_the_extra(monkeypatch):
 
     with pytest.raises(ImportError, match="llm-anthropic"):
         AnthropicProvider()
+
+
+def test_local_programming_errors_are_not_disguised_as_provider_failures():
+    """우리 코드의 버그를 ProviderError 로 감싸면 SDK 장애와 구분되지
+    않아 진단이 불가능해진다."""
+    from spec2openapi.agentize.anthropic_provider import AnthropicProvider
+
+    class _Broken:
+        class messages:
+            @staticmethod
+            def create(**kw):
+                raise TypeError("create() got an unexpected keyword argument")
+
+    with pytest.raises(TypeError):
+        AnthropicProvider(client=_Broken()).complete("S", "U", {})
+
+
+def test_the_schema_argument_reaches_the_tool_definition():
+    """provider 가 schema 를 조용히 무시하면 구조화 출력이 강제되지
+    않는다 - 그리고 그 결함은 다른 테스트로는 드러나지 않는다."""
+    from spec2openapi.agentize.anthropic_provider import AnthropicProvider
+
+    client = _StubClient({"fields": {}})
+    schema = {"type": "object", "properties": {"x": {"type": "string"}},
+              "required": ["x"], "additionalProperties": False}
+    AnthropicProvider(client=client).complete("SYS", "USER", schema)
+    assert client.messages.seen[0]["tools"][0]["input_schema"] == schema

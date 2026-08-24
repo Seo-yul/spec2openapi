@@ -30,17 +30,19 @@ class Suggestion:
 
 @runtime_checkable
 class EnrichProvider(Protocol):
-    """구조화 출력을 돌려주는 최소 인터페이스."""
+    """구조화 출력을 돌려주는 최소 인터페이스.
+
+    토큰 추정 메서드는 의도적으로 없다: --dry-run 은 provider 를 만들기
+    전에 반환하는 무비용 경로이므로 API 호출이 필요한 추정이 들어갈
+    자리가 없다. 비용 추정이 필요해지면 실제 호출 지점에 맞춰 새로
+    설계한다.
+    """
 
     name: str
     model: str
 
     def complete(self, system: str, user: str, schema: dict) -> dict:
         """schema에 맞는 dict를 돌려준다. 실패 시 ProviderError."""
-        ...
-
-    def count_tokens(self, system: str, user: str) -> int:
-        """요청의 입력 토큰 수를 돌려준다 (--dry-run 추정용)."""
         ...
 
 
@@ -64,7 +66,3 @@ class FakeProvider:
         if user not in self._responses:
             raise ProviderError(f"FakeProvider: 매핑되지 않은 요청 {user!r}")
         return self._responses[user]
-
-    def count_tokens(self, system: str, user: str) -> int:
-        # 실제 토크나이저가 아니라 결정론적 대용치. --dry-run 테스트용.
-        return (len(system) + len(user)) // 4

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..errors import ConversionError
 from .providers import ProviderError
 
 DEFAULT_MODEL = "claude-opus-5"
@@ -30,7 +29,7 @@ class AnthropicProvider:
             return
         try:
             import anthropic
-        except ImportError as exc:  # pragma: no cover - 환경 의존
+        except ImportError as exc:
             raise ImportError(
                 "agentize --provider anthropic requires the SDK; install it "
                 "with: pip install 'spec2openapi[llm-anthropic]'") from exc
@@ -56,7 +55,9 @@ class AnthropicProvider:
                 tools=self._tools(schema),
                 tool_choice={"type": "tool", "name": _TOOL_NAME},
             )
-        except ConversionError:
+        except (TypeError, AttributeError, KeyError):
+            # 우리 코드의 버그다. provider 장애로 둔갑시키면 진단이
+            # 불가능해진다 - SDK 장애와 구분되어야 한다.
             raise
         except Exception as exc:
             raise ProviderError(f"anthropic 호출 실패: {exc}") from exc
@@ -67,13 +68,3 @@ class AnthropicProvider:
         raise ProviderError(
             f"anthropic 응답에 tool_use 블록이 없다 "
             f"(stop_reason={getattr(msg, 'stop_reason', None)!r})")
-
-    def count_tokens(self, system: str, user: str) -> int:
-        try:
-            r = self._client.messages.count_tokens(
-                model=self.model,
-                system=system,
-                messages=[{"role": "user", "content": user}])
-            return int(r.input_tokens)
-        except Exception as exc:
-            raise ProviderError(f"토큰 계산 실패: {exc}") from exc
