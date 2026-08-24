@@ -107,3 +107,26 @@ def test_digest_operation_keeps_refs_short_instead_of_inlining():
               "schema": {"$ref": "#/components/schemas/Pet"}}}}}
     got = digest_operation("/pets", "post", op, spec)
     assert got["input"] == {"$ref": "Pet"}
+
+
+def test_non_dict_additional_properties_survives():
+    """additionalProperties: false는 '추가 필드 금지'라는 의미 정보다 -
+    bool이라는 이유로 떨어뜨리면 모델이 그 제약을 알 수 없다."""
+    node = {"type": "object",
+            "properties": {"name": {"type": "string"}},
+            "additionalProperties": False}
+    assert digest_schema(node, {})["additionalProperties"] is False
+
+
+def test_dict_additional_properties_is_still_digested():
+    node = {"type": "object",
+            "additionalProperties": {"type": "string", "xml": {"name": "x"}}}
+    assert digest_schema(node, {})["additionalProperties"] == {"type": "string"}
+
+
+def test_pattern_properties_recurses_like_properties():
+    node = {"type": "object",
+            "patternProperties": {"^x-": {"type": "string",
+                                          "xml": {"name": "n"}}}}
+    assert digest_schema(node, {}) == {
+        "type": "object", "patternProperties": {"^x-": {"type": "string"}}}

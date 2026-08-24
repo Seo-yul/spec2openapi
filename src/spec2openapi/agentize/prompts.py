@@ -70,9 +70,13 @@ def digest_schema(node: Any, spec: dict, *, seen: frozenset = frozenset(),
                                              depth=depth + 1, inline_refs=inline_refs)
                             for k, v in value.items()}
         elif key in DIGEST_ONE:
-            if isinstance(value, dict):
-                out[key] = digest_schema(value, spec, seen=seen,
-                                         depth=depth + 1, inline_refs=inline_refs)
+            # additionalProperties는 스키마일 수도, bool일 수도 있다
+            # (false = 닫힌 객체). bool을 떨어뜨리면 모델은 추가 필드가
+            # 금지된 것을 알 수 없다.
+            out[key] = (digest_schema(value, spec, seen=seen,
+                                      depth=depth + 1,
+                                      inline_refs=inline_refs)
+                        if isinstance(value, dict) else value)
         elif key in DIGEST_LISTS:
             if isinstance(value, list):
                 out[key] = [digest_schema(v, spec, seen=seen, depth=depth + 1,
@@ -83,7 +87,8 @@ def digest_schema(node: Any, spec: dict, *, seen: frozenset = frozenset(),
     return out
 
 
-def _first_json_schema(container: Any, spec: dict, inline_refs: bool = True) -> Any:
+def _first_json_schema(container: Any, spec: dict, *,
+                       inline_refs: bool = True) -> Any:
     content = (container or {}).get("content")
     if not isinstance(content, dict):
         return {}
