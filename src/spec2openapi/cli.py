@@ -279,6 +279,7 @@ def cmd_agentize(args) -> int:
     from .agentize import AgentizeError
     from .agentize.targets import KINDS, find_targets
     from .convert import dump_spec
+    from .openapi import _operations
 
     if args.keep_low_value and args.overwrite:
         print("error: --keep-low-value 와 --overwrite 는 상호 배타다",
@@ -294,6 +295,10 @@ def cmd_agentize(args) -> int:
               else "empty-only" if args.keep_low_value else "default")
 
     spec = _load_or_convert(args.source)
+    # 경로 수가 아니라 operation 수다. 한 경로에 GET+POST 가 있으면
+    # 경로 수는 비용을 과소 보고한다. 파이프라인이 --max-ops 에 쓰는
+    # 것과 같은 세는 방식이어야 사전 출력이 의미가 있다.
+    n_ops = len(list(_operations(spec)))
 
     if args.dry_run:
         targets = find_targets(spec, kinds=kinds, policy=policy)
@@ -306,7 +311,13 @@ def cmd_agentize(args) -> int:
                 print(f"  {kind:12s} {by_kind[kind]:5d}")
         if not targets:
             print("  (이 스펙은 손댈 곳이 없다)")
+        print(f"operation {n_ops}건")
         return 0
+
+    if args.max_ops is not None and n_ops > args.max_ops:
+        print(f"error: --max-ops {args.max_ops} 초과: 이 스펙은 "
+              f"operation이 {n_ops}개다", file=sys.stderr)
+        return 2
 
     try:
         provider = _resolve_provider(args)
@@ -314,7 +325,6 @@ def cmd_agentize(args) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    n_ops = len(spec.get("paths", {}))
     print(f"provider={provider.name} model={provider.model} "
           f"operations={n_ops}", file=sys.stderr)
 

@@ -77,3 +77,60 @@ def test_json_output_format_is_inferred_from_extension(tmp_path, monkeypatch):
                "-o", str(out), "--provider", "anthropic"])
     assert rc == 0
     assert json.loads(out.read_text())["openapi"] == "3.0.3"
+
+
+def test_max_ops_exceeded_exits_2_before_resolving_a_provider(monkeypatch,
+                                                              capsys):
+    """--max-ops 초과는 사용자 입력 오류(2)이지 verify 실패(1)가 아니다.
+    그리고 provider 를 만들기 전에 막아야 비용이 0 이다."""
+    called = []
+    monkeypatch.setattr("spec2openapi.cli._resolve_provider",
+                        lambda args: called.append(1))
+    rc = main(["agentize", str(EXAMPLES / "petstore-upgraded.openapi.yaml"),
+               "--max-ops", "0", "-o", "/dev/null"])
+    assert rc == 2
+    assert called == []
+    assert "--max-ops" in capsys.readouterr().err
+
+
+def test_preflight_counts_operations_not_paths(monkeypatch, capsys):
+    """petstore-upgraded 는 경로 3개에 operation 5개다. 찍히는 숫자는
+    비용을 좌우하는 숫자여야 한다."""
+    class _Stub:
+        name = "stub"
+        model = "stub-1"
+
+    from spec2openapi.agentize import AgentizeResult
+    from spec2openapi.agentize.apply import ApplyReport
+
+    monkeypatch.setattr("spec2openapi.cli._resolve_provider",
+                        lambda args: _Stub())
+    monkeypatch.setattr(
+        "spec2openapi.cli._agentize_run",
+        lambda *a, **k: AgentizeResult(
+            spec={"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+                  "paths": {}},
+            report=ApplyReport()))
+    main(["agentize", str(EXAMPLES / "petstore-upgraded.openapi.yaml"),
+          "-o", "/dev/null"])
+    assert "operations=5" in capsys.readouterr().err
+
+
+def test_verify_failure_exits_1(monkeypatch, capsys):
+    """verify 실패로 인한 전체 취소는 1 이다 - 2 와 구분된다."""
+    from spec2openapi.agentize import AgentizeError
+
+    class _Stub:
+        name = "stub"
+        model = "stub-1"
+
+    def boom(*a, **k):
+        raise AgentizeError("보강 결과가 verify를 통과하지 못해 전체를 취소한다")
+
+    monkeypatch.setattr("spec2openapi.cli._resolve_provider",
+                        lambda args: _Stub())
+    monkeypatch.setattr("spec2openapi.cli._agentize_run", boom)
+    rc = main(["agentize", str(EXAMPLES / "orders.openapi.yaml"),
+               "-o", "/dev/null"])
+    assert rc == 1
+    assert "verify" in capsys.readouterr().err
