@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `spec2openapi agentize` — an optional, opt-in command that uses an LLM to
+  fill in descriptions the source never had. Conversion is faithful but
+  cannot invent what a WSDL or Swagger file omits, and across 179
+  real-world Swagger 2.0 definitions from APIs.guru operation summaries and
+  parameter descriptions are typically complete (median 100%) while
+  **schema property descriptions sit at a median of 52%**, with 20% of
+  specs having none at all — exactly what an agent reads when it assembles
+  a request body.
+
+  The generative path is quarantined from the deterministic one. It is a
+  separate subcommand; `minify_for_mcp` and the converters are untouched.
+  The model returns **strings only**, and where they may be written is a
+  regex whitelist over JSON Pointers — `type`, `required`, `$ref`, `xml`
+  and the `x-soap` runtime contract are unreachable by any response,
+  including a prompt-injected one. Every suggestion carries a grounding
+  grade (`named` / `documented` / `inferred` / `speculative`) and
+  ungrounded guesses are dropped by default, because a confidently wrong
+  enum description steers an agent into invalid calls — worse than no
+  description. Deterministic work runs first, so the model is never asked
+  what the document already answers. After applying, `verify()` re-runs and
+  **any failure aborts the run and writes nothing**. What was generated is
+  recorded under root `x-s2o.agentize` as JSON Pointers — never inside
+  schema nodes, which are copied verbatim into FastMCP tool payloads — so
+  re-runs are idempotent and a reviewer can tell machine-derived prose from
+  model-written prose.
+
+  Requires an optional extra: `pip install 'spec2openapi[llm-anthropic]'`
+  or `[llm-openai]`. `import spec2openapi` pulls in neither SDK, and the
+  base install gains no dependencies. `--dry-run` costs nothing and makes
+  no API call. Documented in both READMEs.
+
 ### Changed
 - `x-soap-choice` entries describe *branches*, not individual elements
   (#141). A `members[]` entry is still a bare property name for the usual
