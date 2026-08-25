@@ -118,22 +118,28 @@ def plan(spec: dict, *, kinds: Iterable[str] = KINDS,
     return working, targets
 
 
-def call_estimate(targets: Iterable[Target]) -> tuple[int, int, int]:
+def call_estimate(targets: Iterable[Target], *, tool_count: int = 0
+                  ) -> tuple[int, int, int]:
     """(대상 있는 스키마 수, desc/param 대상 있는 operation 수, 예상 호출 총수).
 
     pass 2a는 스키마당 1회, pass 2b는 desc나 param 대상이 있는
     operation당 1회 부른다 - 이 함수의 계산은 그 두 루프가 실제로 도는
     횟수와 정확히 같아야 한다(Ruling 57). targets가 비어 있으면
-    pass 1(용어집)조차 부르지 않으므로 전부 0이다.
+    pass 1(용어집)조차 부르지 않는다.
+
+    tool_count는 --self-check 를 켰을 때 pass 3가 도는 횟수(tool 하나당
+    1회)다. 채울 것이 없어 pass 1/2가 아예 안 돌아도 self-check 는
+    돈다(Ruling 43) - 그래서 이것을 빼면 사전 출력이 0을 찍고 실제로는
+    호출이 나가는, 비용을 좌우하지 않는 숫자가 된다.
     """
     targets = list(targets)
     if not targets:
-        return 0, 0, 0
+        return 0, 0, tool_count
     schemas = len(_schema_targets(targets))
     op_bases = {t.pointer.rsplit("/", 1)[0] for t in targets if t.kind == "desc"}
     op_bases |= set(_param_pointers(targets))
     ops = len(op_bases)
-    return schemas, ops, 1 + schemas + ops
+    return schemas, ops, 1 + schemas + ops + tool_count
 
 
 def _tool_payloads(spec: dict) -> tuple[list[dict] | None, str]:
@@ -269,7 +275,7 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
     glossary: dict | None = None
     try:
         glossary = provider.complete(
-            build_system(None, language),
+            build_system(None, language, rename_tools=rename_tools),
             user_glossary(outline), SCHEMA_GLOSSARY)
     except ProviderError as exc:  # 용어집 실패는 치명적이지 않다
         failures.append(f"pass 1 용어집: {exc}")
@@ -280,7 +286,7 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
         print(f"pass 1  용어집 생성 ... ok (domain={domain!r}, "
               f"용어 {n_terms}개)", file=sys.stderr)
 
-    system = build_system(glossary, language)
+    system = build_system(glossary, language, rename_tools=rename_tools)
     suggestions: list[Suggestion] = []
 
     # --- pass 2a: 공유 스키마 (operation보다 먼저) ---

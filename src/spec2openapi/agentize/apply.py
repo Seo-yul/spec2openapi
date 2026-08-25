@@ -238,6 +238,10 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                     f"([A-Za-z0-9_.-], 1~64자)에 맞지 않음")
                 continue
             prior = parent.get("operationId")
+            if prior == text:
+                # 같은 이름을 돌려준 것은 개명이 아니다. 기록하면 applied 를
+                # 부풀리고 "N 개를 개명했다"는 거짓 보고가 된다.
+                continue
             if isinstance(prior, str) and prior:
                 report.renamed[ptr.rsplit("/", 1)[0]] = prior
             parent[key] = text

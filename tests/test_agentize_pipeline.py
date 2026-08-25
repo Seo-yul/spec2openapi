@@ -564,3 +564,31 @@ def test_schemas_satisfy_strict_structured_output_rules(name):
         assert props == req, (
             f"{name}{path}: required 가 properties 의 모든 키를 담아야 한다 "
             f"(빠짐: {sorted(props - req)}) — 선택 항목은 nullable 로 표현하라")
+
+
+def test_rename_instruction_appears_only_with_rename_tools():
+    """스키마에 operationId 자리를 뚫는 것만으로는 모델이 그것을 채워야
+    한다는 것을 알 수 없다 - 기본 지시는 오히려 "설명 문자열만 생성한다"고
+    말한다. 실제 호출에서 모델이 받은 이름을 그대로 돌려주는 것을 확인했다."""
+    from spec2openapi.agentize.prompts import build_system
+
+    assert "operationId" not in build_system(None, "한국어")
+    assert "operationId" in build_system(None, "한국어", rename_tools=True)
+
+
+def test_an_unchanged_operation_id_is_not_recorded_as_a_rename():
+    """모델이 같은 이름을 돌려주면 개명이 아니다. 기록하면 applied 를
+    부풀리고 "N 개를 개명했다"는 거짓 보고가 된다."""
+    from spec2openapi.agentize.apply import apply_suggestions
+    from spec2openapi.agentize.providers import Suggestion
+
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/pets": {"post": {
+                "operationId": "createPet",
+                "responses": {"200": {"description": "ok"}}}}},
+            "components": {"schemas": {}}}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/paths/~1pets/post/operationId", "createPet", "named")],
+        rename_tools=True)
+    assert out["paths"]["/pets"]["post"]["operationId"] == "createPet"
+    assert rep.renamed == {} and rep.applied == {}

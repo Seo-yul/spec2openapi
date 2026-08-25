@@ -329,7 +329,10 @@ def cmd_agentize(args) -> int:
     # (Ruling 55). schemas/calls 예상치도 이 목록에서 함께 뽑는다
     # (Ruling 57).
     _working, targets = plan(spec, kinds=kinds, policy=policy)
-    schemas, _ops_with_targets, calls = call_estimate(targets)
+    # --self-check 는 tool 하나당 1회를 더 부르고, 채울 것이 없어도 돈다
+    # (Ruling 43). FastMCP 는 operation 당 tool 하나를 만든다.
+    schemas, _ops_with_targets, calls = call_estimate(
+        targets, tool_count=n_ops if args.self_check else 0)
 
     if args.dry_run:
         by_kind: dict[str, int] = {}
@@ -396,10 +399,15 @@ def cmd_agentize(args) -> int:
             new = resolve_pointer(result.spec, f"{base}/operationId")
             print(f"rename  {old} -> {new}", file=sys.stderr)
 
-    if result.self_check:
-        print(f"self-check: {len(result.self_check)}건", file=sys.stderr)
-        for note in result.self_check:
-            print(f"  - {note}", file=sys.stderr)
+    if result.self_check is not None:
+        # None = 안 돌림, [] = 돌렸고 문제 없음, 비어있지 않음 = 발견.
+        # 침묵하면 "안 돌았나"로 읽히므로 통과했을 때도 말한다.
+        if result.self_check:
+            print(f"self-check: {len(result.self_check)}건", file=sys.stderr)
+            for note in result.self_check:
+                print(f"  - {note}", file=sys.stderr)
+        else:
+            print("self-check: 모든 tool 이 호출 가능하다", file=sys.stderr)
 
     fmt = args.format or ("json" if (args.output or "").lower()
                           .endswith(".json") else "yaml")
