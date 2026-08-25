@@ -45,7 +45,13 @@ from .prompts import (
     user_toolcheck,
 )
 from .providers import ProviderError, Suggestion
-from .targets import KINDS, Target, escape_token, find_targets
+from .targets import (
+    KINDS,
+    Target,
+    escape_token,
+    find_targets,
+    low_value_reason,
+)
 
 
 class AgentizeError(ConversionError):
@@ -217,7 +223,10 @@ def run_self_check(spec: dict, provider: Any) -> list[str]:
         try:
             reply = provider.complete(system, user_toolcheck(tool),
                                       SCHEMA_SELFCHECK)
-        except Exception as exc:
+        except ProviderError as exc:
+            # pass 1/2 와 같은 폭이어야 한다. Exception 을 통째로
+            # 삼키면 우리 코드의 버그가 'tool 이 모호하다'는 가짜
+            # 경고로 둔갑해 진단이 불가능해진다.
             notes.append(f"{tool['name']}: self-check 실패 ({exc})")
             continue
         if not reply.get("callable"):
@@ -365,7 +374,12 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
             if reply.get("description"):
                 suggestions.append(Suggestion(f"{base}/description",
                                               reply["description"], grounding))
-            if reply.get("summary"):
+            # summary 는 대상으로 지목되는 일이 없다(find_targets 는
+            # /description 만 낸다). description 이 저품질이라는
+            # 이유로 멀쩡한 summary 까지 덮어쓰면 사용자가 쓴 글이
+            # --overwrite 없이 소리 없이 사라진다.
+            if reply.get("summary") and low_value_reason(
+                    op.get("summary"), name=op.get("operationId")):
                 suggestions.append(Suggestion(f"{base}/summary",
                                               reply["summary"], grounding))
         if rename_tools and reply.get("operationId"):

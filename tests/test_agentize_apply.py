@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from spec2openapi.agentize.apply import (
     MAX_DESCRIPTION,
     already_generated,
@@ -542,3 +544,50 @@ def test_example_terminal_pointer_parses_a_matching_numeric_string():
         "#/components/schemas/Pet/properties/qty/example", "12", "named")])
     assert out["components"]["schemas"]["Pet"]["properties"]["qty"][
         "example"] == 12
+
+
+def test_a_mismatched_example_is_rejected_on_a_31_nullable_type():
+    """3.1 의 nullable 스칼라는 ["integer", "null"] 로 온다.
+
+    리스트라는 이유로 통과시키면 이 함수가 막으라고 있는 바로 그 모순을
+    3.1 스펙에서만 놓친다.
+    """
+    from spec2openapi.agentize.apply import _typed_example
+
+    assert _typed_example("twelve", "integer") == (False, None)
+    assert _typed_example("twelve", ["integer", "null"]) == (False, None)
+    assert _typed_example("yes", ["boolean", "null"]) == (False, None)
+    # 정상값은 그대로 통과하고 파싱까지 된다.
+    assert _typed_example("12", ["integer", "null"]) == (True, 12)
+    assert _typed_example("true", ["boolean", "null"]) == (True, True)
+
+
+@pytest.mark.parametrize("raw", ["NaN", "nan", "Infinity", "-inf"])
+def test_a_non_finite_example_is_rejected(raw):
+    """float() 는 이 값들을 받아주지만 JSON 은 받아주지 않는다.
+
+    통과시키면 dump_spec(fmt="json") 이 어떤 RFC 8259 파서도 읽지 못하는
+    문서를 쓴다.
+    """
+    import json
+
+    from spec2openapi.agentize.apply import _typed_example
+
+    assert _typed_example(raw, "number") == (False, None)
+    # 값이 통과했다면 json 이 깨졌을 것이라는 근거.
+    with pytest.raises(ValueError):
+        json.dumps(float(raw), allow_nan=False)
+
+
+def test_a_trace_operation_pointer_is_allowed():
+    """_METHOD 는 openapi.py 의 정본에서 파생한다.
+
+    손으로 베낀 목록에 trace 가 빠져 있어, trace operation 은 LLM 호출
+    비용만 치르고 제안이 전부 거부됐다.
+    """
+    from spec2openapi.agentize.apply import _pointer_allowed
+    from spec2openapi.openapi import _HTTP_METHODS
+
+    for method in _HTTP_METHODS:
+        ptr = f"#/paths/~1x/{method}/description"
+        assert _pointer_allowed(ptr, rename_tools=False), method

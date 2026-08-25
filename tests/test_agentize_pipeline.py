@@ -592,3 +592,74 @@ def test_an_unchanged_operation_id_is_not_recorded_as_a_rename():
         rename_tools=True)
     assert out["paths"]["/pets"]["post"]["operationId"] == "createPet"
     assert rep.renamed == {} and rep.applied == {}
+
+
+def _summary_provider():
+    """operation 패스에서 항상 새 summary 를 제안하는 provider."""
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "P", "overview": "", "glossary": []}
+        return {"summary": "Create a pet",
+                "description": "Creates a new pet in the store",
+                "grounding": "inferred", "parameters": []}
+    return FP(respond)
+
+
+def test_a_good_summary_survives_a_low_value_description():
+    """find_targets 는 /summary 를 대상으로 내지 않는다.
+
+    description 이 저품질이라는 이유로 사람이 쓴 summary 까지 덮어쓰면,
+    --overwrite 를 주지 않은 사용자의 글이 소리 없이 사라진다.
+    """
+    spec = {"openapi": "3.0.3", "info": {"title": "P", "version": "1"},
+            "paths": {"/pets": {"post": {
+                "operationId": "createPet",
+                "description": "createPet",   # operationId 재진술 = 저품질
+                "summary": "Register a new pet in the shop",
+                "responses": {"200": {"description": "ok"}}}}}}
+
+    op = agentize_spec(spec, _summary_provider()).spec["paths"]["/pets"]["post"]
+
+    assert op["summary"] == "Register a new pet in the shop"
+    assert op["description"] == "Creates a new pet in the store"
+
+
+def test_an_empty_summary_is_still_filled():
+    """보존이 지나쳐 빈 summary 까지 안 채우면 기능이 죽는다."""
+    spec = {"openapi": "3.0.3", "info": {"title": "P", "version": "1"},
+            "paths": {"/pets": {"post": {
+                "operationId": "createPet",
+                "responses": {"200": {"description": "ok"}}}}}}
+
+    op = agentize_spec(spec, _summary_provider()).spec["paths"]["/pets"]["post"]
+
+    assert op["summary"] == "Create a pet"
+
+
+def test_a_local_bug_in_self_check_is_not_disguised_as_a_tool_warning():
+    """pass 3 도 pass 1/2 와 같은 except 폭이어야 한다.
+
+    Exception 을 통째로 삼키면 우리 코드의 버그가 "이 tool 은 모호하다"는
+    가짜 경고로 둔갑해, 사용자는 스펙을 고치려 들고 진짜 원인은 묻힌다.
+    """
+    from spec2openapi.agentize import run_self_check
+
+    class Buggy:
+        name = model = "buggy"
+
+        def complete(self, system, user, schema):
+            raise TypeError("local bug simulated inside complete()")
+
+    with pytest.raises(TypeError):
+        run_self_check(pipeline_spec(), Buggy())
+
+
+def test_a_provider_failure_in_self_check_is_still_reported_as_a_note():
+    """반대로, 진짜 provider 장애는 note 로 남아야 한다."""
+    from spec2openapi.agentize import run_self_check
+
+    def boom(user):
+        raise ProviderError("upstream 503")
+
+    notes = run_self_check(pipeline_spec(), FP(boom))
+    assert notes and all("self-check 실패" in n for n in notes)

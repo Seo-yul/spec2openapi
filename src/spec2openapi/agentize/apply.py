@@ -13,11 +13,16 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from ..openapi import _SAFE_TOOL_RE, _unescape_pointer_token
+from ..openapi import (
+    _HTTP_METHODS,
+    _SAFE_TOOL_RE,
+    _unescape_pointer_token,
+)
 from .providers import GROUNDING, TRUSTED, Suggestion
 
 #: tool payload에 실리는 문자열이므로 상한을 둔다.
@@ -40,7 +45,9 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 #: 남은 제어문자. 탭(\t)과 개행(\n)은 설명에서 의미가 있으므로 남긴다.
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
-_METHOD = "(?:get|put|post|delete|patch|options|head)"
+# openapi.py 의 정본에서 파생한다. 손으로 베끼면 drift 가 생기고,
+# 실제로 trace 가 빠져 있어 trace operation 의 제안이 전부 거부됐다.
+_METHOD = f"(?:{'|'.join(sorted(_HTTP_METHODS))})"
 
 #: 스키마 노드를 가리키는 형태. example 쓰기 게이트에도 재사용한다.
 _SCHEMA_TARGET = re.compile(
@@ -144,6 +151,12 @@ def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
     - 그 외 type(object/array 등)은 model이 판단할 영역이 아니므로
       막지 않는다 - 이 함수는 스칼라 type 모순만 잡는다.
     """
+    if isinstance(declared_type, list):
+        # 3.1 의 nullable 스칼라는 ["integer", "null"] 로 온다.
+        # 리스트라고 통과시키면 이 함수가 막으라고 있는 바로 그
+        # 모순을 3.1 스펙에서만 놓친다.
+        declared_type = next(
+            (t for t in declared_type if t != "null"), None)
     if not isinstance(declared_type, str) or declared_type in _UNCHECKED_EXAMPLE_TYPES:
         return True, raw
     if declared_type == "boolean":
@@ -157,6 +170,10 @@ def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
             parsed = (int(raw.strip()) if declared_type == "integer"
                       else float(raw.strip()))
         except ValueError:
+            return False, None
+        if not math.isfinite(parsed):
+            # float("NaN"/"Infinity") 는 파싱에 성공하지만 JSON 으로
+            # 직렬화하면 어떤 RFC 8259 파서도 읽지 못하는 토큰이 된다.
             return False, None
         return True, parsed
     return True, raw

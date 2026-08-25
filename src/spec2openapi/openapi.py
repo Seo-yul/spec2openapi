@@ -389,6 +389,16 @@ def to_openapi_31(spec: dict[str, Any]) -> dict[str, Any]:
     # keyword handling below (mirrors swagger.py's _fix_schema, which
     # already applies this rule on the way to 3.0).
     map_kw = ("properties", "patternProperties")
+    # 이름->객체 map: 키는 사용자가 정한 이름이므로 data 키워드로
+    # 볼 수 없다. responses 의 "default" 가 대표적이다 - 스키마의
+    # default 값과 이름이 같을 뿐 전혀 다른 것이라, 통째로 복사하면
+    # 그 안의 nullable 이 변환되지 않은 채 3.1 문서에 남는다.
+    # "examples"/"content" 는 넣지 않는다: Example Object 의 value 는
+    # 사용자 데이터라 walk 하면 그 안의 nullable 을 스키마로 착각해
+    # 고쳐버린다. 미디어 타입 이름도 data 키워드와 겹칠 수 없다.
+    named_maps = ("responses", "headers", "parameters", "schemas",
+                  "requestBodies", "securitySchemes", "links",
+                  "callbacks", "pathItems")
 
     def walk(node: Any, depth: int = 0) -> Any:
         if depth > _MAX_WALK_DEPTH:
@@ -404,6 +414,8 @@ def to_openapi_31(spec: dict[str, Any]) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for k, v in node.items():
             if k in map_kw and isinstance(v, dict):
+                out[k] = {pn: walk(pv, depth + 1) for pn, pv in v.items()}
+            elif k in named_maps and isinstance(v, dict):
                 out[k] = {pn: walk(pv, depth + 1) for pn, pv in v.items()}
             elif k in data_kw:
                 out[k] = v

@@ -42,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chosen or omitted as a unit. Previously they were flattened into
   separate members, so the bridge rejected a payload the XSD requires.
   Documented in both READMEs; the SOAP bridge and the `x-soap.choice`
-  verification check understand both shapes.
+  verification check understand both shapes, and the bridge rejects a
+  payload that fills a bundled branch only partway — those elements are
+  chosen or omitted as a unit.
 
 ### Fixed
 - Each converted spec gets its own SOAP fault schema (#142). Every 3.0
@@ -69,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `default` response subtree is no longer treated as opaque data by
   the null-stripping pass, which left invalid `null` values in the output
   and shared the subtree with the input document by reference (#141).
+- The OpenAPI 3.1 conversion walks name-keyed maps (`responses`, `headers`,
+  component maps) instead of copying any entry whose key happens to match a
+  JSON Schema data keyword. A `default` response carrying a `nullable`
+  schema previously reached the output unconverted, producing a 3.1
+  document with a keyword JSON Schema 2020-12 does not define. Media-type
+  `examples` stay opaque — an Example Object's `value` is data, not schema.
 - XSD enumerations and numeric bounds are converted to the base type, so
   a restriction on `xs:int` no longer yields the unsatisfiable
   `{type: integer, enum: ["1", "2"]}`, and 64-bit bounds keep their
