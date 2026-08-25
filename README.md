@@ -236,6 +236,20 @@ spec2openapi agentize petstore.json -o petstore.openapi.json
 spec2openapi agentize service.wsdl -o service.openapi.yaml
 ```
 
+**Credentials.** Both SDKs read the standard environment variables natively,
+and the Anthropic SDK also authenticates from an `ant auth login` profile —
+so a key in the environment is not always required. **A `.env` file is not
+read**; use your shell, `direnv`, or a secrets manager. `--dry-run` needs no
+credentials at all, since it returns before a provider is constructed.
+
+The OpenAI adapter has **no default model** — pass `--model` explicitly:
+
+```bash
+pip install 'spec2openapi[llm-openai]'
+export OPENAI_API_KEY=...
+spec2openapi agentize petstore.json --provider openai --model <model-id> -o out.json
+```
+
 It is deliberately conservative:
 
 - The model returns **strings only**. Where they may be written is a

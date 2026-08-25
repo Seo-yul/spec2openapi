@@ -218,6 +218,19 @@ spec2openapi agentize petstore.json -o petstore.openapi.json
 spec2openapi agentize service.wsdl -o service.openapi.yaml
 ```
 
+**자격증명.** 두 SDK 모두 표준 환경변수를 네이티브로 읽고, Anthropic SDK는
+`ant auth login` 프로필로도 인증되므로 환경변수 키가 반드시 필요하지는 않다.
+**`.env` 파일은 읽지 않는다** — 셸이나 `direnv`, 키체인을 쓰면 된다. `--dry-run`은
+provider를 만들기 전에 반환하므로 자격증명이 아예 필요 없다.
+
+OpenAI 어댑터는 **기본 모델이 없다** — `--model`을 명시해야 한다.
+
+```bash
+pip install 'spec2openapi[llm-openai]'
+export OPENAI_API_KEY=...
+spec2openapi agentize petstore.json --provider openai --model <모델-id> -o out.json
+```
+
 의도적으로 보수적으로 동작한다.
 
 - 모델은 **문자열만** 돌려준다. 어디에 쓸 수 있는지는 고정된
