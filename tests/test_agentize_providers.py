@@ -4,6 +4,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -272,3 +273,59 @@ def test_openai_module_does_not_define_a_default_model():
     from spec2openapi.agentize import openai_provider
 
     assert not hasattr(openai_provider, "DEFAULT_MODEL")
+
+
+class TestResolveProviderName:
+    """선택 규칙은 한 곳에만 있어야 한다.
+
+    CLI 와 평가 하네스가 각자 규칙을 들고 있었고, 하네스 쪽이
+    anthropic 으로 고정돼 있어 OpenAI 키만 있는 환경에서는 영영
+    돌지 않았다.
+    """
+
+    def test_an_explicit_name_wins(self, monkeypatch):
+        from spec2openapi.agentize.providers import resolve_provider_name
+
+        monkeypatch.setenv("SPEC2OPENAPI_LLM_PROVIDER", "anthropic")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+        assert resolve_provider_name("openai") == "openai"
+
+    def test_the_env_var_beats_the_present_key(self, monkeypatch):
+        from spec2openapi.agentize.providers import resolve_provider_name
+
+        monkeypatch.setenv("SPEC2OPENAPI_LLM_PROVIDER", "openai")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        assert resolve_provider_name() == "openai"
+
+    def test_an_openai_only_environment_picks_openai(self, monkeypatch):
+        from spec2openapi.agentize.providers import resolve_provider_name
+
+        monkeypatch.delenv("SPEC2OPENAPI_LLM_PROVIDER", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "x")
+        assert resolve_provider_name() == "openai"
+
+    def test_no_key_at_all_falls_back_to_anthropic(self, monkeypatch):
+        """`ant auth login` 프로필로 인증될 수 있으므로 키 없음이
+        곧 실패는 아니다."""
+        from spec2openapi.agentize.providers import resolve_provider_name
+
+        for var in ("SPEC2OPENAPI_LLM_PROVIDER", "ANTHROPIC_API_KEY",
+                    "OPENAI_API_KEY"):
+            monkeypatch.delenv(var, raising=False)
+        assert resolve_provider_name() == "anthropic"
+
+    def test_an_unknown_name_is_rejected(self, monkeypatch):
+        from spec2openapi.agentize.providers import resolve_provider
+
+        monkeypatch.setenv("SPEC2OPENAPI_LLM_PROVIDER", "gemini")
+        with pytest.raises(ValueError, match="알 수 없는 provider"):
+            resolve_provider()
+
+    def test_the_eval_harness_uses_the_same_resolver(self):
+        """하네스가 provider 를 다시 고정하면 이 테스트가 깨진다."""
+        source = (Path(__file__).parent / "corpus"
+                  / "test_agentize_eval.py").read_text(encoding="utf-8")
+        assert "resolve_provider" in source
+        assert "AnthropicProvider" not in source

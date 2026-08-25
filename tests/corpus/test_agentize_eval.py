@@ -9,8 +9,10 @@ agentize로 재생성한 뒤 원본과 비교한다.
   정직성       원본에 설명이 있던 자리를 named/documented로 채웠는데
                내용이 원본과 무관하면 등급이 거짓이다
 
-실제 API 호출이 발생한다. 표본 크기: SPEC2OPENAPI_AGENTIZE_EVAL_SAMPLE
-(기본 20), 캐시는 corpus 테스트와 공유한다.
+실제 API 호출이 발생한다. provider 는 CLI 와 같은 규칙으로 고른다
+(SPEC2OPENAPI_LLM_PROVIDER / SPEC2OPENAPI_LLM_MODEL). 표본 크기는
+SPEC2OPENAPI_AGENTIZE_EVAL_SAMPLE(기본 20), 캐시는 corpus 테스트와
+공유한다.
 """
 from __future__ import annotations
 
@@ -89,9 +91,17 @@ def _recall(expected: str, actual: str) -> float | None:
 
 
 def _provider():
-    from spec2openapi.agentize.anthropic_provider import AnthropicProvider
+    """CLI 와 같은 방식으로 고른다.
 
-    return AnthropicProvider()
+    여기에 provider 를 고정하면, 실제로 검증에 쓰는 키와 하네스가
+    요구하는 키가 어긋나 하네스가 영영 돌지 않는다.
+
+      SPEC2OPENAPI_LLM_PROVIDER=openai
+      SPEC2OPENAPI_LLM_MODEL=<모델-id>     # openai 는 기본 모델이 없다
+    """
+    from spec2openapi.agentize.providers import resolve_provider
+
+    return resolve_provider()
 
 
 @pytest.mark.parametrize("name,swagger", _fully_documented_specs(),

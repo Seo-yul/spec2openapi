@@ -256,29 +256,12 @@ def _resolve_provider(args):
     생성자 실패만 힌트를 붙인 ValueError 로 바꾼다 - main()이
     ValueError 를 종료 코드 2 로 처리하는 기존 경로를 그대로 탄다.
     """
-    import os
+    from .agentize.providers import resolve_provider, resolve_provider_name
 
-    name = (args.provider or os.environ.get("SPEC2OPENAPI_LLM_PROVIDER") or "")
-    if not name:
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            name = "anthropic"
-        elif os.environ.get("OPENAI_API_KEY"):
-            name = "openai"
-        else:
-            name = "anthropic"  # 프로필 인증 가능성이 있으므로 기본값
+    name = resolve_provider_name(args.provider)
 
-    if name == "anthropic":
-        from .agentize.anthropic_provider import AnthropicProvider
-
-        def ctor():
-            return AnthropicProvider(model=args.model)
-    elif name == "openai":
-        from .agentize.openai_provider import OpenAIProvider
-
-        def ctor():
-            return OpenAIProvider(model=args.model)
-    else:
-        raise ValueError(f"알 수 없는 provider: {name!r}")
+    def ctor():
+        return resolve_provider(name, args.model)
 
     try:
         return ctor()
