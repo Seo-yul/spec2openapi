@@ -304,8 +304,11 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
         # 지킬 것이라 신뢰하지 않는다 - 여분 필드를 받아들이면 이미
         # 채워진 설명을 덮어쓰고 재실행이 no-op 이 아니게 된다.
         asked = set(wanted)
-        for fname, body in (reply.get("fields") or {}).items():
-            if fname not in asked or not isinstance(body, dict):
+        for body in (reply.get("fields") or []):
+            if not isinstance(body, dict):
+                continue
+            fname = body.get("name")
+            if fname not in asked:
                 continue
             suggestions.append(Suggestion(
                 pointer=(f"#/components/schemas/{escape_token(sname)}"
@@ -363,9 +366,11 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
             suggestions.append(Suggestion(f"{base}/operationId",
                                           reply["operationId"], grounding))
         # Ruling 25 와 같은 원칙: 요청한 이름만 받아들인다.
-        for pname, body in (reply.get("parameters") or {}).items():
-            ptr = (param_ptrs.get(base) or {}).get(pname)
-            if not ptr or not isinstance(body, dict):
+        for body in (reply.get("parameters") or []):
+            if not isinstance(body, dict):
+                continue
+            ptr = (param_ptrs.get(base) or {}).get(body.get("name"))
+            if not ptr:
                 continue
             suggestions.append(Suggestion(
                 ptr, body.get("description"), str(body.get("grounding"))))

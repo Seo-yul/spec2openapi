@@ -137,3 +137,28 @@ def test_kind_filter_excludes_unrequested_kinds():
     got = find_targets(spec, kinds=("properties",))
     assert all(t.kind == "properties" for t in got)
     assert got and isinstance(got[0], Target)
+
+
+def test_minify_folds_do_not_make_an_operation_look_documented():
+    """minify_for_mcp 가 접어 넣은 "Errors: ..." 줄은 "이 operation 이
+    무엇을 하는가"에 대한 답이 아니다. 그것까지 설명으로 세면 설명이
+    전혀 없는 operation 이 이미 문서화된 것처럼 보여 대상에서 빠진다."""
+    spec = _spec(paths={"/pets/{id}": {"get": {
+        "operationId": "getPet",
+        "description": "Errors: 404 (Resource not found).",
+        "parameters": [{"name": "id", "in": "path", "required": True,
+                        "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "ok"}}}}})
+    spec["x-s2o"] = {"minify": {"folded": {"getPet": ["errors"]}}}
+    got = find_targets(spec, kinds=("desc",))
+    assert [(t.pointer, t.reason) for t in got] == [
+        ("#/paths/~1pets~1{id}/get/description", "empty")]
+
+
+def test_a_user_written_marker_line_is_not_stripped():
+    """folded 기록이 없으면 marker 모양 줄도 사용자 문서다 - 벗기지 않는다."""
+    spec = _spec(paths={"/pets/{id}": {"get": {
+        "operationId": "getPet",
+        "description": "Errors: 우리 팀이 직접 쓴 에러 안내 문서입니다",
+        "responses": {"200": {"description": "ok"}}}}})
+    assert find_targets(spec, kinds=("desc",)) == []

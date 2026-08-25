@@ -157,13 +157,29 @@ _GROUNDING_RULES = """\
 설명은 한 문장으로, 필드 이름을 그대로 되풀이하지 않는다.
 """
 
+#: OpenAI strict structured outputs 는 (a) required 가 properties 의 모든
+#: 키를 담을 것과 (b) additionalProperties 가 false 일 것을 요구한다.
+#: 그래서 선택 항목은 nullable 로, 이름 키 맵은 name 필드를 가진 배열로
+#: 표현한다. Anthropic 의 tool use strict 도 같은 형태를 받는다.
+_GROUNDING_ENUM = {"type": "string",
+                   "enum": ["named", "documented", "inferred",
+                            "speculative"]}
+
 SCHEMA_GLOSSARY = {
     "type": "object",
     "properties": {
         "domain": {"type": "string"},
         "overview": {"type": "string"},
-        "glossary": {"type": "object", "additionalProperties":
-                     {"type": "string"}},
+        "glossary": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"term": {"type": "string"},
+                               "meaning": {"type": "string"}},
+                "required": ["term", "meaning"],
+                "additionalProperties": False,
+            },
+        },
     },
     "required": ["domain", "overview", "glossary"],
     "additionalProperties": False,
@@ -172,20 +188,18 @@ SCHEMA_GLOSSARY = {
 _FIELD = {
     "type": "object",
     "properties": {
+        "name": {"type": "string"},
         "description": {"type": "string"},
-        "grounding": {"type": "string",
-                      "enum": ["named", "documented", "inferred",
-                               "speculative"]},
-        "example": {"type": "string"},
+        "grounding": _GROUNDING_ENUM,
+        "example": {"type": ["string", "null"]},
     },
-    "required": ["description", "grounding"],
+    "required": ["name", "description", "grounding", "example"],
     "additionalProperties": False,
 }
 
 SCHEMA_FIELDS = {
     "type": "object",
-    "properties": {"fields": {"type": "object",
-                              "additionalProperties": _FIELD}},
+    "properties": {"fields": {"type": "array", "items": _FIELD}},
     "required": ["fields"],
     "additionalProperties": False,
 }
@@ -193,34 +207,30 @@ SCHEMA_FIELDS = {
 _PARAM_FIELD = {
     "type": "object",
     "properties": {
+        "name": {"type": "string"},
         "description": {"type": "string"},
-        "grounding": {"type": "string",
-                      "enum": ["named", "documented", "inferred",
-                               "speculative"]},
+        "grounding": _GROUNDING_ENUM,
     },
-    "required": ["description", "grounding"],
+    "required": ["name", "description", "grounding"],
     "additionalProperties": False,
 }
 
 SCHEMA_OPERATION = {
     "type": "object",
     "properties": {
-        "summary": {"type": "string"},
+        "summary": {"type": ["string", "null"]},
         "description": {"type": "string"},
-        "grounding": {"type": "string",
-                      "enum": ["named", "documented", "inferred",
-                               "speculative"]},
-        "parameters": {"type": "object", "additionalProperties": _PARAM_FIELD},
+        "grounding": _GROUNDING_ENUM,
+        "parameters": {"type": "array", "items": _PARAM_FIELD},
     },
-    "required": ["description", "grounding"],
+    "required": ["summary", "description", "grounding", "parameters"],
     "additionalProperties": False,
 }
 
-#: --rename-tools 를 켰을 때만 쓰는 변형. deepcopy 로 중첩 스키마 객체를
-#: 분리한다 - 얕은 복사면 provider 어댑터가 스키마를 제자리 수정할 때
-#: 두 변형이 함께 오염된다.
 SCHEMA_OPERATION_RENAME = copy.deepcopy(SCHEMA_OPERATION)
-SCHEMA_OPERATION_RENAME["properties"]["operationId"] = {"type": "string"}
+SCHEMA_OPERATION_RENAME["properties"]["operationId"] = {
+    "type": ["string", "null"]}
+SCHEMA_OPERATION_RENAME["required"].append("operationId")
 
 
 def build_system(glossary: dict | None, language: str) -> str:
@@ -245,7 +255,9 @@ def build_system(glossary: dict | None, language: str) -> str:
     ]
     if glossary:
         parts.append("서비스 개요: " + str(glossary.get("overview", "")))
-        terms = glossary.get("glossary") or {}
+        terms = {e["term"]: e["meaning"]
+                 for e in (glossary.get("glossary") or [])
+                 if isinstance(e, dict) and e.get("term")}
         if terms:
             parts.append("도메인 용어집 (반드시 이 용어를 일관되게 쓴다):\n"
                          + json.dumps(terms, ensure_ascii=False, indent=2))
@@ -272,9 +284,11 @@ SCHEMA_SELFCHECK = {
     "type": "object",
     "properties": {
         "callable": {"type": "boolean"},
-        "problem": {"type": "string"},
+        # 호출 가능하면 problem 이 없다. strict 모드는 선택 항목을
+        # required 에서 빼는 것을 허용하지 않으므로 nullable 로 쓴다.
+        "problem": {"type": ["string", "null"]},
     },
-    "required": ["callable"],
+    "required": ["callable", "problem"],
     "additionalProperties": False,
 }
 
