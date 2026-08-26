@@ -324,7 +324,9 @@ src/spec2openapi/
   swagger.py   Swagger 2.0 -> OpenAPI 3.x 업그레이드 (x-s2o 리포트)
   convert.py   코어 공개 API (convert_wsdl / load_spec / dump_spec)
   checks.py    구조화 검증 (verify / VerifyReport)
-  cli.py       convert / upgrade / inspect / validate / serve
+  minify.py    MCP tool payload 축소/보강 (선택)
+  agentize/    [llm-*] LLM이 쓴 설명 채우기 (결정론 경로와 분리)
+  cli.py       convert / upgrade / inspect / validate / agentize / serve
   bridge.py    [mcp] SOAP 브리지: JSON <-> SOAP envelope httpx transport
   server.py    [mcp] FastMCP 결합 (from_openapi_spec / from_wsdl)
 Dockerfile     참조 런타임 이미지

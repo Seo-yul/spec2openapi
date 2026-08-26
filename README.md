@@ -284,7 +284,7 @@ appears in the diff too. The output is a text spec; review it with
 ## Kubernetes: one image, many MCP servers
 
 ```bash
-docker build -t spec2openapi:0.6.0 .
+docker build -t spec2openapi:0.7.0 .
 spec2openapi convert <wsdl> -o openapi.yaml
 kubectl create configmap my-mcp-spec --from-file=openapi.yaml
 kubectl apply -f k8s/example.yaml    # Deployment mounts /config/openapi.yaml
@@ -329,7 +329,9 @@ src/spec2openapi/
   swagger.py   Swagger 2.0 -> OpenAPI 3.x upgrader (x-s2o report)
   convert.py   core public API
   checks.py    structured verification (verify / VerifyReport)
-  cli.py       convert / upgrade / inspect / validate / serve
+  minify.py    optional shrink/enrich of the MCP tool payload
+  agentize/    [llm-*] optional LLM-written descriptions (quarantined)
+  cli.py       convert / upgrade / inspect / validate / agentize / serve
   bridge.py    [mcp] SOAP bridge (httpx transport)
   server.py    [mcp] FastMCP glue
 ```
