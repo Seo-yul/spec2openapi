@@ -6,6 +6,7 @@ import pytest
 from spec2openapi.agentize.targets import (
     KINDS,
     Target,
+    detect_language,
     find_targets,
     low_value_reason,
     normalize,
@@ -162,3 +163,61 @@ def test_a_user_written_marker_line_is_not_stripped():
         "description": "Errors: 우리 팀이 직접 쓴 에러 안내 문서입니다",
         "responses": {"200": {"description": "ok"}}}}})
     assert find_targets(spec, kinds=("desc",)) == []
+
+
+class TestDetectLanguage:
+    """출력 언어는 우리가 정한다.
+
+    모델에게 "문서에 이미 쓰인 언어로 써라"라고 맡겼더니 같은 스펙,
+    같은 모델로 두 번 돌린 결과가 영어와 한국어로 갈렸다. 문장 자체는
+    멀쩡해서 verify() 도 사람 눈도 그냥 지나쳤다.
+    """
+
+    def test_an_english_spec_is_english(self):
+        assert detect_language({"info": {
+            "title": "Pet Store",
+            "description": "The service creates and retrieves pet records "
+                           "for a shop, with support for tags."}}) == "English"
+
+    def test_a_korean_spec_is_korean(self):
+        assert detect_language({"info": {
+            "title": "주문 서비스",
+            "description": "주문을 생성하고 조회하는 서비스이다."}}) == "Korean"
+
+    def test_a_french_spec_is_french(self):
+        assert detect_language({"info": {
+            "title": "Service de commande",
+            "description": "Le service permet de créer et de consulter les "
+                           "commandes pour une boutique."}}) == "French"
+
+    def test_identifiers_are_not_evidence_of_language(self):
+        """한국어 스펙도 필드명은 영어로 짓는다.
+
+        필드명을 근거로 삼으면 거의 모든 스펙이 영어로 판정된다.
+        """
+        spec = {"info": {"title": "결제 서비스",
+                         "description": "카드와 계좌이체를 처리한다."},
+                "paths": {"/payments": {"post": {
+                    "operationId": "createPaymentTransaction",
+                    "responses": {"200": {"description": "성공"}}}}},
+                "components": {"schemas": {"PaymentRequest": {
+                    "type": "object",
+                    "properties": {"customerIdentifier": {"type": "string"},
+                                   "transactionAmount": {"type": "integer"}}}}}}
+        assert detect_language(spec) == "Korean"
+
+    def test_a_spec_with_no_prose_falls_back_to_english(self):
+        assert detect_language({"info": {}}) == "English"
+        assert detect_language({}) == "English"
+
+    def test_detection_survives_having_the_descriptions_stripped(self):
+        """평가 하네스는 property 설명을 지운 뒤에 돌린다.
+
+        그 상태에서 판정이 흔들리면 하네스가 매번 다른 언어를 요구한다.
+        """
+        spec = {"info": {"title": "Pet Store",
+                         "description": "The service manages the pets of a "
+                                        "shop and the tags for each of them."},
+                "components": {"schemas": {"Pet": {"type": "object",
+                    "properties": {"name": {"type": "string"}}}}}}
+        assert detect_language(spec) == "English"

@@ -256,7 +256,13 @@ since it returns before a provider is constructed.
 | `--self-check` | re-read the finished tool payload and report operations still ambiguous |
 | `--allow-speculative` | apply suggestions the model graded as unfounded |
 | `--overwrite` | replace existing descriptions regardless of quality |
+| `--language <name>` | output language; detected from the spec when omitted |
 | `--max-ops N` | stop before calling if the spec exceeds N operations |
+
+The output language is decided before the first call — detected from the
+prose already in the spec, not left to the model — and printed with the
+preflight line so you can see it before paying for anything. Override it
+with `--language`.
 
 What a run guarantees:
 

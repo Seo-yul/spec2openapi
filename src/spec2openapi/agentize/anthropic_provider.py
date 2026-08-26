@@ -12,7 +12,10 @@ from typing import Any
 
 from .providers import ProviderError
 
-DEFAULT_MODEL = "claude-opus-5"
+#: 설명 채우기는 독해와 작문이지 깊은 추론이 아니다. 정답지 대비
+#: 실측에서 sonnet 이 opus 를 모든 표본에서 앞섰고(재현율 61-71% 대
+#: 38-56%), 값은 절반이며 더 빠르다. 재현 방법: pytest -m agentize_eval
+DEFAULT_MODEL = "claude-sonnet-5"
 _TOOL_NAME = "emit_descriptions"
 _MAX_TOKENS = 16000
 

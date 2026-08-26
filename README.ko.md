@@ -238,7 +238,12 @@ spec2openapi agentize petstore.json --provider openai --model <모델-id> -o out
 | `--self-check` | 완성된 tool payload를 다시 읽고 여전히 모호한 operation을 보고한다 |
 | `--allow-speculative` | 모델이 근거 없다고 매긴 제안까지 적용한다 |
 | `--overwrite` | 기존 설명을 품질과 무관하게 전부 교체한다 |
+| `--language <이름>` | 출력 언어. 생략하면 스펙에서 판정한다 |
 | `--max-ops N` | operation이 N개를 넘으면 호출 전에 중단한다 |
+
+출력 언어는 첫 호출 전에 확정된다 — 모델에게 맡기지 않고 스펙에 이미
+쓰인 산문에서 판정하며, 비용이 발생하기 전에 preflight 줄로 함께 출력된다.
+`--language`로 직접 지정할 수 있다.
 
 실행이 보장하는 것:
 

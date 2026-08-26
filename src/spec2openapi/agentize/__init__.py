@@ -48,6 +48,7 @@ from .providers import ProviderError, Suggestion
 from .targets import (
     KINDS,
     Target,
+    detect_language,
     escape_token,
     find_targets,
     low_value_reason,
@@ -239,8 +240,7 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
                   policy: str = "default", allow_speculative: bool = False,
                   rename_tools: bool = False, self_check: bool = False,
                   max_ops: int | None = None,
-                  language: str = "the language already used in the spec, "
-                                  "or English if none") -> AgentizeResult:
+                  language: str | None = None) -> AgentizeResult:
     """스펙을 보강한 새 스펙과 보고서를 돌려준다. 입력은 변경하지 않는다."""
     # kinds 를 즉시 튜플로 고정한다 (Ruling 69) - 아래에서 find_targets()
     # 에 한 번, record_provenance() 에 또 한 번 넘긴다. generator 였다면
@@ -253,6 +253,10 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
         raise AgentizeError(
             "root x-s2o가 매핑이 아니어서 provenance를 기록할 수 없다; "
             "기록 없이 보강하면 재실행이 중복 생성을 일으키므로 중단한다")
+
+    # 언어는 여기서 확정한다. 모델에게 "문서에 이미 쓰인 언어로"라고
+    # 맡기면 실행마다 답이 달라진다 (Ruling 71).
+    language = language or detect_language(spec)
 
     working, targets = plan(spec, kinds=kinds, policy=policy)
 

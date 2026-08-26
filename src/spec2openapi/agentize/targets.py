@@ -143,3 +143,91 @@ def find_targets(spec: dict, *, kinds: Iterable[str] = KINDS,
                 add(f"{base}/parameters/{i}/description", "params",
                     prm.get("name") or "", prm.get("description"))
     return out
+
+
+#: 문자 코드 구간 -> 언어 이름. 라틴 문자가 아니면 이것만으로 확정된다.
+_SCRIPTS = (
+    ("Korean", (("가", "힣"), ("㄰", "㆏"))),
+    ("Japanese", (("぀", "ゟ"), ("゠", "ヿ"))),
+    ("Chinese", (("一", "鿿"),)),
+    ("Russian", (("Ѐ", "ӿ"),)),
+    ("Arabic", (("؀", "ۿ"),)),
+    ("Hebrew", (("֐", "׿"),)),
+    ("Thai", (("฀", "๿"),)),
+)
+
+#: 라틴 문자권을 가르는 기능어. 내용어가 아니라 관사/전치사라서
+#: 도메인 어휘에 휘둘리지 않는다.
+_STOPWORDS = {
+    "English": ("the", "of", "and", "for", "this", "with", "that", "from"),
+    "French": ("le", "la", "les", "des", "pour", "dans", "une", "est"),
+    "German": ("der", "die", "das", "und", "für", "ist", "eine", "mit"),
+    "Spanish": ("el", "la", "los", "las", "para", "una", "con", "que"),
+    "Portuguese": ("o", "os", "as", "para", "uma", "com", "que", "não"),
+    "Italian": ("il", "lo", "gli", "per", "una", "con", "che", "del"),
+}
+
+
+def _spec_prose(spec: Any, budget: int = 20000) -> str:
+    """스펙에 남아 있는 산문만 모은다. 식별자는 언어 근거가 아니다.
+
+    필드명이나 operationId 는 영어처럼 보여도 그 스펙이 영어로 쓰였다는
+    증거가 못 된다 - 한국어 스펙도 필드명은 영어로 짓는다.
+    """
+    KEYS = ("description", "summary", "title")
+    out: list[str] = []
+    size = 0
+    stack = [spec]
+    while stack and size < budget:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in KEYS and isinstance(v, str):
+                    out.append(v)
+                    size += len(v)
+                elif isinstance(v, (dict, list)):
+                    stack.append(v)
+        elif isinstance(node, list):
+            stack.extend(x for x in node if isinstance(x, (dict, list)))
+    return " ".join(out)[:budget]
+
+
+def detect_language(spec: Any) -> str:
+    """스펙이 쓰인 언어를 결정론적으로 판정한다.
+
+    "문서에 이미 쓰인 언어로 써라"를 모델에게 맡기면 실행마다 답이
+    달라진다 - 영어 스펙에 한국어 설명이 붙는 일이 실제로 일어났고,
+    문장 자체는 멀쩡해서 어떤 검사도 잡아내지 못했다. 그래서 여기서
+    정하고 프롬프트에는 확정된 이름만 넣는다.
+
+    비라틴 문자는 문자 구간만으로 확정된다. 라틴 문자권은 기능어
+    빈도로 가르고, 가리지 못하면 English 로 둔다.
+    """
+    prose = _spec_prose(spec)
+    if not prose.strip():
+        return "English"
+
+    counts = {name: 0 for name, _ in _SCRIPTS}
+    latin = 0
+    for ch in prose:
+        for name, ranges in _SCRIPTS:
+            if any(lo <= ch <= hi for lo, hi in ranges):
+                counts[name] += 1
+                break
+        else:
+            if ch.isalpha():
+                latin += 1
+    total = sum(counts.values()) + latin
+    if total:
+        top, n = max(counts.items(), key=lambda kv: kv[1])
+        # 식별자에 섞인 소수의 라틴 문자에 밀리지 않도록 10%면 채택한다.
+        if n and n / total >= 0.10:
+            return top
+
+    words = [w for w in re.split(r"[^\w']+", prose.lower()) if w]
+    if not words:
+        return "English"
+    scores = {lang: sum(w in set(sw) for w in words)
+              for lang, sw in _STOPWORDS.items()}
+    best, hits = max(scores.items(), key=lambda kv: kv[1])
+    return best if hits else "English"

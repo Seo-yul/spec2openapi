@@ -33,7 +33,10 @@ class _StubClient:
 
 
 def test_anthropic_returns_tool_input_as_dict():
-    from spec2openapi.agentize.anthropic_provider import AnthropicProvider
+    from spec2openapi.agentize.anthropic_provider import (
+    DEFAULT_MODEL,
+    AnthropicProvider,
+)
 
     client = _StubClient({"fields": {"n": {"description": "d",
                                            "grounding": "named"}}})
@@ -41,7 +44,7 @@ def test_anthropic_returns_tool_input_as_dict():
     got = p.complete("SYS", "USER", {"type": "object"})
     assert got["fields"]["n"]["grounding"] == "named"
     assert p.name == "anthropic"
-    assert p.model == "claude-opus-5"
+    assert p.model == DEFAULT_MODEL
 
 
 def test_anthropic_puts_external_data_in_user_not_system():

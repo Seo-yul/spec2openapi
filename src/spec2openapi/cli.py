@@ -342,8 +342,15 @@ def cmd_agentize(args) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
+    # 판정한 언어를 반드시 보여준다. 조용히 정하면 영어 스펙에 한국어
+    # 설명이 붙어도 사용자가 결과물을 열어보기 전까지 알 수 없다.
+    from .agentize.targets import detect_language
+
+    language = args.language or detect_language(spec)
+    origin = "지정" if args.language else "판정"
     print(f"provider={provider.name} model={provider.model} "
-          f"operations={n_ops} schemas={schemas} calls={calls}",
+          f"operations={n_ops} schemas={schemas} calls={calls} "
+          f"language={language}({origin})",
           file=sys.stderr)
 
     try:
@@ -351,7 +358,7 @@ def cmd_agentize(args) -> int:
             spec, provider, kinds=kinds, policy=policy,
             allow_speculative=args.allow_speculative,
             rename_tools=args.rename_tools, self_check=args.self_check,
-            max_ops=args.max_ops, language=args.language)
+            max_ops=args.max_ops, language=language)
     except AgentizeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -503,8 +510,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="기존 설명을 품질과 무관하게 전부 교체한다")
     g.add_argument("--self-check", action="store_true",
                    help="최종 tool payload를 다시 점검해 모호한 op을 보고한다")
-    g.add_argument("--language", default="the language already used in the "
-                                         "spec, or English if none")
+    g.add_argument("--language", default=None,
+                   help="출력 언어 (미지정 시 스펙에서 판정한다)")
     g.add_argument("--max-ops", type=int, default=None,
                    help="operation 수 상한. 초과 시 호출 전에 중단한다")
     g.set_defaults(fn=cmd_agentize)
