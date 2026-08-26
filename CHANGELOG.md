@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `spec2openapi agentize` — an optional command that uses an LLM to write
+  the descriptions a source spec leaves empty: schema properties, operation
+  summaries, and parameter docs. `--rename-tools` also replaces
+  machine-generated `operationId`s with readable tool names, and
+  `--self-check` re-reads the finished tool payload and reports operations
+  that are still ambiguous.
+
+  The generative path is separate from the deterministic one: it is its own
+  subcommand, and `minify_for_mcp` and the converters are untouched. The
+  model returns **strings only**, and where they may be written is a regex
+  whitelist over JSON Pointers — `type`, `required`, `$ref`, `xml` and the
+  `x-soap` runtime contract are unreachable by any response. Every
+  suggestion carries a grounding grade (`named` / `documented` / `inferred`
+  / `speculative`); ungrounded guesses are dropped unless
+  `--allow-speculative` is given. Deterministic work runs first, so the
+  model is only asked what the document does not already answer. After
+  applying, `verify()` re-runs and **any failure aborts the run and writes
+  nothing**. What was generated is recorded under root `x-s2o.agentize` as
+  JSON Pointers, outside the schema nodes, so re-runs are idempotent and a
+  reviewer can tell model-written prose from the rest.
+
+  The output language is decided before the first call — detected from the
+  prose already in the spec — and printed with the preflight line;
+  `--language` overrides it. Asking the model to match the document's
+  language instead produced a different answer per run, and a spec that
+  came back in the wrong language read as correct to `verify()` and to a
+  reviewer skimming the diff.
+
+  Requires an optional extra: `pip install 'spec2openapi[llm-anthropic]'`
+  or `[llm-openai]`. `import spec2openapi` pulls in neither SDK, and the
+  base install gains no dependencies. `--dry-run` makes no API call.
+  Documented in both READMEs.
+
 ### Changed
 - `x-soap-choice` entries describe *branches*, not individual elements
   (#141). A `members[]` entry is still a bare property name for the usual
@@ -15,7 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chosen or omitted as a unit. Previously they were flattened into
   separate members, so the bridge rejected a payload the XSD requires.
   Documented in both READMEs; the SOAP bridge and the `x-soap.choice`
-  verification check understand both shapes.
+  verification check understand both shapes, and the bridge rejects a
+  payload that fills a bundled branch only partway — those elements are
+  chosen or omitted as a unit.
 
 ### Fixed
 - Each converted spec gets its own SOAP fault schema (#142). Every 3.0
@@ -42,6 +78,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `default` response subtree is no longer treated as opaque data by
   the null-stripping pass, which left invalid `null` values in the output
   and shared the subtree with the input document by reference (#141).
+- The OpenAPI 3.1 conversion walks name-keyed maps (`responses`, `headers`,
+  component maps) instead of copying any entry whose key happens to match a
+  JSON Schema data keyword. A `default` response carrying a `nullable`
+  schema previously reached the output unconverted, producing a 3.1
+  document with a keyword JSON Schema 2020-12 does not define. Media-type
+  `examples` stay opaque — an Example Object's `value` is data, not schema.
 - XSD enumerations and numeric bounds are converted to the base type, so
   a restriction on `xs:int` no longer yields the unsatisfiable
   `{type: integer, enum: ["1", "2"]}`, and 64-bit bounds keep their

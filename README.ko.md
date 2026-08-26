@@ -55,6 +55,9 @@ spec2openapi upgrade swagger2.json -o service.openapi.yaml   # 파일 또는 URL
 spec2openapi validate orders.openapi.yaml
 spec2openapi validate orders.openapi.yaml --format json   # 기계가 읽는 검증 보고서
 
+# 빈 설명을 LLM으로 채우기 (선택 extra 필요, 아래 참조)
+spec2openapi agentize service.openapi.yaml --dry-run
+
 # 참조 MCP 런타임 ([mcp] extra 필요)
 spec2openapi serve orders.openapi.yaml --transport http --port 8000
 ```
@@ -195,6 +198,69 @@ mcp = spec2openapi.from_openapi_spec(
 ```
 
 WSDL에서 변환된 스펙은 모든 operation에 서비스 이름이 태그로 붙어 있으므로, 서비스 단위 서브셋에는 별도 태깅이 필요 없다. 참조 CLI(`spec2openapi serve`)는 route map을 노출하지 않으므로, 서브셋이 필요하면 파이썬 진입점을 쓴다.
+
+## LLM으로 빈틈 채우기 (선택 기능)
+
+`spec2openapi agentize`는 원본 스펙에서 비어 있는 설명 — 스키마 property,
+operation summary, parameter 설명 — 을 LLM으로 채운다. agent가 읽는 tool
+표면이 무엇을 보내야 하는지 말해 주게 만드는 것이 목적이다.
+
+```bash
+pip install 'spec2openapi[llm-anthropic]'
+export ANTHROPIC_API_KEY=...          # 또는: ant auth login
+
+# Swagger 2.0 / OpenAPI 3.x
+spec2openapi agentize petstore.json --dry-run          # 무엇이 바뀔지 미리 본다
+spec2openapi agentize petstore.json -o petstore.openapi.json
+
+# WSDL — 명령은 동일하다; 변환이 먼저 일어날 뿐이다
+spec2openapi agentize service.wsdl -o service.openapi.yaml
+```
+
+OpenAI도 동일하게 쓰되 `--model`을 명시한다.
+
+```bash
+pip install 'spec2openapi[llm-openai]'
+export OPENAI_API_KEY=...
+spec2openapi agentize petstore.json --provider openai --model <모델-id> -o out.json
+```
+
+**자격증명**은 환경변수에서 온다 — `ANTHROPIC_API_KEY` 또는
+`OPENAI_API_KEY`를 각 SDK가 네이티브로 읽는다. Anthropic SDK는
+`ant auth login` 프로필로도 인증된다. `--dry-run`은 provider를 만들기 전에
+반환하므로 자격증명이 필요 없다.
+
+| 플래그 | 동작 |
+|--------|------|
+| `--dry-run` | 채울 대상만 출력한다. API 호출 없음 |
+| `--target properties,desc,params,examples` | 채울 대상을 고른다. 나열 순서가 우선순위 |
+| `--rename-tools` | 기계 생성된 `operationId`를 읽기 좋은 tool 이름으로 바꾼다 |
+| `--self-check` | 완성된 tool payload를 다시 읽고 여전히 모호한 operation을 보고한다 |
+| `--allow-speculative` | 모델이 근거 없다고 매긴 제안까지 적용한다 |
+| `--overwrite` | 기존 설명을 품질과 무관하게 전부 교체한다 |
+| `--language <이름>` | 출력 언어. 생략하면 스펙에서 판정한다 |
+| `--max-ops N` | operation이 N개를 넘으면 호출 전에 중단한다 |
+
+출력 언어는 첫 호출 전에 확정된다 — 모델에게 맡기지 않고 스펙에 이미
+쓰인 산문에서 판정하며, 비용이 발생하기 전에 preflight 줄로 함께 출력된다.
+`--language`로 직접 지정할 수 있다.
+
+실행이 보장하는 것:
+
+- 모델은 **문자열만** 돌려주고, 쓸 수 있는 위치는 고정된 화이트리스트로
+  제한된다 — `type`, `required`, `$ref`, `x-soap`, `xml`은 어떤 응답으로도
+  도달할 수 없다.
+- 모든 제안은 **grounding** 등급(`named` / `documented` / `inferred` /
+  `speculative`)을 달고 오며, 근거 없는 추측은 `--allow-speculative`가
+  없으면 폐기된다.
+- 무언가를 쓴 실행은 반드시 `verify()`를 통과해야 하고, 통과하지 못하면
+  아무것도 쓰지 않는다.
+- 무엇이 생성됐는지는 `x-s2o.agentize`에 JSON Pointer로, 스키마 노드
+  바깥에 기록된다 — 그래서 재실행은 멱등이고 리뷰어는 모델이 쓴 문장을
+  구분할 수 있다.
+
+`agentize`는 `minify_for_mcp`의 결정론적 정리도 함께 적용하므로 그 결과도
+diff에 나타난다. 출력은 텍스트 스펙이니 `git diff`로 확인하면 된다.
 
 ## x-soap 확장 명세 (런타임 구현 계약)
 

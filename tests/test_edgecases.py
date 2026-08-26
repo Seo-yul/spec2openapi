@@ -260,3 +260,24 @@ def _request_schema(spec, op_id):
         if post and post["operationId"] == op_id:
             return post["requestBody"]["content"]["application/json"]["schema"]
     raise AssertionError(f"operation {op_id} not found")
+
+
+def test_a_partial_sequence_branch_is_rejected():
+    """묶음 branch 는 통째로 선택되거나 통째로 빠져야 한다.
+
+    일부만 보내면 XSD 를 위반하는 봉투가 나가고 서버는 정체불명의 500 으로
+    답한다 - 이 로컬 검사가 막으라고 있는 바로 그 상황이다.
+    """
+    from spec2openapi.bridge import _choice_violations
+
+    schema = {"x-soap-choice": [
+        {"members": [["cardNumber", "cardExpiry"], "iban"], "required": True}]}
+
+    assert _choice_violations(schema, {"cardNumber": "4111"})
+    assert _choice_violations(schema, {"cardExpiry": "12/34"})
+    # 온전히 채운 묶음과 다른 branch 단독은 위반이 아니다.
+    assert _choice_violations(
+        schema, {"cardNumber": "4111", "cardExpiry": "12/34"}) == []
+    assert _choice_violations(schema, {"iban": "DE00"}) == []
+    # branch 를 넘나드는 것은 여전히 위반이다.
+    assert _choice_violations(schema, {"cardNumber": "4111", "iban": "DE00"})

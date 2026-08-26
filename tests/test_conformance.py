@@ -1228,3 +1228,47 @@ def test_x_oneof_and_x_anyof_promoted(version):
     assert s["V"]["oneOf"] == [{"type": "integer"}] and "x-oneOf" in s["V"]
     assert any("promoted to native oneOf" in a
                for a in out["x-s2o"]["assumptions"])
+
+
+def test_default_response_subtree_is_converted_to_31():
+    """responses 의 "default" 는 스키마의 default 값이 아니라 응답 이름이다.
+
+    data 키워드로 보고 통째로 복사하면 그 안의 nullable 이 변환되지 않은
+    채 남아, JSON Schema 2020-12 가 모르는 키워드를 든 3.1 문서가 나간다.
+    """
+    from spec2openapi.openapi import to_openapi_31
+
+    def _body():
+        return {"content": {"application/json":
+                            {"schema": {"type": "string", "nullable": True}}}}
+
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/x": {"get": {"operationId": "gx", "responses": {
+                "200": dict(description="ok", **_body()),
+                "default": dict(description="err", **_body())}}}}}
+    out = to_openapi_31(spec)
+    responses = out["paths"]["/x"]["get"]["responses"]
+    for name in ("200", "default"):
+        schema = responses[name]["content"]["application/json"]["schema"]
+        assert "nullable" not in schema, name
+        assert schema["type"] == ["string", "null"], name
+
+
+def test_media_type_examples_are_not_walked_as_schemas():
+    """Example Object 의 value 는 사용자 데이터다.
+
+    스키마로 착각해 walk 하면 사용자가 예시로 실어둔 nullable 이 type
+    배열로 바뀌어, 예시가 원본과 달라진다.
+    """
+    from spec2openapi.openapi import to_openapi_31
+
+    payload = {"nullable": True, "type": "string"}
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/x": {"get": {"operationId": "gx", "responses": {
+                "200": {"description": "ok", "content": {"application/json": {
+                    "schema": {"type": "object"},
+                    "examples": {"sample": {"value": payload}}}}}}}}}}
+    out = to_openapi_31(spec)
+    got = (out["paths"]["/x"]["get"]["responses"]["200"]
+           ["content"]["application/json"]["examples"]["sample"]["value"])
+    assert got == payload

@@ -333,9 +333,9 @@ def _choice_violations(schema: dict[str, Any], data: Any) -> list[str]:
     A `members[]` entry is normally a bare property name (one branch),
     but may also be a list of names — a branch that is itself an
     xsd:sequence of 2+ elements (#141 B2). Those names belong together,
-    so the branch counts as "chosen" when any of its own names is set,
-    and setting several of them together is not a violation; only
-    choosing more than one *branch* (or none, when required) is."""
+    so the branch counts as "chosen" when any of its own names is set
+    and must then be set in full; choosing more than one *branch* (or
+    none, when required) is the other violation."""
     if not isinstance(data, dict):
         return []
     errors: list[str] = []
@@ -350,6 +350,15 @@ def _choice_violations(schema: dict[str, Any], data: Any) -> list[str]:
             if hit:
                 chosen.append(m)
                 present.extend(hit)
+                if isinstance(m, list) and len(hit) < len(names):
+                    # 묶음 branch 는 통째로 선택되거나 통째로 빠져야
+                    # 한다. 일부만 보내면 XSD 위반 봉투가 나가고 서버는
+                    # 정체불명의 500 으로 답한다 - 이 검사가 막으려던 것.
+                    missing = [n for n in names if n not in hit]
+                    errors.append(
+                        f"branch {m} must be set together "
+                        f"(missing {missing})"
+                    )
         if len(chosen) > 1:
             errors.append(
                 f"at most one of {members} may be set (got {present})"
