@@ -40,7 +40,7 @@ The fixed-runtime deployment model — build one image, swap the spec via a Kube
 - **Structured verification (`verify`)** — a library API that runs 21 checks over a converted document (Swagger- and WSDL-converted alike): document shape, MCP tool-name rules (SEP-986), tool descriptions, the full `x-soap` contract, and — with the optional deps installed — `openapi-spec-validator` plus the FastMCP in-memory round-trip. Returns a deterministic, JSON-serializable report in which every check carries normative citations and "could not check" (`skip`) is always distinguishable from "checked and passed". `verify` never raises; `spec2openapi validate --format json` exposes the same report on the CLI.
 - **MCP tool-payload minification (optional)** — `minify_for_mcp()` shrinks and enriches what FastMCP actually sends the model: foreign vendor extensions are stripped from schema subtrees, and error responses / payload examples — which the MCP tool shape otherwise drops — can be folded into tool descriptions deterministically. Serving behavior is unchanged. See [Minifying the LLM-facing surface](#minifying-the-llm-facing-surface-optional).
 - **LLM-filled descriptions (optional)** — `spec2openapi agentize` writes the descriptions a source spec leaves empty: schema properties, operation summaries, parameter docs; optionally readable tool names (`--rename-tools`). The model returns strings only, into a fixed JSON Pointer whitelist; every suggestion carries a grounding grade and ungrounded ones are dropped; the result must pass `verify()` or nothing is written. See [Filling the gaps with an LLM](#filling-the-gaps-with-an-llm-optional).
-- **SOAP bridge — required to *serve* SOAP specs** — `pip install "spec2openapi[mcp]"` adds the bridge (custom httpx transport) that implements the `x-soap` contract, plus FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors. **Swagger-converted (pure REST) specs do not need this** — any OpenAPI runtime serves them. Only SOAP-converted specs require the bridge at runtime.
+- **SOAP bridge — required to *serve* SOAP specs** — `pip install "spec2openapi[mcp]"` adds the bridge (custom httpx2 transport) that implements the `x-soap` contract, plus FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors. **Swagger-converted (pure REST) specs do not need this** — any OpenAPI runtime serves them. Only SOAP-converted specs require the bridge at runtime.
 
 ## Installation
 
@@ -53,7 +53,7 @@ pip install spec2openapi          # converter + CLI (zeep, lxml, PyYAML)
 pip install "spec2openapi[mcp]"   # + SOAP bridge & runtime — required to serve SOAP specs
 ```
 
-> The core install is enough to **convert** any spec and to serve **Swagger-converted (REST)** specs from your own runtime. The `[mcp]` extra is required only to **serve SOAP-converted** specs (it provides the bridge that turns JSON tool calls into SOAP envelopes).
+> The core install is enough to **convert** any spec and to serve **Swagger-converted (REST)** specs from your own runtime. The `[mcp]` extra is required only to **serve SOAP-converted** specs (it provides the bridge that turns JSON tool calls into SOAP envelopes). It installs FastMCP 4 and httpx2.
 
 ## Quick start
 
@@ -182,7 +182,7 @@ Pipelines that must not accept guessed conversions can pass `--strict` to `upgra
 
 ## Minifying the LLM-facing surface (optional)
 
-When a spec is served over MCP, the model never reads the OpenAPI document. FastMCP sends the tool list: `name`, `description`, `inputSchema`, and (FastMCP 3.x) an `outputSchema` built from the 2xx response schema. Everything else — `info`, unused components, error responses, media-type examples, the `$ref` structure — stays on the server. That has two costs: schema content is copied into tool schemas verbatim, so machine-to-machine vendor extensions burn context tokens in every `tools/list`; and human-authored facts with no slot in the tool shape (error responses, request/response examples) silently vanish.
+When a spec is served over MCP, the model never reads the OpenAPI document. FastMCP sends the tool list: `name`, `description`, `inputSchema`, and an `outputSchema` built from the 2xx response schema. Everything else — `info`, unused components, error responses, media-type examples, the `$ref` structure — stays on the server. That has two costs: schema content is copied into tool schemas verbatim, so machine-to-machine vendor extensions burn context tokens in every `tools/list`; and human-authored facts with no slot in the tool shape (error responses, request/response examples) silently vanish.
 
 `minify_for_mcp` addresses both directions as an optional post-processing step — the conversion pipeline itself is unchanged:
 
@@ -192,8 +192,8 @@ spec = spec2openapi.minify_for_mcp(spec, enrich=("errors", "examples"))
 ```
 
 - **Default**: foreign vendor `x-*` extensions are removed from schema subtrees (the locations FastMCP copies into tool payloads). Everything a runtime or a reader needs survives: `x-soap*` and `xml` annotations (SOAP bridge), `x-s2o`, `x-fastmcp-*`, the project's preservation extensions (`x-pattern`, `x-collectionFormat`), and documentation-bearing extensions (`x-enum-varnames`, `x-example`, ...). Protect your own with `keep_extensions=("x-acme-*",)`.
-- **`enrich`**: `"errors"` folds error responses into the description (`Errors: 404 (not found); ...` — they never reach the model otherwise); `"examples"` folds request/response payload examples (`Example request: {...}`) and hoists parameter-level `example` values into the parameter schema, where FastMCP actually shows them. Only facts already in the document are used — nothing is invented, and re-runs never duplicate a fold.
-- **Opt-in trims**: `max_description=N` caps the descriptions that reach the payload (truncated text is marked with `…`); `drop_value_examples=True` strips in-schema examples — they usually *help* the model format arguments, so measure before enabling.
+- **`enrich`**: `"errors"` folds error responses into the description (`Errors: 404 (not found); ...` — they never reach the model otherwise); `"examples"` folds request/response payload examples (`Example request: {...}`) and hoists parameter-level `example` values into the parameter schema. Only facts already in the document are used — nothing is invented, and re-runs never duplicate a fold.
+- **Opt-in trims**: `max_description=N` caps the descriptions that reach the payload (truncated text is marked with `…`); `drop_value_examples=True` strips in-schema and parameter-level examples — they usually *help* the model format arguments, so measure before enabling.
 
 For any option combination the output is a valid OpenAPI document, still passes `check_fastmcp_ready`, and serves identically — no option touches the callable surface, and SOAP bridge envelopes are byte-identical. What was removed or folded is summarized under `x-s2o.minify`. Minification is one-way: write the result to a separate file and keep the original.
 
@@ -290,7 +290,7 @@ kubectl create configmap my-mcp-spec --from-file=openapi.yaml
 kubectl apply -f k8s/example.yaml    # Deployment mounts /config/openapi.yaml
 ```
 
-Only the ConfigMap changes per service; credentials live in a Secret (`SPEC2OPENAPI_ENDPOINT`, `SPEC2OPENAPI_AUTH` = `basic`|`wsse`, `SPEC2OPENAPI_USERNAME`/`PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`, `SPEC2OPENAPI_SOAP_HEADERS`). The MCP endpoint is `http://<service>:8000/mcp` (streamable HTTP).
+Only the ConfigMap changes per service; credentials live in a Secret (`SPEC2OPENAPI_ENDPOINT`, `SPEC2OPENAPI_AUTH` = `basic`|`wsse`, `SPEC2OPENAPI_USERNAME`/`PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`, `SPEC2OPENAPI_SOAP_HEADERS`). TLS certificates are checked against the operating system's trust store; with `SPEC2OPENAPI_TRUST_ENV` on, `SSL_CERT_FILE` / `SSL_CERT_DIR` take precedence. The MCP endpoint is `http://<service>:8000/mcp` (streamable HTTP).
 
 ## Limitations
 
@@ -330,7 +330,7 @@ src/spec2openapi/
   convert.py   core public API
   checks.py    structured verification (verify / VerifyReport)
   cli.py       convert / upgrade / inspect / validate / serve
-  bridge.py    [mcp] SOAP bridge (httpx transport)
+  bridge.py    [mcp] SOAP bridge (httpx2 transport)
   server.py    [mcp] FastMCP glue
 ```
 

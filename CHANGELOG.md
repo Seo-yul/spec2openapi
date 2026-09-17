@@ -42,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Documented in both READMEs.
 
 ### Changed
+- The `[mcp]` extra requires FastMCP 4 (`fastmcp>=4.0`) and uses `httpx2`
+  instead of `httpx`. `SoapBridgeTransport` is an
+  `httpx2.AsyncBaseTransport`, so a hand-built client mounts it on an
+  `httpx2.AsyncClient`. TLS certificates are checked against the operating
+  system's trust store; with `SPEC2OPENAPI_TRUST_ENV` on, `SSL_CERT_FILE` /
+  `SSL_CERT_DIR` take precedence.
+- `minify_for_mcp(drop_value_examples=True)` also removes parameter-level
+  `example` values, which FastMCP copies into the tool's input schema.
 - `x-soap-choice` entries describe *branches*, not individual elements
   (#141). A `members[]` entry is still a bare property name for the usual
   single-element branch, but a branch that is itself an `xsd:sequence` now
@@ -54,6 +62,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chosen or omitted as a unit.
 
 ### Fixed
+- `verify()`'s FastMCP round-trip and `agentize --self-check` read tool
+  input schemas by the MCP SDK's `input_schema` field, so the reported
+  parameters stay correct with FastMCP's camelCase compatibility layer
+  turned off.
 - Each converted spec gets its own SOAP fault schema (#142). Every 3.0
   document from `convert_wsdl` previously aliased one process-global
   dict, so editing `components.schemas.SoapFault` on one spec silently

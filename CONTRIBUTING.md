@@ -37,7 +37,7 @@ All 190 tests should pass before you start. Python 3.10+ is required.
    the XSD sequence order and is used for XML serialization. Do not introduce
    sorting anywhere in the emit path.
 4. **Core stays lean.** The core package depends only on `zeep`, `lxml`, and
-   `PyYAML`. Anything requiring `fastmcp`/`httpx` belongs behind the `[mcp]`
+   `PyYAML`. Anything requiring `fastmcp`/`httpx2` belongs behind the `[mcp]`
    extra (`bridge.py`, `server.py`) with lazy imports.
 
 ## Adding tests
