@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-08-27
+## [0.7.0] - 2026-09-17
 
 ### Added
 - `spec2openapi agentize` — an optional command that uses an LLM to write
@@ -33,10 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   The output language is decided before the first call — detected from the
   prose already in the spec — and printed with the preflight line;
-  `--language` overrides it. Asking the model to match the document's
-  language instead produced a different answer per run, and a spec that
-  came back in the wrong language read as correct to `verify()` and to a
-  reviewer skimming the diff.
+  `--language` overrides it.
 
   Requires an optional extra: `pip install 'spec2openapi[llm-anthropic]'`
   or `[llm-openai]`. `import spec2openapi` pulls in neither SDK, and the
