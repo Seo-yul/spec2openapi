@@ -1,4 +1,4 @@
-"""Core conversion API (no MCP/httpx dependencies).
+"""Core conversion API (no MCP/httpx2 dependencies).
 
     spec = spec2openapi.convert_wsdl("https://host/service?wsdl")
     spec2openapi.dump_spec(spec)          # yaml/json text

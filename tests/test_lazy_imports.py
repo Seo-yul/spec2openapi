@@ -26,7 +26,7 @@ def test_plain_import_leaves_soap_stack_out():
         spec2openapi.convert_swagger(
             {"swagger": "2.0", "info": {"title": "t", "version": "1"},
              "paths": {}})
-        print([m for m in ("zeep", "lxml", "httpx") if m in sys.modules])
+        print([m for m in ("zeep", "lxml", "httpx2") if m in sys.modules])
     """)
     assert out == "[]"
 

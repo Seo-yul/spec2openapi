@@ -707,7 +707,7 @@ def test_tool_params_preserve_input_schema_order_not_alphabetized():
 
 def test_fastmcp_roundtrip_closes_dummy_client_on_success(monkeypatch):
     pytest.importorskip("fastmcp")
-    import httpx as httpx_mod
+    import httpx2 as httpx_mod
 
     closed = []
     orig_aclose = httpx_mod.AsyncClient.aclose
@@ -730,7 +730,7 @@ def test_fastmcp_roundtrip_closes_dummy_client_on_success(monkeypatch):
 def test_fastmcp_roundtrip_closes_dummy_client_on_from_openapi_failure(
         monkeypatch):
     pytest.importorskip("fastmcp")
-    import httpx as httpx_mod
+    import httpx2 as httpx_mod
     from fastmcp import FastMCP
 
     closed = []
@@ -810,7 +810,7 @@ def test_checks_module_does_not_import_optional_deps():
     # 새 프로세스에서 코어 import만으로 fastmcp/zeep가 로드되지 않아야 한다
     import subprocess
     code = ("import sys; import spec2openapi, spec2openapi.checks; "
-            "bad = {'fastmcp', 'zeep', 'httpx'} & set(sys.modules); "
+            "bad = {'fastmcp', 'zeep', 'httpx2'} & set(sys.modules); "
             "sys.exit(1 if bad else 0)")
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True)
     assert proc.returncode == 0, proc.stderr.decode()

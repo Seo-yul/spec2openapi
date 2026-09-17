@@ -489,18 +489,18 @@ def test_pass_progress_is_printed_to_stderr(capsys):
 
 
 def test_tool_payloads_reports_client_construction_failure(monkeypatch):
-    """httpx.AsyncClient() 생성 자체가 실패해도(예: 잘못된 proxy
+    """httpx2.AsyncClient() 생성 자체가 실패해도(예: 잘못된 proxy
     환경변수) 트레이스백 없이 사유 문자열로 돌아와야 한다 - 밖에서
     잡아주는 호출자가 없으므로 여기서 잡지 않으면 완료된 보강 전체가
     날아간다 (Ruling 63)."""
-    import httpx
+    import httpx2
 
     from spec2openapi.agentize import _tool_payloads
 
     def boom(*a, **k):
         raise RuntimeError("모의 프록시 설정 오류")
 
-    monkeypatch.setattr(httpx, "AsyncClient", boom)
+    monkeypatch.setattr(httpx2, "AsyncClient", boom)
     tools, reason = _tool_payloads(pipeline_spec())
     assert tools is None
     assert "프록시 설정 오류" in reason
