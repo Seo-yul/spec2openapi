@@ -193,7 +193,7 @@ def _tool_payloads(spec: dict) -> tuple[list[dict] | None, str]:
                 mcp = FastMCP.from_openapi(spec, client=client)
                 async with Client(mcp) as c:
                     return [{"name": t.name, "description": t.description,
-                             "inputSchema": t.inputSchema}
+                             "inputSchema": t.input_schema}
                             for t in await c.list_tools()]
             finally:
                 await client.aclose()

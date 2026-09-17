@@ -81,6 +81,9 @@ markers = [
     "agentize_eval: opt-in strip-and-regenerate accuracy sweep",
 ]
 addopts = "-m 'not corpus and not llm and not agentize_eval'"
+filterwarnings = [
+    "error::fastmcp.exceptions.FastMCPDeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 88

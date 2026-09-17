@@ -436,6 +436,17 @@ def test_tool_payloads_succeeds_in_a_synchronous_context():
     assert isinstance(tools, list)
 
 
+def test_tool_payloads_read_input_schema_without_camelcase_compat(
+        monkeypatch):
+    fastmcp = pytest.importorskip("fastmcp")
+    monkeypatch.setattr(fastmcp.settings, "mcp_camelcase_compat", False)
+    from spec2openapi.agentize import _tool_payloads
+
+    tools, reason = _tool_payloads(pipeline_spec())
+    assert reason == ""
+    assert tools and all(isinstance(t["inputSchema"], dict) for t in tools)
+
+
 def test_examples_permission_gates_example_writes():
     """"examples"는 find_targets()의 생산 대상이 아니라 이미
     properties의 부산물로 나오는 example을 적용할지 결정하는

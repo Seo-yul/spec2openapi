@@ -223,7 +223,7 @@ async def test_hoisted_example_reaches_the_tool_schema():
     mcp = FastMCP.from_openapi(openapi_spec=mini, name="minify")
     async with Client(mcp) as client:
         tools = {t.name: t for t in await client.list_tools()}
-    region = tools["createPet"].inputSchema["properties"]["region"]
+    region = tools["createPet"].input_schema["properties"]["region"]
     assert region.get("example") == "eu-west-1"
 
 
@@ -312,8 +312,8 @@ async def _tool_payload_sizes(spec: dict) -> dict[str, int]:
     return {
         t.name: len(json.dumps(
             {"description": t.description or "",
-             "inputSchema": t.inputSchema,
-             "outputSchema": getattr(t, "outputSchema", None)},
+             "inputSchema": t.input_schema,
+             "outputSchema": getattr(t, "output_schema", None)},
             ensure_ascii=False, sort_keys=True))
         for t in tools
     }
@@ -577,8 +577,8 @@ async def test_leak_map_regression():
         tools = await client.list_tools()
     tool = tools[0]
     blob = json.dumps(
-        {"description": tool.description, "inputSchema": tool.inputSchema,
-         "outputSchema": getattr(tool, "outputSchema", None)},
+        {"description": tool.description, "inputSchema": tool.input_schema,
+         "outputSchema": getattr(tool, "output_schema", None)},
         ensure_ascii=False)
     leaked = {m: (m in blob) for m in _EXPECTED_LEAKS}
     assert leaked == _EXPECTED_LEAKS

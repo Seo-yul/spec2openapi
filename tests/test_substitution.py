@@ -120,7 +120,7 @@ def test_fastmcp_roundtrip_keeps_branches(spec):
 
     tools = anyio.run(_tools)
     assert [t.name for t in tools] == ["Pay"]
-    arg = str(tools[0].inputSchema)
+    arg = str(tools[0].input_schema)
     # FastMCP normalizes oneOf to anyOf; the alternatives must survive
     assert "creditCard" in arg and "bankTransfer" in arg
 

@@ -782,7 +782,7 @@ def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
                         "round-trip failed")]
     data = {"tools": [
         {"name": t.name,
-         "params": list(((getattr(t, "inputSchema", None) or {})
+         "params": list(((getattr(t, "input_schema", None) or {})
                          .get("properties") or {}))}
         for t in sorted(tools, key=lambda t: t.name)]}
     results = [_result("fastmcp.roundtrip", "pass", data=data)]
