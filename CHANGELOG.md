@@ -39,11 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `agentize` detects Japanese for kanji-heavy text whose kana letters are
   at least 5% of its kana and kanji; a stray `・` or `ー` does not count
   (#159).
-- An element's inline anonymous simpleType keeps its own facets and no
-  longer takes the facets of a named simpleType with the same name (zeep
-  gives both the same qname) — including elements inherited through
-  `xsd:extension` or an `xsd:group` reference, and without leaking to a
-  same-named element elsewhere in the container (#159).
 - The SOAP bridge writes floating-point values without an exponent
   (`0.00001`, not `1e-05`) — `xsd:decimal` has no exponent form — and
   non-finite values as `INF` / `-INF` / `NaN` (#159).

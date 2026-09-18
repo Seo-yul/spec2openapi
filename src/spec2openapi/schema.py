@@ -204,28 +204,6 @@ class SchemaConverter:
                     return value
         return None
 
-    def _inline_facets(self, qkey: tuple[str, str] | None,
-                       el_name: str) -> dict[str, Any] | None:
-        """Facets of el_name's inline anonymous simpleType, declared in the
-        container qkey or in one it extends or whose group it references;
-        None when the element is declared with a type instead."""
-        if qkey is None:
-            return None
-        todo, seen = [(qkey[0], "type", qkey[1])], set()
-        while todo:
-            key = todo.pop(0)
-            if key in seen:
-                continue
-            seen.add(key)
-            hit = self.meta.inline_simple.get((*key, el_name))
-            if hit is not None:
-                return hit
-            if el_name in self.meta.declared_children.get(key, ()):
-                # declared right here - with a type, or ambiguously
-                return None
-            todo.extend(self.meta.inherits.get(key, ()))
-        return None
-
     def _child_doc(self, qkey: tuple[str, str] | None, child: str) -> str | None:
         if qkey is None:
             return None
@@ -537,12 +515,7 @@ class SchemaConverter:
         if sub is not None:
             return sub
 
-        inline = self._inline_facets(qkey, el_name)
-        if inline is not None and not isinstance(el_type, zx.ComplexType):
-            base = self._simple_to_schema(el_type, inline_facets=inline)
-        else:
-            base = self._type_to_schema(el_type,
-                                        hint=f"{parent_hint}_{el_name}")
+        base = self._type_to_schema(el_type, hint=f"{parent_hint}_{el_name}")
 
         qname = getattr(el, "qname", None)
         xml_meta: dict[str, Any] = {"name": el_name}
@@ -608,11 +581,7 @@ class SchemaConverter:
             base["description"] = doc
         return base
 
-    def _simple_to_schema(self, t: Any,
-                          inline_facets: dict[str, Any] | None = None
-                          ) -> dict[str, Any]:
-        """inline_facets: the element's own anonymous simpleType - its qname
-        is the element's name, so the named-type lookup must not run."""
+    def _simple_to_schema(self, t: Any) -> dict[str, Any]:
         if t is None:
             return {"type": "string"}
         cls_names = [k.__name__ for k in type(t).__mro__]
@@ -637,10 +606,7 @@ class SchemaConverter:
         builtin_names = {"string", "int", "integer", "decimal", "boolean",
                          "float", "double", "dateTime", "date", "time",
                          "long", "short", "byte", "anyURI", "base64Binary"}
-        if inline_facets is not None:
-            for k, v in inline_facets.items():
-                schema.setdefault(k, v)
-        elif tname and tname not in builtin_names:
+        if tname and tname not in builtin_names:
             facets = self._lookup(self.meta.facets, tns, tname)
             if facets:
                 for k, v in facets.items():
