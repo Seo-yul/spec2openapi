@@ -662,3 +662,49 @@ def test_an_elements_own_documentation_wins_over_its_types(element_doc,
       </xsd:annotation><xsd:restriction base="xsd:string"/>
       </xsd:simpleType></xsd:element>""")
     assert d["description"] == expected
+
+
+# --- #161 review round 2 --------------------------------------------------------
+
+@pytest.mark.parametrize("base_facet, own_facet, bound, value", [
+    ('<xsd:minExclusive value="0"/>', '<xsd:minInclusive value="10"/>',
+     "minimum", 10),
+    ('<xsd:maxExclusive value="100"/>', '<xsd:maxInclusive value="50"/>',
+     "maximum", 50)])
+def test_an_inclusive_bound_replaces_an_inherited_exclusive_one(
+        base_facet, own_facet, bound, value):
+    flag = "exclusiveMinimum" if bound == "minimum" else "exclusiveMaximum"
+    n = _one_prop(
+        f"""<xsd:element name="n"><xsd:simpleType>
+      <xsd:restriction base="tns:Bounded">{own_facet}</xsd:restriction>
+      </xsd:simpleType></xsd:element>""",
+        f"""<xsd:simpleType name="Bounded"><xsd:restriction base="xsd:int">
+      {base_facet}</xsd:restriction></xsd:simpleType>""")
+    assert n[bound] == value
+    assert flag not in n
+
+
+@pytest.mark.parametrize("builtin", ["NMTOKENS", "IDREFS", "ENTITIES"])
+def test_builtin_list_types_drop_length_facets(builtin):
+    toks = _one_prop(f"""<xsd:element name="toks"><xsd:simpleType>
+      <xsd:restriction base="xsd:{builtin}"><xsd:maxLength value="2"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""")
+    assert "maxLength" not in toks
+
+
+def test_an_included_list_base_drops_length_facets():
+    spec = convert_wsdl(str(FIXTURES / "chameleon_list" / "service.wsdl"))
+    ids = _req_props(spec)["ids"]
+    assert "maxLength" not in ids and "minLength" not in ids
+
+
+def test_boolean_enumerations_are_booleans():
+    b = _one_prop("""<xsd:element name="b"><xsd:simpleType>
+      <xsd:restriction base="xsd:boolean"><xsd:enumeration value="true"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""")
+    assert b["type"] == "boolean" and b["enum"] == [True] and b["example"] is True
+    named = _one_prop(
+        '<xsd:element name="nb" type="tns:Flag"/>',
+        """<xsd:simpleType name="Flag"><xsd:restriction base="xsd:boolean">
+      <xsd:enumeration value="1"/></xsd:restriction></xsd:simpleType>""")
+    assert named["enum"] == [True]

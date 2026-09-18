@@ -1,0 +1,8 @@
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:tns="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:include schemaLocation="common.xsd"/>
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="ids"><xsd:simpleType><xsd:restriction base="tns:IdList">
+      <xsd:maxLength value="3"/></xsd:restriction></xsd:simpleType></xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>
+  <xsd:element name="Resp"><xsd:complexType><xsd:sequence><xsd:element name="ok" type="xsd:string"/></xsd:sequence></xsd:complexType></xsd:element>
+</xsd:schema>

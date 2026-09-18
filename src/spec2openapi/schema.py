@@ -614,10 +614,16 @@ class SchemaConverter:
             # the name lookup would find a same-named named type (#161) -
             # its facets and docs come from its own declaration, following
             # its restriction chain
-            zeep_kind = schema.get("type")
+            # the kind zeep resolved, for a base outside the scanned
+            # documents (xsd:include merges them into the includer)
+            if any(k.__name__ == "ListType" for k in type(t).__mro__):
+                fallback = "list"
+            elif schema.get("type") in ("integer", "number", "boolean"):
+                fallback = schema["type"]
+            else:
+                fallback = "string"
             facets, _kind = _simple_type_facets(
-                node, self.meta.simple_types,
-                zeep_kind if zeep_kind in ("integer", "number") else "string")
+                node, self.meta.simple_types, fallback)
             for k, v in facets.items():
                 schema.setdefault(k, v)
             doc = _doc_text(node)

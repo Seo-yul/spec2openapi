@@ -166,6 +166,8 @@ _XSD_INTEGER_BASES = frozenset({
     "unsignedLong", "unsignedInt", "unsignedShort", "unsignedByte",
 })
 _XSD_NUMBER_BASES = frozenset({"decimal", "float", "double"})
+# XSD's builtin list types: their length facets count items
+_XSD_LIST_BASES = frozenset({"NMTOKENS", "IDREFS", "ENTITIES"})
 
 
 def _restriction_number_kind(
@@ -191,6 +193,8 @@ def _restriction_number_kind(
             return "string"
         return _restriction_number_kind(inner, simple_types, _depth + 1)
     local = resolved[1]
+    if local == "boolean":
+        return "boolean"
     if local in _XSD_INTEGER_BASES:
         return "integer"
     if local in _XSD_NUMBER_BASES:
@@ -213,6 +217,12 @@ def _coerce_enum_value(raw: str, kind: str) -> Any:
             return float(raw)
         except ValueError:
             return raw
+    if kind == "boolean":
+        low = raw.strip()
+        if low in ("true", "1"):
+            return True
+        if low in ("false", "0"):
+            return False
     return raw
 
 
@@ -278,8 +288,11 @@ def _simple_type_facets(
     if base:
         resolved = _resolve_qname_ref(base, restriction)
         if resolved is not None and resolved[0] == XSD_NS:
-            kind = ("integer" if resolved[1] in _XSD_INTEGER_BASES
-                    else "number" if resolved[1] in _XSD_NUMBER_BASES
+            local = resolved[1]
+            kind = ("list" if local in _XSD_LIST_BASES
+                    else "boolean" if local == "boolean"
+                    else "integer" if local in _XSD_INTEGER_BASES
+                    else "number" if local in _XSD_NUMBER_BASES
                     else "string")
         elif resolved is not None:
             base_st = _named_simple_type(simple_types, resolved)
@@ -295,8 +308,14 @@ def _simple_type_facets(
                 inner, simple_types, fallback_kind, _depth + 1)
         else:
             kind = fallback_kind
-    facets = {**base_facets,
-              **_own_facets(restriction, "string" if kind == "list" else kind)}
+    own = _own_facets(restriction, "string" if kind == "list" else kind)
+    facets = dict(base_facets)
+    # a bound this step sets replaces the inherited one, flag included
+    for bound, flag in (("minimum", "exclusiveMinimum"),
+                        ("maximum", "exclusiveMaximum")):
+        if bound in own and flag not in own:
+            facets.pop(flag, None)
+    facets.update(own)
     if kind == "list":
         for key in ("minLength", "maxLength"):
             facets.pop(key, None)
