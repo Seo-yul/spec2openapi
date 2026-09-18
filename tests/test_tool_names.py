@@ -156,3 +156,15 @@ def test_converted_long_ids_pass_verify():
     report = verify(convert_swagger(LEGACY))
     assert report.ok, [r.message for r in report.results
                        if r.status == "fail"]
+
+
+@pytest.mark.parametrize("oid", ["__internal", "-", ".", "_"])
+def test_an_operation_id_with_no_exposed_tool_name_fails(oid):
+    """FastMCP 4 keeps only the part before '__' and slugifies it - these
+    ids leave an empty tool name."""
+    assert fastmcp_tool_name(oid) == ""
+    spec = _spec([oid])
+    fails = [s for s in _statuses(verify(spec, deep=False),
+                                  "tool-name.present") if s[0] == "fail"]
+    assert fails and oid in fails[0][1]
+    assert any(oid in p for p in check_fastmcp_ready(spec))

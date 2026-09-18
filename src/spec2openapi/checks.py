@@ -110,8 +110,9 @@ REGISTRY: dict[str, dict] = {
                      "Swagger 2.0 input must be converted first.",
         "level": "fail", "refs": (_REF_OAS,)},
     "tool-name.present": {
-        "statement": "Every operation must carry an operationId; it becomes "
-                     "the MCP tool name.",
+        "statement": "Every operation must carry an operationId that leaves "
+                     "a non-empty FastMCP tool name; it becomes the MCP tool "
+                     "name.",
         "level": "fail", "refs": (_REF_TOOLS_LIST, _REF_FASTMCP)},
     "tool-name.safe": {
         "statement": "operationId must match [A-Za-z0-9_.-]{1,64} (a subset "
@@ -234,10 +235,18 @@ def _check_has_operations(spec):
 def _check_tool_name_present(spec):
     out = []
     for path, method, op in _operations(spec):
-        if not op.get("operationId"):
+        oid = op.get("operationId")
+        if not oid:
             out.append(_finding(
                 "tool-name.present",
                 f"{str(method).upper()} {path}: missing operationId",
+                location=_op_location(path, method)))
+        # ids outside the safe grammar are reported by tool-name.safe
+        elif (isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid)
+                and not fastmcp_tool_name(oid)):
+            out.append(_finding(
+                "tool-name.present",
+                f"{oid}: FastMCP derives an empty tool name from it",
                 location=_op_location(path, method)))
     return out
 

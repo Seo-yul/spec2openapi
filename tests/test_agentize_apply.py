@@ -273,6 +273,18 @@ def test_creating_an_operation_id_is_not_recorded_as_a_rename():
     assert "#/paths/~1pets/put/operationId" in rep.applied
 
 
+def test_returning_the_same_rule_breaking_name_is_not_a_rejection():
+    """모델이 기존 이름을 그대로 돌려준 것은 개명 시도가 아니다 -
+    규칙 위반으로 거부 건수에 올리지 않는다."""
+    spec = base_spec()
+    spec["paths"]["/pets"]["post"]["operationId"] = "create-pet"
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/paths/~1pets/post/operationId", "create-pet", "named")],
+        rename_tools=True)
+    assert out["paths"]["/pets"]["post"]["operationId"] == "create-pet"
+    assert rep.rejected == [] and rep.renamed == {} and rep.applied == {}
+
+
 def test_rejected_message_bounds_and_escapes_the_pointer():
     spec = base_spec()
     nasty = "#/nope/\x1b[2J\r" + "x" * 5000

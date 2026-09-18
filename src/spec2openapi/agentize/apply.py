@@ -355,6 +355,13 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
             continue
 
         if key == "operationId":
+            prior = parent.get("operationId")
+            if prior == text:
+                # 같은 이름을 돌려준 것은 개명이 아니다. 기록하면 applied 를
+                # 부풀리고 "N 개를 개명했다"는 거짓 보고가 된다. 규칙
+                # 검사보다 먼저 본다 - 지시대로 이름을 유지한 것을 거부로
+                # 세지 않는다.
+                continue
             if fastmcp_tool_name(text) != text:
                 # FastMCP 4 가 다른 이름으로 노출할 id 는 tool 이름 ==
                 # operationId 를 깨고, 결과 verify 에서 실행 전체가 취소된다.
@@ -362,11 +369,6 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                     f"{_safe(ptr)}: operationId 가 tool 이름 규칙"
                     f"([A-Za-z0-9_], 56자 이내, 연속·앞뒤 밑줄 없음)에 "
                     f"맞지 않음")
-                continue
-            prior = parent.get("operationId")
-            if prior == text:
-                # 같은 이름을 돌려준 것은 개명이 아니다. 기록하면 applied 를
-                # 부풀리고 "N 개를 개명했다"는 거짓 보고가 된다.
                 continue
             if isinstance(prior, str) and prior:
                 report.renamed[ptr.rsplit("/", 1)[0]] = prior

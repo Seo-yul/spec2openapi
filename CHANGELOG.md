@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tool-name.normalization-collision` and `tool-name.normalized` follow
   FastMCP 4's naming — the part before `__`, slugified, truncated to 56 —
   so they report the collisions and renames it produces (#155).
+- `tool-name.present` fails an operationId from which FastMCP 4 derives an
+  empty tool name, such as `__internal` or `-` (#155).
 - `agentize` keeps the `Errors: ...` / `Example ...:` lines that
   `minify_for_mcp` folded into an operation description when it writes a
   new description, and `--rename-tools` moves the `x-s2o.minify.folded`
