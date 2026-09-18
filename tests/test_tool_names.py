@@ -182,3 +182,15 @@ def test_the_rename_prompt_states_the_rule_apply_enforces():
     rule = _RENAME_RULES[_RENAME_RULES.index("규칙:"):]
     for clause in ("[A-Za-z0-9_]", str(FASTMCP_TOOL_NAME_MAX), "연달아", "앞뒤"):
         assert clause in rule, clause
+
+
+def test_length_is_judged_on_the_name_fastmcp_would_truncate():
+    """FastMCP truncates the slug of the part before '__', not the raw id -
+    a long id that leaves a short name is a rename, not a truncation."""
+    oid = "getPets__" + "x" * 51                    # 60 chars -> 'getPets'
+    report = verify(_spec([oid]), deep=False)
+    assert not [s for s in _statuses(report, "tool-name.length")
+                if s[0] == "fail"]
+    assert _statuses(report, "tool-name.normalized") == [
+        ("warn", f"operationId '{oid}' is exposed as tool 'getPets' "
+                 "(FastMCP normalization)")]

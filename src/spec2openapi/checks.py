@@ -17,6 +17,7 @@ from .openapi import (
     _SAFE_TOOL_RE,
     _SCHEMA_REF_PREFIX,
     FASTMCP_TOOL_NAME_MAX,
+    _fastmcp_slug,
     _operations,
     fastmcp_tool_name,
     schema_ref_name,
@@ -119,9 +120,10 @@ REGISTRY: dict[str, dict] = {
                      "of the SEP-986 tool-name grammar).",
         "level": "fail", "refs": (_REF_SEP986, _REF_FASTMCP)},
     "tool-name.length": {
-        "statement": "operationId must be at most 56 characters: FastMCP 4 "
-                     "truncates longer tool names, so the tool is not "
-                     "reachable under its operationId.",
+        "statement": "The tool name FastMCP 4 derives from an operationId "
+                     "must fit in 56 characters: FastMCP truncates longer "
+                     "names, so the tool is not reachable under its "
+                     "operationId.",
         "level": "fail", "refs": (_REF_FASTMCP,)},
     "tool-name.unique": {
         "statement": "operationIds must be unique across the document.",
@@ -346,9 +348,9 @@ def _check_tool_name_normalized(spec):
     out = []
     for path, method, op in _operations(spec):
         oid = op.get("operationId")
-        # longer ids are reported by tool-name.length
+        # names FastMCP truncates are reported by tool-name.length
         if (isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid)
-                and len(oid) <= FASTMCP_TOOL_NAME_MAX):
+                and len(_fastmcp_slug(oid)) <= FASTMCP_TOOL_NAME_MAX):
             norm = fastmcp_tool_name(oid)
             if norm != oid:
                 out.append(_finding(
@@ -364,8 +366,9 @@ def _check_tool_name_length(spec):
     for path, method, op in _operations(spec):
         oid = op.get("operationId")
         # ids outside the safe grammar are reported by tool-name.safe
+        # FastMCP truncates the slug of the part before '__', not the id
         if (isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid)
-                and len(oid) > FASTMCP_TOOL_NAME_MAX):
+                and len(_fastmcp_slug(oid)) > FASTMCP_TOOL_NAME_MAX):
             out.append(_finding(
                 "tool-name.length",
                 f"{oid}: longer than {FASTMCP_TOOL_NAME_MAX} characters; "

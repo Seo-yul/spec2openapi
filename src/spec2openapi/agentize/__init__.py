@@ -21,14 +21,7 @@ from typing import Any, Iterable
 from ..checks import _component_schemas, verify
 from ..errors import ConversionError
 from ..minify import minify_for_mcp
-from ..openapi import (
-    _SAFE_TOOL_RE,
-    FASTMCP_TOOL_NAME_MAX,
-    _exposed_id,
-    _operations,
-    _unescape_pointer_token,
-    fastmcp_tool_name,
-)
+from ..openapi import _operations, _unescape_pointer_token, fastmcp_tool_name
 from .apply import (
     ApplyReport,
     _resolve_parent,
@@ -180,15 +173,17 @@ def _preflight_problems(working: dict, targets: list[Target], *,
       비어 있는(null) description·summary 처럼 그 자리 자체가 실패 원인일
       수 있다.
     - --rename-tools 면 질의하는 operation 중 개명 지시가 새 이름을 내라고
-      하는 것을 개명된 것으로 본다. 문자만 고치면 되는 이름(list-pets,
-      get__v1)은 모델이 낼 자연스러운 형태(FastMCP 가 노출하는 형태)로 본다 -
-      그 이름이 다른 operation 과 겹치면 개명해도 실패한다. operationId 가
-      없거나, 문법이 깨졌거나, 56자를 넘어 새로 지어야 하는 것은 서로 겹치지
-      않는 임시 이름으로 본다 - 앞 56자에서 자른 이름을 낼 이유가 없다. 읽을 만한 이름은 유지하라는 지시를 받고,
-      operation 을 하나씩 보는 모델은 이름이 겹치는지 알 수 없으므로 중복
-      이름은 그대로 둔 채 본다.
+      하는 것 - operationId 가 없거나 FastMCP 가 다른 이름으로 노출하는
+      것 - 에 서로 겹치지 않는 임시 이름을 넣는다. 모델은 겹치지 않는
+      이름을 낼 수 있으므로 그 실행은 고칠 수 있다. 모델이 다른 operation
+      과 겹치는 이름을 내면 적용 뒤의 verify 가 막는다 - 모델의 선택에 달린
+      실패는 호출 전에 확정할 수 없다. 규칙에 맞는 이름은 유지하라는
+      지시를 받고, operation 을 하나씩 보는 모델은 이름이 겹치는지 알 수
+      없으므로, 그런 이름끼리의 중복은 그대로 둔 채 본다.
 
-    검사 id 로 실패를 봐주면 채우지 않을 자리까지 봐주거나, 한 결함이
+    사본은 이름을 겹치지 않는 유효한 이름으로, 빈 자리를 문자열로만
+    바꾸므로 verify 를 통과하는 입력을 막는 일은 없다. 검사 id 로 실패를
+    봐주면 채우지 않을 자리까지 봐주거나, 한 결함이
     함께 깨는 다른 검사(openapi.schema-valid 등)를 놓친다.
     """
     spec = copy.deepcopy(working)
@@ -214,12 +209,6 @@ def _preflight_problems(working: dict, targets: list[Target], *,
                 continue
             oid = op.get("operationId")
             if isinstance(oid, str) and oid and fastmcp_tool_name(oid) == oid:
-                continue
-            natural = (_exposed_id(oid) if isinstance(oid, str)
-                       and _SAFE_TOOL_RE.fullmatch(oid)
-                       and len(oid) <= FASTMCP_TOOL_NAME_MAX else "")
-            if natural:
-                op["operationId"] = natural
                 continue
             n += 1
             while f"s2o_rename_{n}" in taken:

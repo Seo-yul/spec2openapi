@@ -965,17 +965,31 @@ def test_a_null_summary_the_run_rewrites_does_not_fail_the_preflight():
 
 @pytest.mark.parametrize("renamed, taken", [("list-pets", "list_pets"),
                                             ("get__v1", "get_v1")])
-def test_rename_preflight_sees_the_natural_rename_collide(renamed, taken):
-    """규칙상 바꿔야 하는 이름은 모델이 자연스러운 형태로 고친다 - 그 이름을
-    다른 operation 이 이미 쓰면 어떤 개명도 성공하지 못한다 (#155)."""
+def test_rename_preflight_leaves_a_fixable_name_to_the_run(renamed, taken):
+    """개명할 operation 은 모델이 겹치지 않는 새 이름을 낼 수 있다 - 호출
+    전에 막는 것은 어떤 응답으로도 고칠 수 없는 입력뿐이다 (#155)."""
     ok = {"responses": {"200": {"description": "ok"}}}
     spec = _two_op_spec({**ok, "operationId": renamed},
                         {**ok, "operationId": taken,
                          "description": "Returns one pet by its id."})
-    provider = _numbering_provider()
-    with pytest.raises(AgentizeError, match="LLM을 호출하기 전에"):
-        agentize_spec(spec, provider, rename_tools=True)
-    assert provider.calls == []
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
+
+
+def test_rename_preflight_never_rejects_an_input_that_passes_verify():
+    """get__v1 은 get 으로 노출될 뿐 verify 를 통과한다 - 모델이 이름을
+    유지하는 실행도 성공해야 한다."""
+    from spec2openapi import verify
+
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "get__v1"},
+                        {**ok, "operationId": "get_v1",
+                         "description": "Returns one pet by its id."})
+    assert verify(spec).ok
+    keep = _op_provider("Reads one record by key.", "get__v1")
+    result = agentize_spec(spec, keep, rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "get__v1"
+    assert verify(result.spec).ok
 
 
 def test_a_rule_breaking_name_without_a_collision_is_left_to_the_run():

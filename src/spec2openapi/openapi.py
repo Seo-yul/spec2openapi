@@ -54,11 +54,15 @@ def fastmcp_tool_name(operation_id: str) -> str:
     and edge underscores are stripped — then truncated to 56 characters.
     FastMCP suffixes a duplicate name with '_2', '_3', so the names of
     distinct operations must not coincide either."""
+    return _fastmcp_slug(operation_id)[:FASTMCP_TOOL_NAME_MAX]
+
+
+def _fastmcp_slug(operation_id: str) -> str:
+    """fastmcp_tool_name() before the 56-character truncation."""
     name = operation_id.split("__")[0]
     name = _FASTMCP_SEPARATORS_RE.sub("_", name)
     name = _FASTMCP_DROPPED_RE.sub("", name)
-    name = _FASTMCP_UNDERSCORES_RE.sub("_", name).strip("_")
-    return name[:FASTMCP_TOOL_NAME_MAX]
+    return _FASTMCP_UNDERSCORES_RE.sub("_", name).strip("_")
 
 
 def _exposed_id(raw: str) -> str:

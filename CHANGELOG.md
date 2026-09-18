@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `verify()` and `check_fastmcp_ready()` check `tool-name.length`: an
-  operationId longer than 56 characters fails, because FastMCP 4 truncates
-  the tool name (#155).
+  operationId whose FastMCP 4 tool name would exceed 56 characters fails,
+  because FastMCP truncates it (#155).
 
 ### Changed
 - Converted operationIds are names FastMCP 4 exposes unchanged: at most 56
