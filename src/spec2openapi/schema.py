@@ -19,7 +19,7 @@ from zeep import xsd as zx
 
 from .errors import ConversionError
 from .openapi import sanitize_name  # noqa: F401  (canonical home; re-export)
-from .parser import XsdMeta
+from .parser import XsdMeta, _doc_text, _facets_from_restriction
 
 logger = logging.getLogger("spec2openapi")
 
@@ -606,7 +606,18 @@ class SchemaConverter:
         builtin_names = {"string", "int", "integer", "decimal", "boolean",
                          "float", "double", "dateTime", "date", "time",
                          "long", "short", "byte", "anyURI", "base64Binary"}
-        if tname and tname not in builtin_names:
+        node = getattr(t, "_s2o_simple_node", None)
+        if node is not None:
+            # an anonymous simpleType: zeep named it after its element, so
+            # the name lookup would find a same-named named type (#161) -
+            # its facets and docs come from its own declaration
+            for k, v in _facets_from_restriction(
+                    node, self.meta.simple_types).items():
+                schema.setdefault(k, v)
+            doc = _doc_text(node)
+            if doc:
+                schema.setdefault("description", doc)
+        elif tname and tname not in builtin_names:
             facets = self._lookup(self.meta.facets, tns, tname)
             if facets:
                 for k, v in facets.items():

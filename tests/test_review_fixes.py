@@ -337,7 +337,6 @@ def test_kana_makes_kanji_heavy_text_japanese():
 
 # --- cycle 3 ------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="#161: zeep gives an anonymous simpleType its element's name; no name-free way to tell them apart yet")
 @pytest.mark.parametrize("named_ns", ["urn:t", "urn:b"])
 def test_an_inline_simple_type_keeps_its_own_facets(named_ns):
     """zeep names an anonymous simpleType after its element, so its qname
@@ -444,9 +443,14 @@ def test_a_nested_inline_type_does_not_leak_to_a_same_named_outer_element(
     assert "maxLength" not in outer_code
     if outer == "tns:code":
         assert outer_code["enum"] == ["USD", "EUR"]
+    inner = _req_props(spec)["inner"]
+    ref = (inner.get("allOf") or [inner])[0].get("$ref")
+    inner_schema = (spec["components"]["schemas"][ref.rsplit("/", 1)[-1]]
+                    if ref else inner)
+    inner_code = inner_schema["properties"]["code"]
+    assert inner_code["maxLength"] == 3 and "enum" not in inner_code
 
 
-@pytest.mark.xfail(strict=True, reason="#161: zeep gives an anonymous simpleType its element's name; no name-free way to tell them apart yet")
 @pytest.mark.parametrize("via", ["extension", "group"])
 def test_an_inherited_inline_type_keeps_its_own_facets(via):
     if via == "extension":
@@ -542,3 +546,40 @@ def test_group_and_type_names_are_separate():
     spec = convert_wsdl(content=_wsdl(types))
     addr_zip = _component_of(spec, _req_props(spec)["a"])["properties"]["zip"]
     assert addr_zip["type"] == "integer" and "maxLength" not in addr_zip
+    home_zip = _component_of(spec, _req_props(spec)["h"])["properties"]["zip"]
+    assert home_zip["maxLength"] == 5
+
+
+# --- #161: anonymous simpleTypes are told apart without names ------------------
+
+def test_the_zeep_hook_marks_anonymous_simple_types():
+    """The hook wraps zeep's private SchemaVisitor dispatch; if a zeep
+    upgrade changes it, this fails first (conversion then falls back to
+    the name lookup)."""
+    from spec2openapi.parser import install_anonymous_type_hook, parse_wsdl
+
+    assert install_anonymous_type_hook()
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  {_CODE_NAMED}
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    {_INLINE_CODE}<xsd:element name="named" type="tns:code"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    parsed = parse_wsdl(content=_wsdl(types))
+    elements = dict(parsed.operations[0].input_element.type.elements)
+    assert getattr(elements["code"].type, "_s2o_simple_node", None) is not None
+    assert getattr(elements["named"].type, "_s2o_simple_node", None) is None
+
+
+def test_an_anonymous_simple_type_on_an_attribute_keeps_its_facets():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  {_CODE_NAMED}
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="v" type="xsd:string"/></xsd:sequence>
+    <xsd:attribute name="code"><xsd:simpleType>
+      <xsd:restriction base="xsd:string"><xsd:maxLength value="4"/>
+      </xsd:restriction></xsd:simpleType></xsd:attribute>
+  </xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    code = _req_props(convert_wsdl(content=_wsdl(types)))["code"]
+    assert code["maxLength"] == 4 and "enum" not in code

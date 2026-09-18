@@ -81,6 +81,10 @@ class XsdMeta:
     # same-named entry from another namespace
     named_types: set[tuple[str, str]] = (
         dataclasses.field(default_factory=set))
+    # (namespace, name) -> named <simpleType> node across every schema
+    # document, for following a restriction's base (anonymous types too)
+    simple_types: dict[tuple[str, str], etree._Element] = (
+        dataclasses.field(default_factory=dict))
 
 
 @dataclasses.dataclass
@@ -363,6 +367,53 @@ def _scan_schema_root(
                         )
 
 
+_ANONYMOUS_HOOK_INSTALLED = False
+
+
+def install_anonymous_type_hook() -> bool:
+    """Mark each anonymous simpleType with the <simpleType> node that
+    declares it (attribute `_s2o_simple_node`); True once installed.
+
+    zeep names an anonymous simpleType after its element, so its qname can
+    equal a named type's and the raw-XML metadata cannot tell them apart by
+    name (#161). zeep's SchemaVisitor still has the node while it parses;
+    this wraps its simpleType dispatch to carry the node onto the resolved
+    type. zeep's behaviour is unchanged. The dispatch table is private API:
+    if a zeep release changes it, the hook stays off and conversion falls
+    back to the name lookup (a test pins the hook)."""
+    global _ANONYMOUS_HOOK_INSTALLED
+    if _ANONYMOUS_HOOK_INSTALLED:
+        return True
+    try:
+        from zeep.xsd import visitor as zv
+        from zeep.xsd.types.unresolved import UnresolvedCustomType
+
+        table = zv.SchemaVisitor.visitors
+        schema_tag, simple_tag = zv.tags.schema, zv.tags.simpleType
+        original = table[simple_tag]
+    except (ImportError, AttributeError, KeyError, TypeError):
+        return False
+
+    def visit_simple_type(self, node, parent):
+        xsd_type = original(self, node, parent)
+        if (parent.tag != schema_tag
+                and isinstance(xsd_type, UnresolvedCustomType)):
+            resolve = xsd_type.resolve
+
+            def resolve_marked():
+                resolved = resolve()
+                resolved._s2o_simple_node = node
+                return resolved
+
+            xsd_type.resolve = resolve_marked
+        return xsd_type
+
+    table[simple_tag] = visit_simple_type
+    zv.SchemaVisitor.visit_simple_type = visit_simple_type
+    _ANONYMOUS_HOOK_INSTALLED = True
+    return True
+
+
 def _collect_xsd_meta(client: Client, source: str,
                       *, forbid_external: bool = False,
                       huge_tree: bool = False) -> XsdMeta:
@@ -392,6 +443,7 @@ def _collect_xsd_meta(client: Client, source: str,
         except Exception:
             continue
     simple_types = _simple_type_index(roots)
+    meta.simple_types = simple_types
     for root in roots:
         _scan_schema_root(root, meta, simple_types)
     # transitive closure: a member of a member substitutes the outer head
@@ -693,6 +745,7 @@ def _parse_wsdl_location(
         forbid_external=forbid_external,
     )
     try:
+        install_anonymous_type_hook()
         client = Client(source, settings=settings)
     except (FileNotFoundError, ConversionError):
         raise
