@@ -528,6 +528,10 @@ class SchemaConverter:
         nillable = bool(getattr(el, "nillable", False))
         if nillable and "$ref" not in base:
             base["nullable"] = True
+            # an enum constrains null too (OAS 3.0.3, and the 3.1 type
+            # list): xsi:nil must stay an accepted value
+            if isinstance(base.get("enum"), list) and None not in base["enum"]:
+                base["enum"] = [*base["enum"], None]
             nillable = False
 
         doc = self._child_doc(qkey, el_name)

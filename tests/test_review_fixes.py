@@ -708,3 +708,57 @@ def test_boolean_enumerations_are_booleans():
         """<xsd:simpleType name="Flag"><xsd:restriction base="xsd:boolean">
       <xsd:enumeration value="1"/></xsd:restriction></xsd:simpleType>""")
     assert named["enum"] == [True]
+
+
+# --- #161 review round 3 --------------------------------------------------------
+
+def test_an_unresolved_base_does_not_borrow_a_no_namespace_type():
+    """A base missing from the scanned documents (xsd:include merges them
+    into the includer) must not resolve to a same-named no-namespace type:
+    that is an unrelated type as far as the lookup can tell."""
+    from lxml import etree
+
+    from spec2openapi.parser import XSD_NS, _named_simple_type
+
+    index = {("", "Code"): etree.fromstring(
+        f'<simpleType xmlns="{XSD_NS}" name="Code"/>')}
+    assert _named_simple_type(index, ("urn:t", "Code")) is None
+    assert _named_simple_type(index, ("", "Code")) is not None
+
+
+def test_patterns_in_one_restriction_are_alternatives():
+    v = _one_prop("""<xsd:element name="v"><xsd:simpleType>
+      <xsd:restriction base="xsd:string">
+        <xsd:pattern value="[A-Z]+"/><xsd:pattern value="[0-9]+"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""")
+    import re
+    assert re.fullmatch(v["pattern"], "ABC") and re.fullmatch(v["pattern"], "123")
+    assert not re.fullmatch(v["pattern"], "abc")
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_a_nillable_enumeration_accepts_null(version):
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="c" nillable="true"><xsd:simpleType>
+      <xsd:restriction base="xsd:string">
+        <xsd:enumeration value="A"/><xsd:enumeration value="B"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    c = _req_props(convert_wsdl(content=_wsdl(types), openapi_version=version))["c"]
+    assert None in c["enum"]
+
+
+def test_non_finite_values_are_not_emitted():
+    d = _one_prop("""<xsd:element name="d"><xsd:simpleType>
+      <xsd:restriction base="xsd:double">
+        <xsd:enumeration value="INF"/><xsd:enumeration value="1.0"/>
+        <xsd:maxInclusive value="INF"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""")
+    import math
+    for key in ("enum", "maximum", "example"):
+        values = d.get(key)
+        values = values if isinstance(values, list) else [values]
+        assert all(not isinstance(x, float) or math.isfinite(x)
+                   for x in values if x is not None), (key, d)

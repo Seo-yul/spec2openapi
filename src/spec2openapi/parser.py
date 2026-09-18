@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import logging
+import math
 import os
 import tempfile
 import zipfile
@@ -254,12 +255,11 @@ def _facets_from_restriction(
 def _named_simple_type(
         simple_types: dict[tuple[str, str], etree._Element],
         qname: tuple[str, str]) -> etree._Element | None:
-    """A named simpleType by qname; a chameleon-included (no-namespace)
-    declaration is indexed under "" but referenced in the includer's
-    namespace."""
-    # explicit None tests: an lxml element with no children is falsy
-    found = simple_types.get(qname)
-    return found if found is not None else simple_types.get(("", qname[1]))
+    """A named simpleType by exact qname, or None. No fallback to a
+    no-namespace declaration of the same name: that is an unrelated type
+    unless it was chameleon-included, which the scanned documents cannot
+    tell - an unresolved base takes the kind zeep resolved instead."""
+    return simple_types.get(qname)
 
 
 def _simple_type_facets(
@@ -330,8 +330,12 @@ def _own_facets(restriction: etree._Element, kind: str) -> dict[str, Any]:
         for e in restriction.findall(f"{{{XSD_NS}}}enumeration")
         if e.get("value") is not None
     ]
-    if enums:
+    # INF/NaN (xsd:float/double) have no JSON form: drop the enumeration
+    # rather than emit invalid JSON or a value nothing can equal
+    if enums and not any(isinstance(v, float) and not math.isfinite(v)
+                         for v in enums):
         out["enum"] = enums
+    patterns: list[str] = []
     bound_cast = int if kind == "integer" else float
     for facet in restriction:
         if not isinstance(facet.tag, str):
@@ -355,7 +359,9 @@ def _own_facets(restriction: etree._Element, kind: str) -> dict[str, Any]:
             except ValueError:
                 pass
         elif local == "pattern":
-            out["pattern"] = _anchor_pattern(value)
+            # keep the key where the first pattern stood (stable output)
+            out.setdefault("pattern", None)
+            patterns.append(value)
         elif local in ("minLength", "maxLength"):
             try:
                 out[local] = int(value)
@@ -368,9 +374,19 @@ def _own_facets(restriction: etree._Element, kind: str) -> dict[str, Any]:
             # schema-invalid, unlike an enum value of the same shape)
             key = _BOUND_FACET_MAP[local]
             try:
-                out[key] = bound_cast(value)
+                bound = bound_cast(value)
+                # an INF/NaN bound is no bound in JSON (INF is unbounded)
+                if isinstance(bound, float) and not math.isfinite(bound):
+                    continue
+                out[key] = bound
             except ValueError:
                 pass
+    # patterns in one restriction step are alternatives (XSD ORs them)
+    if len(patterns) == 1:
+        out["pattern"] = _anchor_pattern(patterns[0])
+    elif patterns:
+        out["pattern"] = _anchor_pattern(
+            "|".join(f"(?:{p})" for p in patterns))
     # OpenAPI 3.0 exclusive bounds are boolean flags on minimum/maximum
     if "exclusiveMinimumValue" in out:
         out["minimum"] = out.pop("exclusiveMinimumValue")

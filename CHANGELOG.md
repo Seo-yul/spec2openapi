@@ -47,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   length facets, which count items; an element's own documentation
   outranks its type's (#161).
 - Enumerations of an `xsd:boolean` restriction are booleans (#161).
+- Several `pattern` facets in one restriction are alternatives — a value
+  matching any of them is valid (#161).
+- A nillable element with an enumeration accepts `null` (#161).
+- An `INF`/`NaN` enumeration value or bound is not emitted; JSON has no
+  form for it (#161).
+- A simpleType whose base is not found in its own namespace takes no
+  facets from a same-named type in the no-namespace scope (#161).
 - The SOAP bridge writes floating-point values without an exponent
   (`0.00001`, not `1e-05`) — `xsd:decimal` has no exponent form — and
   non-finite values as `INF` / `-INF` / `NaN` (#159).
