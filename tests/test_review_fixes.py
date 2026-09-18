@@ -806,3 +806,45 @@ def test_enumeration_values_are_unique(base, values, expected):
       <xsd:restriction base="{base}">{enums}</xsd:restriction>
       </xsd:simpleType></xsd:element>""")
     assert v["enum"] == expected
+
+
+_ELEM_DOC = """<xsd:element name="d">
+      <xsd:annotation><xsd:documentation>elem doc</xsd:documentation>
+      </xsd:annotation>
+      <xsd:simpleType>
+        <xsd:annotation><xsd:documentation>anon doc</xsd:documentation>
+        </xsd:annotation>
+        <xsd:restriction base="xsd:string"/></xsd:simpleType></xsd:element>"""
+
+
+def test_a_nested_elements_doc_outranks_its_anonymous_types():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="Inner"><xsd:complexType><xsd:sequence>
+      {_ELEM_DOC}
+    </xsd:sequence></xsd:complexType></xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    spec = convert_wsdl(content=_wsdl(types))
+    inner = _component_of(spec, _req_props(spec)["Inner"])
+    assert inner["properties"]["d"]["description"] == "elem doc"
+
+
+def test_an_inherited_elements_doc_outranks_its_anonymous_types():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:complexType name="Base"><xsd:sequence>{_ELEM_DOC}
+  </xsd:sequence></xsd:complexType>
+  <xsd:complexType name="Derived"><xsd:complexContent>
+    <xsd:extension base="tns:Base"><xsd:sequence>
+      <xsd:element name="e" type="xsd:string"/></xsd:sequence>
+    </xsd:extension></xsd:complexContent></xsd:complexType>
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="x" type="tns:Derived"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    spec = convert_wsdl(content=_wsdl(types))
+    derived = spec["components"]["schemas"]["Derived"]
+    props = derived.get("properties") or {
+        k: v for part in derived.get("allOf", [])
+        for k, v in (part.get("properties") or {}).items()}
+    assert props["d"]["description"] == "elem doc"
