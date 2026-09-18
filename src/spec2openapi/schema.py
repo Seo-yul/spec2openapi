@@ -581,9 +581,13 @@ class SchemaConverter:
                 out["description"] = doc
             return out
         base["xml"] = xml_meta
-        # the element's own documentation outranks its anonymous type's
+        # the element's own documentation outranks its anonymous type's;
+        # a same-named child of another container (the _child_doc
+        # fallbacks) does not - the anonymous type's doc is exact
         anonymous = getattr(el_type, "_s2o_simple_node", None) is not None
-        if doc and ("description" not in base or anonymous):
+        own_doc = (qkey is not None
+                   and (*qkey, el_name) in self.meta.child_docs)
+        if doc and ("description" not in base or (anonymous and own_doc)):
             base["description"] = doc
         return base
 

@@ -762,3 +762,47 @@ def test_non_finite_values_are_not_emitted():
         values = values if isinstance(values, list) else [values]
         assert all(not isinstance(x, float) or math.isfinite(x)
                    for x in values if x is not None), (key, d)
+
+
+def test_an_anonymous_types_doc_outranks_a_same_named_elements_doc():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:complexType name="Other"><xsd:sequence>
+    <xsd:element name="code" type="xsd:string">
+      <xsd:annotation><xsd:documentation>Currency code</xsd:documentation>
+      </xsd:annotation></xsd:element>
+  </xsd:sequence></xsd:complexType>
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="code"><xsd:simpleType>
+      <xsd:annotation><xsd:documentation>Postal code</xsd:documentation>
+      </xsd:annotation>
+      <xsd:restriction base="xsd:string"/></xsd:simpleType></xsd:element>
+    <xsd:element name="o" type="tns:Other"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    code = _req_props(convert_wsdl(content=_wsdl(types)))["code"]
+    assert code["description"] == "Postal code"
+
+
+def test_a_derived_pattern_keeps_the_base_pattern():
+    v = _one_prop("""<xsd:element name="v"><xsd:simpleType>
+      <xsd:restriction base="tns:Three"><xsd:pattern value="[0-9]+"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""",
+                  extra="""<xsd:simpleType name="Three">
+      <xsd:restriction base="xsd:string"><xsd:pattern value=".{3}"/>
+      </xsd:restriction></xsd:simpleType>""")
+    import re
+    assert re.search(v["pattern"], "123")
+    assert not re.search(v["pattern"], "12345")
+    assert not re.search(v["pattern"], "abc")
+
+
+@pytest.mark.parametrize("base,values,expected", [
+    ("xsd:boolean", ("true", "1", "false", "0"), [True, False]),
+    ("xsd:int", ("1", "01", "2"), [1, 2]),
+])
+def test_enumeration_values_are_unique(base, values, expected):
+    enums = "".join(f'<xsd:enumeration value="{x}"/>' for x in values)
+    v = _one_prop(f"""<xsd:element name="v"><xsd:simpleType>
+      <xsd:restriction base="{base}">{enums}</xsd:restriction>
+      </xsd:simpleType></xsd:element>""")
+    assert v["enum"] == expected

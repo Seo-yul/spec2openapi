@@ -46,9 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own); list types, including `NMTOKENS`/`IDREFS`/`ENTITIES`, drop
   length facets, which count items; an element's own documentation
   outranks its type's (#161).
-- Enumerations of an `xsd:boolean` restriction are booleans (#161).
+- Enumerations of an `xsd:boolean` restriction are booleans, and
+  enumeration values are unique after conversion (`true`/`1` is one
+  value) (#161).
 - Several `pattern` facets in one restriction are alternatives — a value
-  matching any of them is valid (#161).
+  matching any of them is valid; a derived type's pattern applies together
+  with its base's (#161).
 - A nillable element with an enumeration accepts `null` (#161).
 - An `INF`/`NaN` enumeration value or bound is not emitted; JSON has no
   form for it (#161).

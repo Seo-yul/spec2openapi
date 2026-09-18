@@ -315,6 +315,10 @@ def _simple_type_facets(
                         ("maximum", "exclusiveMaximum")):
         if bound in own and flag not in own:
             facets.pop(flag, None)
+    # patterns of different derivation steps all apply (XSD ANDs them)
+    if "pattern" in base_facets and "pattern" in own:
+        own = {**own, "pattern":
+               f"(?={base_facets['pattern']}){own['pattern']}"}
     facets.update(own)
     if kind == "list":
         for key in ("minLength", "maxLength"):
@@ -325,11 +329,17 @@ def _simple_type_facets(
 def _own_facets(restriction: etree._Element, kind: str) -> dict[str, Any]:
     """The facets a <restriction> declares itself, coerced to `kind`."""
     out: dict[str, Any] = {}
-    enums = [
-        _coerce_enum_value(e.get("value"), kind)
-        for e in restriction.findall(f"{{{XSD_NS}}}enumeration")
-        if e.get("value") is not None
-    ]
+    enums: list[Any] = []
+    seen: set[tuple[str, Any]] = set()
+    for e in restriction.findall(f"{{{XSD_NS}}}enumeration"):
+        if e.get("value") is None:
+            continue
+        value = _coerce_enum_value(e.get("value"), kind)
+        # "true"/"1" and "1"/"01" are one value: enum items are unique
+        key = (type(value).__name__, value)
+        if key not in seen:
+            seen.add(key)
+            enums.append(value)
     # INF/NaN (xsd:float/double) have no JSON form: drop the enumeration
     # rather than emit invalid JSON or a value nothing can equal
     if enums and not any(isinstance(v, float) and not math.isfinite(v)
