@@ -27,7 +27,15 @@ if TYPE_CHECKING:  # the SOAP stack (zeep/lxml) loads only when used
     from .parser import ParsedWsdl
 
 _TOOL_ID_RE = re.compile(r"[^A-Za-z0-9_]+")
-_MAX_ID_LEN = 64
+_UNDERSCORE_RUN_RE = re.compile(r"_{2,}")
+
+#: FastMCP 4 truncates OpenAPI tool names to this length
+#: (OpenAPIProvider._generate_default_name).
+FASTMCP_TOOL_NAME_MAX = 56
+# FastMCP 4's slug rules (fastmcp.server.providers.openapi.components._slugify)
+_FASTMCP_SEPARATORS_RE = re.compile(r"[\s\-\.]+")
+_FASTMCP_DROPPED_RE = re.compile(r"[^a-zA-Z0-9_]")
+_FASTMCP_UNDERSCORES_RE = re.compile(r"_+")
 _NAME_RE = re.compile(r"[^A-Za-z0-9_.-]")
 
 
@@ -37,10 +45,32 @@ def sanitize_name(name: str) -> str:
     return out[:64] or "unnamed"
 
 
+def fastmcp_tool_name(operation_id: str) -> str:
+    """The tool name FastMCP 4 exposes for an operationId.
+
+    Mirrors OpenAPIProvider._generate_default_name (without mcp_names):
+    the part before the first '__', slugified — [\\s.-] runs become '_',
+    other characters outside [A-Za-z0-9_] are dropped, '_' runs collapse
+    and edge underscores are stripped — then truncated to 56 characters.
+    FastMCP suffixes a duplicate name with '_2', '_3', so the names of
+    distinct operations must not coincide either."""
+    name = operation_id.split("__")[0]
+    name = _FASTMCP_SEPARATORS_RE.sub("_", name)
+    name = _FASTMCP_DROPPED_RE.sub("", name)
+    name = _FASTMCP_UNDERSCORES_RE.sub("_", name).strip("_")
+    return name[:FASTMCP_TOOL_NAME_MAX]
+
+
+def _exposed_id(raw: str) -> str:
+    """raw as an operationId FastMCP 4 exposes unchanged: [A-Za-z0-9_] only,
+    no '__' runs or edge underscores, at most 56 characters. May be ''."""
+    tid = _UNDERSCORE_RUN_RE.sub("_", _TOOL_ID_RE.sub("_", raw)).strip("_")
+    return tid[:FASTMCP_TOOL_NAME_MAX].rstrip("_")
+
+
 def _tool_id(raw: str) -> str:
-    """Normalize to FastMCP's tool-name alphabet, bounded to 64 chars."""
-    tid = _TOOL_ID_RE.sub("_", sanitize_name(raw)).strip("_")
-    return tid[:_MAX_ID_LEN] if tid else "op"
+    """Normalize to an operationId FastMCP 4 exposes as the tool name."""
+    return _exposed_id(sanitize_name(raw)) or "op"
 
 
 def _normalize_openapi_version(value: Any) -> str:
@@ -62,10 +92,9 @@ def _normalize_openapi_version(value: Any) -> str:
 _HTTP_METHODS = frozenset(
     ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 )
-# a safe MCP tool name before FastMCP normalization ('.'/'-' become '_')
+# a safe MCP tool name (a subset of the SEP-986 grammar); what FastMCP
+# then exposes is fastmcp_tool_name()
 _SAFE_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
-# FastMCP's tool-name normalization (per character, no run collapsing)
-_FASTMCP_NORM_RE = re.compile(r"[^A-Za-z0-9_]")
 # schema keywords whose *values* are data, not sub-schemas — a $ref (or
 # nullable/enum/...) inside them is a data value, never something to walk
 # or rewrite as schema. Shared by to_openapi_31 below, swagger.py's
@@ -155,14 +184,16 @@ def check_fastmcp_ready(spec: dict[str, Any]) -> list[str]:
 
 
 def _unique_id(base: str, used: set[str]) -> str:
-    """Make base unique within `used`, keeping the result <= 64 chars."""
+    """Make base unique within `used`, keeping the result a name FastMCP 4
+    exposes unchanged (<= 56 chars, no '__' before the suffix)."""
     if base not in used:
         used.add(base)
         return base
     n = 2
     while True:
         suffix = f"_{n}"
-        candidate = base[: _MAX_ID_LEN - len(suffix)] + suffix
+        candidate = (base[: FASTMCP_TOOL_NAME_MAX - len(suffix)].rstrip("_")
+                     + suffix)
         if candidate not in used:
             used.add(candidate)
             return candidate

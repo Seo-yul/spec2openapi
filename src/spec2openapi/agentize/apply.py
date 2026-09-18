@@ -21,8 +21,8 @@ from typing import Any, Iterable
 from ..minify import _fold_key, _split_folds
 from ..openapi import (
     _HTTP_METHODS,
-    _SAFE_TOOL_RE,
     _unescape_pointer_token,
+    fastmcp_tool_name,
 )
 from .providers import GROUNDING, TRUSTED, Suggestion
 
@@ -355,10 +355,13 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
             continue
 
         if key == "operationId":
-            if not _SAFE_TOOL_RE.fullmatch(text):
+            if fastmcp_tool_name(text) != text:
+                # FastMCP 4 가 다른 이름으로 노출할 id 는 tool 이름 ==
+                # operationId 를 깨고, 결과 verify 에서 실행 전체가 취소된다.
                 report.rejected.append(
                     f"{_safe(ptr)}: operationId 가 tool 이름 규칙"
-                    f"([A-Za-z0-9_.-], 1~64자)에 맞지 않음")
+                    f"([A-Za-z0-9_], 56자 이내, 연속·앞뒤 밑줄 없음)에 "
+                    f"맞지 않음")
                 continue
             prior = parent.get("operationId")
             if prior == text:

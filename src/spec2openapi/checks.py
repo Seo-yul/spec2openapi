@@ -14,10 +14,11 @@ from typing import Any
 from .errors import MCP_HINT
 from .openapi import (
     _DATA_KEYWORDS,
-    _FASTMCP_NORM_RE,
     _SAFE_TOOL_RE,
     _SCHEMA_REF_PREFIX,
+    FASTMCP_TOOL_NAME_MAX,
     _operations,
+    fastmcp_tool_name,
     schema_ref_name,
 )
 from .swagger import is_swagger2
@@ -116,12 +117,18 @@ REGISTRY: dict[str, dict] = {
         "statement": "operationId must match [A-Za-z0-9_.-]{1,64} (a subset "
                      "of the SEP-986 tool-name grammar).",
         "level": "fail", "refs": (_REF_SEP986, _REF_FASTMCP)},
+    "tool-name.length": {
+        "statement": "operationId must be at most 56 characters: FastMCP 4 "
+                     "truncates longer tool names, so the tool is not "
+                     "reachable under its operationId.",
+        "level": "fail", "refs": (_REF_FASTMCP,)},
     "tool-name.unique": {
         "statement": "operationIds must be unique across the document.",
         "level": "fail", "refs": (_REF_TOOLS_LIST, _REF_FASTMCP)},
     "tool-name.normalization-collision": {
-        "statement": "Distinct operationIds must not collide after FastMCP "
-                     "normalization ([^A-Za-z0-9_] -> _).",
+        "statement": "Distinct operationIds must not collide in the tool "
+                     "names FastMCP 4 derives from them (part before '__', "
+                     "slugified, truncated to 56).",
         "level": "fail", "refs": (_REF_FASTMCP,)},
     "tool-name.normalized": {
         "statement": "operationIds that FastMCP renames on exposure are "
@@ -177,12 +184,10 @@ REGISTRY: dict[str, dict] = {
                      "tools from the document.",
         "level": "fail", "refs": (_REF_FASTMCP,)},
     "fastmcp.tool-materialized": {
-        "statement": "Every operation must materialize as an MCP tool: the "
-                     "FastMCP round-trip's tool count must equal the "
-                     "document's operation count (FastMCP's actual "
-                     "tool-naming/normalization differs across versions and "
-                     "cannot be predicted, so the check is a count "
-                     "invariant, not a name match).",
+        "statement": "Every operation must materialize as an MCP tool under "
+                     "the name FastMCP 4 derives from its operationId; a "
+                     "different name means a collision suffix or a change "
+                     "in FastMCP's naming.",
         "level": "fail", "refs": (_REF_FASTMCP, _REF_TOOLS_LIST)},
 }
 
@@ -289,7 +294,7 @@ def _check_normalization_collision(spec):
     for _, _, op in _operations(spec):
         oid = op.get("operationId")
         if isinstance(oid, str) and oid:
-            by_tool.setdefault(_FASTMCP_NORM_RE.sub("_", oid), set()).add(oid)
+            by_tool.setdefault(fastmcp_tool_name(oid), set()).add(oid)
     out = []
     for tool, oids in sorted(by_tool.items()):
         if len(oids) > 1:
@@ -332,14 +337,31 @@ def _check_tool_name_normalized(spec):
     out = []
     for path, method, op in _operations(spec):
         oid = op.get("operationId")
-        if (isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid)):
-            norm = _FASTMCP_NORM_RE.sub("_", oid)
+        # longer ids are reported by tool-name.length
+        if (isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid)
+                and len(oid) <= FASTMCP_TOOL_NAME_MAX):
+            norm = fastmcp_tool_name(oid)
             if norm != oid:
                 out.append(_finding(
                     "tool-name.normalized",
                     f"operationId '{oid}' is exposed as tool '{norm}' "
                     "(FastMCP normalization)",
                     location=_op_location(path, method)))
+    return out
+
+
+def _check_tool_name_length(spec):
+    out = []
+    for path, method, op in _operations(spec):
+        oid = op.get("operationId")
+        # ids outside the safe grammar are reported by tool-name.safe
+        if (isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid)
+                and len(oid) > FASTMCP_TOOL_NAME_MAX):
+            out.append(_finding(
+                "tool-name.length",
+                f"{oid}: longer than {FASTMCP_TOOL_NAME_MAX} characters; "
+                f"FastMCP exposes it as '{fastmcp_tool_name(oid)}'",
+                location=_op_location(path, method)))
     return out
 
 
@@ -632,6 +654,7 @@ _STATIC_CHECKS: list = [
     ("document.has-operations", _check_has_operations),
     ("tool-name.present", _check_tool_name_present),
     ("tool-name.safe", _check_tool_name_safe),
+    ("tool-name.length", _check_tool_name_length),
     ("tool-name.unique", _check_tool_name_unique),
     ("tool-name.normalization-collision", _check_normalization_collision),
     ("x-soap.input-element", _check_xsoap_input_element),
@@ -649,8 +672,8 @@ _STATIC_CHECKS: list = [
 
 _READY_IDS = frozenset((
     "document.has-paths", "document.has-operations", "tool-name.present",
-    "tool-name.safe", "tool-name.unique", "tool-name.normalization-collision",
-    "x-soap.input-element",
+    "tool-name.safe", "tool-name.length", "tool-name.unique",
+    "tool-name.normalization-collision", "x-soap.input-element",
 ))
 
 
@@ -786,17 +809,29 @@ def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
                          .get("properties") or {}))}
         for t in sorted(tools, key=lambda t: t.name)]}
     results = [_result("fastmcp.roundtrip", "pass", data=data)]
-    # FastMCP's actual tool-name normalization is version-specific
-    # (fastmcp 3.4.7: '__'-splitting, [\s.-] run-collapsing, 64-char
-    # truncation) and cannot be reliably predicted here, so materialization
-    # is judged by count, not by matching predicted tool names.
+    # Each operation must be there under the name fastmcp_tool_name()
+    # predicts. A predicted name shared by two operations gets FastMCP's
+    # '_2' suffix on one of them; a name missing outright means FastMCP's
+    # naming no longer matches the model.
     op_ids = [op.get("operationId") for _, _, op in _operations(spec)
               if isinstance(op.get("operationId"), str)]
-    if len(tools) < len(op_ids):
-        results.append(_result(
-            "fastmcp.tool-materialized", "fail",
-            f"operations not materialized as tools: expected "
-            f"{len(op_ids)}, materialized {len(tools)}"))
+    predicted = collections.Counter(fastmcp_tool_name(o) for o in op_ids)
+    names = {t.name for t in tools}
+    off = sorted(o for o in op_ids
+                 if predicted[fastmcp_tool_name(o)] > 1
+                 or fastmcp_tool_name(o) not in names)
+    if len(tools) < len(op_ids) or off:
+        problems = []
+        if len(tools) < len(op_ids):
+            problems.append(f"expected {len(op_ids)} tools, materialized "
+                            f"{len(tools)}")
+        if off:
+            problems.append(
+                f"not exposed under the tool name derived from their "
+                f"operationId: {off}; exposed names not derived from any: "
+                f"{sorted(names - set(predicted))}")
+        results.append(_result("fastmcp.tool-materialized", "fail",
+                               "; ".join(problems)))
     else:
         results.append(_result("fastmcp.tool-materialized", "pass"))
     return results

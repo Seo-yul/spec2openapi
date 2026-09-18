@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from ..checks import _component_schemas, verify
 from ..errors import ConversionError
 from ..minify import minify_for_mcp
-from ..openapi import _SAFE_TOOL_RE, _operations, _unescape_pointer_token
+from ..openapi import _operations, _unescape_pointer_token, fastmcp_tool_name
 from .apply import (
     ApplyReport,
     _resolve_parent,
@@ -203,7 +203,7 @@ def _preflight_problems(working: dict, targets: list[Target], *,
             if f"#/paths/{escape_token(path)}/{method}" not in queried:
                 continue
             oid = op.get("operationId")
-            if isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid):
+            if isinstance(oid, str) and oid and fastmcp_tool_name(oid) == oid:
                 continue
             n += 1
             while f"s2o_rename_{n}" in taken:
