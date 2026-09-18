@@ -211,17 +211,18 @@ class SchemaConverter:
         None when the element is declared with a type instead."""
         if qkey is None:
             return None
-        todo, seen = [tuple(qkey)], set()
+        todo, seen = [(qkey[0], "type", qkey[1])], set()
         while todo:
             key = todo.pop(0)
             if key in seen:
                 continue
             seen.add(key)
-            hit = self.meta.inline_simple.get((key[0], key[1], el_name))
+            hit = self.meta.inline_simple.get((*key, el_name))
             if hit is not None:
                 return hit
             if el_name in self.meta.declared_children.get(key, ()):
-                return None  # declared right here, with a type
+                # declared right here - with a type, or ambiguously
+                return None
             todo.extend(self.meta.inherits.get(key, ()))
         return None
 

@@ -81,19 +81,26 @@ class XsdMeta:
     # same-named entry from another namespace
     named_types: set[tuple[str, str]] = (
         dataclasses.field(default_factory=set))
-    # (namespace, container name, child element name) -> facets of the
-    # child's inline anonymous simpleType. zeep names such a type after its
+    # (namespace, kind, container, child element) -> facets of the child's
+    # inline anonymous simpleType. zeep names such a type after its
     # element, so its qname can equal a named type's; this tells them apart.
-    # The container is the nearest named element/complexType/group - the
-    # name zeep gives the complex type holding the child
-    inline_simple: dict[tuple[str, str, str], dict[str, Any]] = (
+    # kind is "type" (a complexType, or an element holding an anonymous one
+    # - zeep names that type after the element) or "group" (XSD keeps group
+    # names apart from type names). Only unambiguous keys are kept: the
+    # container name is all zeep gives the lookup, so when two same-named
+    # containers declare the child differently, neither is recorded
+    inline_simple: dict[tuple[str, str, str, str], dict[str, Any]] = (
         dataclasses.field(default_factory=dict))
-    # container -> element names it declares itself
-    declared_children: dict[tuple[str, str], set[str]] = (
+    # (namespace, kind, container) -> element names it declares itself
+    declared_children: dict[tuple[str, str, str], set[str]] = (
         dataclasses.field(default_factory=dict))
     # container -> containers it extends (xsd:extension) or whose group it
     # references (xsd:group ref): where an inherited element is declared
-    inherits: dict[tuple[str, str], list[tuple[str, str]]] = (
+    inherits: dict[tuple[str, str, str], list[tuple[str, str, str]]] = (
+        dataclasses.field(default_factory=dict))
+    # every declaration of a container child, before the ambiguity check:
+    # the facets of an inline simpleType, or None for a typed element
+    child_decls: dict[tuple[str, str, str, str], list[dict | None]] = (
         dataclasses.field(default_factory=dict))
 
 
@@ -382,12 +389,15 @@ _CONTAINER_TAGS = frozenset(
     f"{{{XSD_NS}}}{tag}" for tag in ("element", "complexType", "group"))
 
 
-def _nearest_container(node: etree._Element) -> str | None:
-    """Name of the closest named element/complexType/group above node."""
+def _nearest_container(node: etree._Element) -> tuple[str, str] | None:
+    """(kind, name) of the closest named element/complexType/group above
+    node; kind is "group" for a group, "type" otherwise."""
     parent = node.getparent()
     while parent is not None:
         if parent.tag in _CONTAINER_TAGS and parent.get("name"):
-            return parent.get("name")
+            kind = ("group" if parent.tag == f"{{{XSD_NS}}}group"
+                    else "type")
+            return kind, parent.get("name")
         parent = parent.getparent()
     return None
 
@@ -400,20 +410,32 @@ def _scan_inline_types(
         container = _nearest_container(child) if cname else None
         if container is None:
             continue
-        meta.declared_children.setdefault((tns, container), set()).add(cname)
         inline = (child.find(f"{{{XSD_NS}}}simpleType")
                   if child.get("type") is None else None)
-        if inline is not None:
-            meta.inline_simple.setdefault(
-                (tns, container, cname),
-                _facets_from_restriction(inline, simple_types))
-    for tag, attr in (("extension", "base"), ("group", "ref")):
+        meta.child_decls.setdefault((tns, *container, cname), []).append(
+            _facets_from_restriction(inline, simple_types)
+            if inline is not None else None)
+    for tag, attr, kind in (("extension", "base", "type"),
+                            ("group", "ref", "group")):
         for node in schema.iter(f"{{{XSD_NS}}}{tag}"):
             target = node.get(attr)
             container = _nearest_container(node) if target else None
             resolved = _resolve_qname_ref(target, node) if container else None
             if resolved is not None:
-                meta.inherits.setdefault((tns, container), []).append(resolved)
+                meta.inherits.setdefault((tns, *container), []).append(
+                    (resolved[0], kind, resolved[1]))
+
+
+def _settle_inline_types(meta: XsdMeta) -> None:
+    """Keep an inline simpleType only when every declaration under its key
+    is that same inline type; a mix with a typed element, or differing
+    facets, is two containers zeep cannot tell apart."""
+    for (ns, kind, container, child), decls in meta.child_decls.items():
+        meta.declared_children.setdefault((ns, kind, container), set()).add(
+            child)
+        first = decls[0]
+        if first is not None and all(d == first for d in decls):
+            meta.inline_simple[(ns, kind, container, child)] = first
 
 
 def _collect_xsd_meta(client: Client, source: str,
@@ -447,6 +469,7 @@ def _collect_xsd_meta(client: Client, source: str,
     simple_types = _simple_type_index(roots)
     for root in roots:
         _scan_schema_root(root, meta, simple_types)
+    _settle_inline_types(meta)
     # transitive closure: a member of a member substitutes the outer head
     changed = True
     while changed:

@@ -481,3 +481,70 @@ def test_an_inherited_inline_type_keeps_its_own_facets(via):
         props = {**props, **(part.get("properties") or {})}
     code = props["code"]
     assert code["maxLength"] == 3 and "enum" not in code
+
+
+def _component_of(spec, schema):
+    ref = (schema.get("allOf") or [schema])[0].get("$ref")
+    return spec["components"]["schemas"][ref.rsplit("/", 1)[-1]]
+
+
+def _inline(name, facet):
+    return (f'<xsd:element name="{name}"><xsd:simpleType>'
+            f'<xsd:restriction base="xsd:string">{facet}</xsd:restriction>'
+            "</xsd:simpleType></xsd:element>")
+
+
+def test_same_named_local_containers_do_not_share_inline_facets():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+<xsd:complexType name="Cust"><xsd:sequence>
+ <xsd:element name="Item"><xsd:complexType><xsd:sequence>
+  {_inline("code", '<xsd:maxLength value="3"/>')}
+ </xsd:sequence></xsd:complexType></xsd:element>
+</xsd:sequence></xsd:complexType>
+<xsd:complexType name="Supp"><xsd:sequence>
+ <xsd:element name="Item"><xsd:complexType><xsd:sequence>
+  <xsd:element name="code" type="xsd:string"/>
+ </xsd:sequence></xsd:complexType></xsd:element>
+</xsd:sequence></xsd:complexType>
+<xsd:element name="Req"><xsd:complexType><xsd:sequence>
+ <xsd:element name="c" type="tns:Cust"/><xsd:element name="s" type="tns:Supp"/>
+</xsd:sequence></xsd:complexType></xsd:element>{_RESP}</xsd:schema>"""
+    spec = convert_wsdl(content=_wsdl(types))
+    supp = spec["components"]["schemas"]["Supp"]
+    code = _component_of(spec, supp["properties"]["Item"])["properties"]["code"]
+    assert "maxLength" not in code
+
+
+def test_a_global_type_does_not_take_a_same_named_local_elements_facets():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+<xsd:complexType name="Cust"><xsd:sequence>
+ <xsd:element name="Item"><xsd:complexType><xsd:sequence>
+  {_inline("code", '<xsd:enumeration value="A"/><xsd:enumeration value="B"/>')}
+ </xsd:sequence></xsd:complexType></xsd:element>
+</xsd:sequence></xsd:complexType>
+<xsd:complexType name="Item"><xsd:sequence>
+ <xsd:element name="code" type="xsd:string"/></xsd:sequence></xsd:complexType>
+<xsd:element name="Req"><xsd:complexType><xsd:sequence>
+ <xsd:element name="c" type="tns:Cust"/><xsd:element name="i" type="tns:Item"/>
+</xsd:sequence></xsd:complexType></xsd:element>{_RESP}</xsd:schema>"""
+    spec = convert_wsdl(content=_wsdl(types))
+    item = _component_of(spec, _req_props(spec)["i"])
+    assert "enum" not in item["properties"]["code"]
+
+
+def test_group_and_type_names_are_separate():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+<xsd:group name="Addr"><xsd:sequence>
+ {_inline("zip", '<xsd:maxLength value="5"/>')}</xsd:sequence></xsd:group>
+<xsd:complexType name="Addr"><xsd:sequence>
+ <xsd:element name="zip" type="xsd:int"/></xsd:sequence></xsd:complexType>
+<xsd:complexType name="Home"><xsd:sequence>
+ <xsd:group ref="tns:Addr"/></xsd:sequence></xsd:complexType>
+<xsd:element name="Req"><xsd:complexType><xsd:sequence>
+ <xsd:element name="h" type="tns:Home"/><xsd:element name="a" type="tns:Addr"/>
+</xsd:sequence></xsd:complexType></xsd:element>{_RESP}</xsd:schema>"""
+    spec = convert_wsdl(content=_wsdl(types))
+    addr_zip = _component_of(spec, _req_props(spec)["a"])["properties"]["zip"]
+    assert addr_zip["type"] == "integer" and "maxLength" not in addr_zip
+    home_zip = _component_of(spec, _req_props(spec)["h"])["properties"]["zip"]
+    assert home_zip["maxLength"] == 5
