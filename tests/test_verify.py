@@ -61,9 +61,9 @@ def test_results_are_immutable():
 ALL_CHECK_IDS = {
     "document.mapping", "document.has-paths", "document.has-operations",
     "document.openapi3",
-    "tool-name.present", "tool-name.safe", "tool-name.unique",
-    "tool-name.normalization-collision", "tool-name.normalized",
-    "tool-description.present",
+    "tool-name.present", "tool-name.safe", "tool-name.length",
+    "tool-name.unique", "tool-name.normalization-collision",
+    "tool-name.normalized", "tool-description.present",
     "x-soap.input-element", "x-soap.version", "x-soap.output-element",
     "x-soap.endpoint", "x-soap.refs", "x-soap.substitution",
     "x-soap.choice", "x-soap.mixed-rest",
@@ -144,8 +144,9 @@ def test_ready_problems_frozen_edge_cases():
 
 STATIC_IDS = {
     "document.has-paths", "document.has-operations",
-    "tool-name.present", "tool-name.safe", "tool-name.unique",
-    "tool-name.normalization-collision", "x-soap.input-element",
+    "tool-name.present", "tool-name.safe", "tool-name.length",
+    "tool-name.unique", "tool-name.normalization-collision",
+    "x-soap.input-element",
 }
 DEEP_IDS = {"openapi.schema-valid", "fastmcp.roundtrip",
             "fastmcp.tool-materialized"}

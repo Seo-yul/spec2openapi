@@ -22,7 +22,7 @@ from . import __version__ as _version
 from .errors import ConversionError
 from .openapi import (
     _DATA_KEYWORDS,
-    _TOOL_ID_RE,
+    _exposed_id,
     _normalize_openapi_version,
     _unescape_pointer_token,
     _unique_id,
@@ -69,10 +69,10 @@ _SCHEMA_FIELDS = (
     "maxItems", "minItems", "uniqueItems", "enum", "multipleOf",
 )
 
-# _TOOL_ID_RE (imported above): FastMCP normalizes tool names to
-# [A-Za-z0-9_]; generate ids accordingly so that tool name == operationId
-# holds after the round-trip. Same alphabet, same job as openapi.py's
-# _tool_id, which owns the canonical definition.
+# _exposed_id (imported above): FastMCP 4 derives tool names from
+# operationIds (openapi.fastmcp_tool_name); generate and normalize ids to
+# names it exposes unchanged, so tool name == operationId holds after the
+# round-trip. Same job as openapi.py's _tool_id.
 
 # OpenAPI 3 component keys allow letters, digits, '.', '-', '_'
 _COMPONENT_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -1078,7 +1078,7 @@ class _Upgrader:
     def _gen_operation_id(self, method: str, path: str) -> str:
         raw = f"{method}_{path.strip('/') or 'root'}"
         raw = raw.replace("{", "").replace("}", "")
-        return _TOOL_ID_RE.sub("_", raw).strip("_")[:64]
+        return _exposed_id(raw)
 
     def _build_info(self) -> dict[str, Any]:
         # title and version are REQUIRED in OpenAPI 3; fill whichever is
@@ -1229,7 +1229,7 @@ class _Upgrader:
                         f"{ctx}: no operationId; generated '{op_id}'"
                     )
                 else:
-                    normalized = _TOOL_ID_RE.sub("_", op_id).strip("_")[:64]
+                    normalized = _exposed_id(op_id)
                     if not normalized:  # e.g. operationId was "!!!"
                         normalized = self._gen_operation_id(method, path)
                     if normalized != op_id:
@@ -1238,7 +1238,8 @@ class _Upgrader:
                             f"'{normalized}' (FastMCP tool-name convention)"
                         )
                         op_id = normalized
-                # dedup after normalization/truncation, staying <= 64 chars
+                # dedup after normalization/truncation, staying a name
+                # FastMCP exposes unchanged
                 deduped = _unique_id(op_id, used_ids)
                 if deduped != op_id:
                     self.assumptions.append(

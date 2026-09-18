@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from ..checks import _component_schemas, verify
 from ..errors import ConversionError
 from ..minify import minify_for_mcp
-from ..openapi import _SAFE_TOOL_RE, _operations, _unescape_pointer_token
+from ..openapi import _operations, _unescape_pointer_token, fastmcp_tool_name
 from .apply import (
     ApplyReport,
     _resolve_parent,
@@ -172,13 +172,18 @@ def _preflight_problems(working: dict, targets: list[Target], *,
       함께 다시 쓰는 저품질 summary 자리에는 임시 문자열을 넣는다. 값이
       비어 있는(null) description·summary 처럼 그 자리 자체가 실패 원인일
       수 있다.
-    - --rename-tools 면 질의하는 operation 중 operationId 가 없거나 이름
-      규칙을 어기는 것에 서로 겹치지 않는 임시 operationId 를 넣는다. 개명
-      지시가 새 이름을 내라고 하는 경우다. 읽을 만한 이름은 유지하라는
+    - --rename-tools 면 질의하는 operation 중 개명 지시가 새 이름을 내라고
+      하는 것 - operationId 가 없거나 FastMCP 가 다른 이름으로 노출하는
+      것 - 에 서로 겹치지 않는 임시 이름을 넣는다. 모델은 겹치지 않는
+      이름을 낼 수 있으므로 그 실행은 고칠 수 있다. 모델이 다른 operation
+      과 겹치는 이름을 내면 적용 뒤의 verify 가 막는다 - 모델의 선택에 달린
+      실패는 호출 전에 확정할 수 없다. 규칙에 맞는 이름은 유지하라는
       지시를 받고, operation 을 하나씩 보는 모델은 이름이 겹치는지 알 수
-      없으므로 중복 이름은 그대로 둔 채 본다.
+      없으므로, 그런 이름끼리의 중복은 그대로 둔 채 본다.
 
-    검사 id 로 실패를 봐주면 채우지 않을 자리까지 봐주거나, 한 결함이
+    사본은 이름을 겹치지 않는 유효한 이름으로, 빈 자리를 문자열로만
+    바꾸므로 verify 를 통과하는 입력을 막는 일은 없다. 검사 id 로 실패를
+    봐주면 채우지 않을 자리까지 봐주거나, 한 결함이
     함께 깨는 다른 검사(openapi.schema-valid 등)를 놓친다.
     """
     spec = copy.deepcopy(working)
@@ -195,15 +200,18 @@ def _preflight_problems(working: dict, targets: list[Target], *,
             parent[key] = "s2o preflight placeholder"
     if rename_tools:
         queried = _queried_operations(targets)
-        # operationId 는 신뢰할 수 없는 입력이다 - list/dict 일 수 있다
-        taken = {oid for _, _, op in _operations(spec)
-                 if isinstance(oid := op.get("operationId"), str)}
+        # operationId 는 신뢰할 수 없는 입력이다 - list/dict 일 수 있다.
+        # 임시 이름은 FastMCP 가 노출하는 이름과도 겹치면 안 된다.
+        taken: set[str] = set()
+        for _, _, op in _operations(spec):
+            if isinstance(oid := op.get("operationId"), str):
+                taken |= {oid, fastmcp_tool_name(oid)}
         n = 0
         for path, method, op in _operations(spec):
             if f"#/paths/{escape_token(path)}/{method}" not in queried:
                 continue
             oid = op.get("operationId")
-            if isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid):
+            if isinstance(oid, str) and oid and fastmcp_tool_name(oid) == oid:
                 continue
             n += 1
             while f"s2o_rename_{n}" in taken:

@@ -961,3 +961,67 @@ def test_a_null_summary_the_run_rewrites_does_not_fail_the_preflight():
     op = result.spec["paths"]["/a"]["get"]
     assert op["summary"] == "Read one A"
     assert verify(result.spec).ok
+
+
+@pytest.mark.parametrize("renamed, taken", [("list-pets", "list_pets"),
+                                            ("get__v1", "get_v1")])
+def test_rename_preflight_leaves_a_fixable_name_to_the_run(renamed, taken):
+    """개명할 operation 은 모델이 겹치지 않는 새 이름을 낼 수 있다 - 호출
+    전에 막는 것은 어떤 응답으로도 고칠 수 없는 입력뿐이다 (#155)."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": renamed},
+                        {**ok, "operationId": taken,
+                         "description": "Returns one pet by its id."})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
+
+
+def test_rename_preflight_never_rejects_an_input_that_passes_verify():
+    """get__v1 은 get 으로 노출될 뿐 verify 를 통과한다 - 모델이 이름을
+    유지하는 실행도 성공해야 한다."""
+    from spec2openapi import verify
+
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "get__v1"},
+                        {**ok, "operationId": "get_v1",
+                         "description": "Returns one pet by its id."})
+    assert verify(spec).ok
+    keep = _op_provider("Reads one record by key.", "get__v1")
+    result = agentize_spec(spec, keep, rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "get__v1"
+    assert verify(result.spec).ok
+
+
+def test_a_rule_breaking_name_without_a_collision_is_left_to_the_run():
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "list-pets"},
+                        {**ok, "operationId": "b",
+                         "description": "Returns one pet by its id."})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
+
+
+def test_rename_preflight_does_not_truncate_long_ids_into_a_collision():
+    """56자를 넘는 id 는 모델이 새로 짓는다 - 앞 56자에서 자른 이름으로
+    개명된다고 가정하면 고칠 수 있는 입력을 호출 전에 막는다 (#155)."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    stem = "getCustomerAccountInformationByIdentifierAndRegionForReport"
+    spec = _two_op_spec({**ok, "operationId": stem + "1"},
+                        {**ok, "operationId": stem + "2"})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    ids = {result.spec["paths"][p]["get"]["operationId"] for p in ("/a", "/b")}
+    assert ids == {"read_1", "read_2"}
+
+
+def test_rename_placeholders_avoid_exposed_names_too():
+    """임시 이름은 원래 operationId 뿐 아니라 FastMCP 가 노출하는 이름과도
+    겹치지 않아야 한다 - verify 를 통과하는 입력을 막지 않는다."""
+    from spec2openapi import verify
+
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "foo__bar"},
+                        {**ok, "operationId": "s2o_rename_1__x",
+                         "description": "Returns one pet by its id."})
+    assert verify(spec).ok
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
