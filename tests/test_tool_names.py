@@ -168,3 +168,17 @@ def test_an_operation_id_with_no_exposed_tool_name_fails(oid):
                                   "tool-name.present") if s[0] == "fail"]
     assert fails and oid in fails[0][1]
     assert any(oid in p for p in check_fastmcp_ready(spec))
+
+
+def test_the_rename_prompt_states_the_rule_apply_enforces():
+    """apply 는 FastMCP 가 그대로 노출하지 않는 이름을 거부한다 - 프롬프트가
+    같은 규칙을 말하지 않으면 모델의 개명이 버려진다."""
+    import re
+
+    from spec2openapi.agentize.prompts import _RENAME_RULES
+
+    for right in re.findall(r"->\s+(\S+)", _RENAME_RULES):
+        assert fastmcp_tool_name(right) == right, right
+    rule = _RENAME_RULES[_RENAME_RULES.index("규칙:"):]
+    for clause in ("[A-Za-z0-9_]", str(FASTMCP_TOOL_NAME_MAX), "연달아", "앞뒤"):
+        assert clause in rule, clause
