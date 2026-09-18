@@ -200,9 +200,12 @@ def _preflight_problems(working: dict, targets: list[Target], *,
             parent[key] = "s2o preflight placeholder"
     if rename_tools:
         queried = _queried_operations(targets)
-        # operationId 는 신뢰할 수 없는 입력이다 - list/dict 일 수 있다
-        taken = {oid for _, _, op in _operations(spec)
-                 if isinstance(oid := op.get("operationId"), str)}
+        # operationId 는 신뢰할 수 없는 입력이다 - list/dict 일 수 있다.
+        # 임시 이름은 FastMCP 가 노출하는 이름과도 겹치면 안 된다.
+        taken: set[str] = set()
+        for _, _, op in _operations(spec):
+            if isinstance(oid := op.get("operationId"), str):
+                taken |= {oid, fastmcp_tool_name(oid)}
         n = 0
         for path, method, op in _operations(spec):
             if f"#/paths/{escape_token(path)}/{method}" not in queried:

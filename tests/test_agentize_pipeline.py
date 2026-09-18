@@ -1011,3 +1011,17 @@ def test_rename_preflight_does_not_truncate_long_ids_into_a_collision():
     result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
     ids = {result.spec["paths"][p]["get"]["operationId"] for p in ("/a", "/b")}
     assert ids == {"read_1", "read_2"}
+
+
+def test_rename_placeholders_avoid_exposed_names_too():
+    """임시 이름은 원래 operationId 뿐 아니라 FastMCP 가 노출하는 이름과도
+    겹치지 않아야 한다 - verify 를 통과하는 입력을 막지 않는다."""
+    from spec2openapi import verify
+
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "foo__bar"},
+                        {**ok, "operationId": "s2o_rename_1__x",
+                         "description": "Returns one pet by its id."})
+    assert verify(spec).ok
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
