@@ -15,6 +15,7 @@ be preserved (do not alphabetize the document).
 """
 from __future__ import annotations
 
+import copy
 import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -65,6 +66,12 @@ _HTTP_METHODS = frozenset(
 _SAFE_TOOL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 # FastMCP's tool-name normalization (per character, no run collapsing)
 _FASTMCP_NORM_RE = re.compile(r"[^A-Za-z0-9_]")
+# schema keywords whose *values* are data, not sub-schemas — a $ref (or
+# nullable/enum/...) inside them is a data value, never something to walk
+# or rewrite as schema. Shared by to_openapi_31 below, swagger.py's
+# upgrader, and checks.py's $ref scanner (which adds "const", a 3.1-only
+# data keyword the Swagger-2.0-only upgrader has no reason to know about).
+_DATA_KEYWORDS = ("example", "examples", "default", "enum")
 
 
 def _operations(spec: dict[str, Any]):
@@ -79,6 +86,57 @@ def _operations(spec: dict[str, Any]):
             # only HTTP methods are operations; skip parameters/$ref/x- keys
             if str(method).lower() in _HTTP_METHODS and isinstance(op, dict):
                 yield path, method, op
+
+
+# --------------------------------------------------------------------------
+# '#/...' ref / JSON-Pointer resolution
+#
+# Shared home for what used to be four diverging implementations (#142):
+# bridge.py's schema-$ref dereference, minify.py's generic pointer walk,
+# swagger.py's source-document pointer walk, and checks.py's schemas-only
+# existence check. Each caller's job differs enough (bridge also unwraps
+# single-member allOf and carries xml annotations; swagger also percent-
+# decodes and indexes into lists, because it walks a hand-authored source
+# document; checks only needs the first path segment, not a full walk) that
+# full unification would change behavior, so callers delegate the part
+# that is genuinely identical and keep their own extra logic layered on
+# top — see each module for the specifics.
+# --------------------------------------------------------------------------
+
+_SCHEMA_REF_PREFIX = "#/components/schemas/"
+
+
+def schema_ref_name(ref: Any) -> str | None:
+    """The component name addressed by a '#/components/schemas/NAME...'
+    ref — only the segment right after the prefix, so a deeper pointer
+    (e.g. '.../NAME/properties/x') still yields NAME. None if `ref` isn't
+    a string, or doesn't address components.schemas at all."""
+    if not (isinstance(ref, str) and ref.startswith(_SCHEMA_REF_PREFIX)):
+        return None
+    return ref[len(_SCHEMA_REF_PREFIX):].split("/", 1)[0]
+
+
+def _unescape_pointer_token(token: str) -> str:
+    """Undo RFC 6901 JSON Pointer escaping ('~1' -> '/', '~0' -> '~')."""
+    return token.replace("~1", "/").replace("~0", "~")
+
+
+def resolve_pointer(root: Any, ref: Any) -> Any:
+    """Resolve an internal '#/...' JSON Pointer against `root`.
+
+    Dict traversal only (no list indexing) with RFC 6901 ~0/~1 token
+    unescaping and no percent-decoding — root is always a generated-or-
+    loaded OpenAPI document here, never a URI fragment. None if
+    unresolvable (or if the pointer legitimately addresses a null)."""
+    if not (isinstance(ref, str) and ref.startswith("#/")):
+        return None
+    node: Any = root
+    for part in ref[2:].split("/"):
+        part = _unescape_pointer_token(part)
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
 
 
 def check_fastmcp_ready(spec: dict[str, Any]) -> list[str]:
@@ -170,9 +228,12 @@ def build_spec(
     used_ids: set[str] = set()
 
     # reserve the built-in fault schema name up front so a WSDL type also
-    # named "SoapFault" is deduped to another name instead of clobbering it
+    # named "SoapFault" is deduped to another name instead of clobbering it.
+    # deep-copied: conv.components[...] used to alias the module-level
+    # SOAP_FAULT_SCHEMA dict by reference, so every conversion (and the
+    # template itself) shared and could corrupt one mutable object (#142)
     fault_ref_name = "SoapFault"
-    conv.components[fault_ref_name] = SOAP_FAULT_SCHEMA
+    conv.components[fault_ref_name] = copy.deepcopy(SOAP_FAULT_SCHEMA)
     fault_ref = f"#/components/schemas/{fault_ref_name}"
 
     for op in parsed.operations:
@@ -311,22 +372,74 @@ def build_spec(
     return spec
 
 
+# walk() recurses once per document-nesting level; a pathologically deep
+# document must raise ConversionError, never a bare RecursionError (see
+# swagger.py's _MAX_SCHEMA_DEPTH for the same guard and rationale).
+_MAX_WALK_DEPTH = 200
+
+
 def to_openapi_31(spec: dict[str, Any]) -> dict[str, Any]:
     """Convert the generated 3.0 document to OpenAPI 3.1 JSON Schema style."""
 
     # keywords whose values are data, not sub-schemas — don't descend
-    data_kw = ("example", "examples", "default", "enum")
+    data_kw = _DATA_KEYWORDS
+    # keys whose value is a name -> schema map: the map's own keys are
+    # opaque property names, not schema keywords — a property literally
+    # named "nullable"/"enum"/"exclusiveMinimum" must not trigger the
+    # keyword handling below (mirrors swagger.py's _fix_schema, which
+    # already applies this rule on the way to 3.0).
+    map_kw = ("properties", "patternProperties")
+    # 이름->객체 map: 키는 사용자가 정한 이름이므로 data 키워드로
+    # 볼 수 없다. responses 의 "default" 가 대표적이다 - 스키마의
+    # default 값과 이름이 같을 뿐 전혀 다른 것이라, 통째로 복사하면
+    # 그 안의 nullable 이 변환되지 않은 채 3.1 문서에 남는다.
+    # "examples"/"content" 는 넣지 않는다: Example Object 의 value 는
+    # 사용자 데이터라 walk 하면 그 안의 nullable 을 스키마로 착각해
+    # 고쳐버린다. 미디어 타입 이름도 data 키워드와 겹칠 수 없다.
+    named_maps = ("responses", "headers", "parameters", "schemas",
+                  "requestBodies", "securitySchemes", "links",
+                  "callbacks", "pathItems")
 
-    def walk(node: Any) -> Any:
+    def walk(node: Any, depth: int = 0) -> Any:
+        if depth > _MAX_WALK_DEPTH:
+            raise ConversionError(
+                f"schema nesting exceeds {_MAX_WALK_DEPTH} levels; "
+                "refusing to convert (a legitimate document is never "
+                "this deep)"
+            )
         if isinstance(node, list):
-            return [walk(v) for v in node]
+            return [walk(v, depth + 1) for v in node]
         if not isinstance(node, dict):
             return node
-        node = {k: (v if k in data_kw else walk(v)) for k, v in node.items()}
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            if k in map_kw and isinstance(v, dict):
+                out[k] = {pn: walk(pv, depth + 1) for pn, pv in v.items()}
+            elif k in named_maps and isinstance(v, dict):
+                out[k] = {pn: walk(pv, depth + 1) for pn, pv in v.items()}
+            elif k in data_kw:
+                out[k] = v
+            else:
+                out[k] = walk(v, depth + 1)
+        node = out
         if node.pop("nullable", False):
             t = node.get("type")
             if isinstance(t, str):
                 node["type"] = [t, "null"]
+            elif isinstance(t, list):
+                if "null" not in t:
+                    node["type"] = [*t, "null"]
+            elif node:
+                # can't fold into 'type': the schema is $ref/allOf-
+                # wrapped, enum-only, or otherwise typeless. Compose
+                # instead of dropping — 'anyOf: [X, {type: null}]' always
+                # stays exact (matches X, or is null) for any X, so this
+                # is never actually lossy (#141 A5).
+                rest = dict(node)
+                node.clear()
+                node["anyOf"] = [rest, {"type": "null"}]
+            # else: node is now empty ('nullable: true' was the only
+            # key) — {} already matches every value including null.
         # 3.0 uses boolean exclusiveMinimum/Maximum alongside minimum/maximum;
         # 2020-12 requires a number. Convert true+bound, and drop the boolean
         # otherwise (false = inclusive default; true without a bound is

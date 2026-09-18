@@ -15,18 +15,52 @@ from __future__ import annotations
 
 import re
 from http import HTTPStatus
-from urllib.parse import unquote
 from typing import Any
+from urllib.parse import unquote
 
 from . import __version__ as _version
 from .errors import ConversionError
-from .openapi import _normalize_openapi_version, _unique_id, to_openapi_31
+from .openapi import (
+    _DATA_KEYWORDS,
+    _TOOL_ID_RE,
+    _normalize_openapi_version,
+    _unescape_pointer_token,
+    _unique_id,
+    to_openapi_31,
+)
 
 _METHODS = ("get", "put", "post", "delete", "options", "head", "patch")
 
-# schema keywords whose *values* are data, not sub-schemas — never rewrite
-# $ref/x-nullable/discriminator inside them
-_DATA_KEYWORDS = ("example", "examples", "default", "enum")
+# _DATA_KEYWORDS (imported above): schema keywords whose *values* are
+# data, not sub-schemas — never rewrite $ref/x-nullable/discriminator
+# inside them. Its canonical definition lives in openapi.py, shared with
+# to_openapi_31 and checks.py's $ref scanner.
+
+# keys whose *value* is a name -> schema-ish-object map: the map's own keys
+# are opaque identifiers (a definition/parameter/header literally named
+# "default" or "enum" is legal), but every value is schema content where
+# _DATA_KEYWORDS opacity is meaningful. Swagger 2.0 also blends schema
+# fields (type/enum/default/items/...) directly onto Parameter and Header
+# Objects, so those need the same "in schema" context.
+_SCHEMA_MAP_KEYS = ("definitions", "parameters", "headers")
+
+# _strip_nulls/_fix_schema recurse once per document-nesting level; a
+# pathological document deep enough to blow the real Python call stack
+# must raise ConversionError (never a bare RecursionError — the project's
+# "every failure is a ConversionError" contract). 200 is comfortably above
+# any realistic hand-written or generated spec and comfortably below
+# Python's default 1000-frame limit even counting the extra frames each
+# level costs (dict/list comprehensions, helper calls) and whatever the
+# caller's own stack already used.
+_MAX_SCHEMA_DEPTH = 200
+
+
+def _depth_guard(depth: int, what: str) -> None:
+    if depth > _MAX_SCHEMA_DEPTH:
+        raise ConversionError(
+            f"{what} nesting exceeds {_MAX_SCHEMA_DEPTH} levels; refusing "
+            "to convert (a legitimate document is never this deep)"
+        )
 
 # Swagger 2.0 parameter fields that move into `schema` in OpenAPI 3
 _SCHEMA_FIELDS = (
@@ -35,9 +69,11 @@ _SCHEMA_FIELDS = (
     "maxItems", "minItems", "uniqueItems", "enum", "multipleOf",
 )
 
-# FastMCP normalizes tool names to [A-Za-z0-9_]; generate ids accordingly
-# so that tool name == operationId holds after the round-trip.
-_ID_RE = re.compile(r"[^A-Za-z0-9_]+")
+# _TOOL_ID_RE (imported above): FastMCP normalizes tool names to
+# [A-Za-z0-9_]; generate ids accordingly so that tool name == operationId
+# holds after the round-trip. Same alphabet, same job as openapi.py's
+# _tool_id, which owns the canonical definition.
+
 # OpenAPI 3 component keys allow letters, digits, '.', '-', '_'
 _COMPONENT_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -189,27 +225,57 @@ class _Upgrader:
                 )
         return mapping
 
-    def _strip_nulls(self, node: Any) -> Any:
+    def _strip_nulls(self, node: Any, in_schema: bool = False,
+                     depth: int = 0) -> Any:
+        """Strip structurally-invalid null values, keeping nulls that are
+        meaningful schema *data* (default/enum/example values).
+
+        _DATA_KEYWORDS opacity only applies in schema context: a document
+        can have a "responses" entry, global parameter, or definition
+        literally *named* "default"/"enum"/"example" — those map keys are
+        opaque identifiers, not schema keywords, and must not make an
+        entire response/parameter/definition subtree opaque to null-
+        stripping just because its name collides with one (#141 A3)."""
+        _depth_guard(depth, "document")
         if isinstance(node, list):
-            return [self._strip_nulls(v) for v in node]
+            return [self._strip_nulls(v, in_schema, depth + 1) for v in node]
         if not isinstance(node, dict):
             return node
         out: dict[str, Any] = {}
         for k, v in node.items():
-            if (isinstance(k, str) and k.startswith("x-")) or k in _DATA_KEYWORDS:
+            if isinstance(k, str) and k.startswith("x-"):
+                out[k] = v
+                continue
+            if k in _SCHEMA_MAP_KEYS and isinstance(v, dict):
+                # name -> schema-ish-object map: the map's own keys are
+                # opaque identifiers; each value is schema content
+                out[k] = {
+                    name: self._strip_nulls(entry, True, depth + 1)
+                    for name, entry in v.items()
+                }
+                continue
+            if k == "parameters" and isinstance(v, list):
+                # operation/path-item Parameter Object list (schema-ish
+                # fields live directly on each entry, same as the global
+                # parameters map above)
+                out[k] = [self._strip_nulls(p, True, depth + 1) for p in v]
+                continue
+            if in_schema and k in _DATA_KEYWORDS:
                 out[k] = v  # null may be meaningful data here
                 continue
             if v is None:
                 self._nulls_stripped += 1
                 continue
-            out[k] = self._strip_nulls(v)
+            nxt_schema = in_schema or k == "schema"
+            out[k] = self._strip_nulls(v, nxt_schema, depth + 1)
         return out
 
     @staticmethod
     def _pointer_token(raw: str) -> str:
         """Decode a JSON-Pointer reference token: percent-encoding first,
-        then the ~1 (/) and ~0 (~) escapes (RFC 6901)."""
-        return unquote(raw).replace("~1", "/").replace("~0", "~")
+        then the ~1 (/) and ~0 (~) escapes (RFC 6901, shared with
+        openapi.py's resolve_pointer via _unescape_pointer_token)."""
+        return _unescape_pointer_token(unquote(raw))
 
     def _source_name(self, mapping: dict[str, str], raw: str) -> str:
         """Resolve a ref token to the source name it addresses: prefer a
@@ -280,7 +346,7 @@ class _Upgrader:
         self._used_hoist_keys.add(key)
         return key
 
-    def _hoist_deep_ref(self, ref: str) -> dict:
+    def _hoist_deep_ref(self, ref: str, depth: int = 0) -> dict:
         """A local $ref addressing an arbitrary document location (e.g.
         #/paths/.../responses/200/schema/...) has no component home in
         OpenAPI 3 and its target moves during conversion, so the pointer
@@ -301,12 +367,25 @@ class _Upgrader:
             # to the key and becomes a legal recursive schema
             self._hoisted[norm] = key
             self._hoisted_schemas[key] = {}
-            self._hoisted_schemas[key] = self._fix_schema(target)
+            self._hoisted_schemas[key] = self._fix_schema(target, depth + 1)
             self.assumptions.append(
                 f"deep local $ref '{ref}' has no OpenAPI 3 component "
                 f"equivalent; target hoisted to components.schemas '{key}'"
             )
         return {"$ref": f"#/components/schemas/{key}"}
+
+    @staticmethod
+    def _merge_ref_into_allof(ref_obj: dict, rest: dict) -> dict:
+        """Combine a schema $ref with its sibling keys via allOf (OpenAPI
+        3.0 ignores siblings next to a schema $ref). If `rest` already
+        carries its own 'allOf' list, the ref is prepended to it instead
+        of being silently clobbered by a naive `{"allOf": [ref], **rest}`
+        dict-spread, which drops the $ref whenever `rest` has its own
+        'allOf' key (#141 A1)."""
+        rest = dict(rest)
+        existing = rest.pop("allOf", None)
+        merged = [ref_obj, *existing] if existing else [ref_obj]
+        return {"allOf": merged, **rest}
 
     def _break_alias_cycles(self) -> None:
         """A hoisted entry that is nothing but a $ref can form a pure
@@ -347,11 +426,12 @@ class _Upgrader:
                 fixed.append(req)
         return fixed
 
-    def _fix_schema(self, node: Any) -> Any:
+    def _fix_schema(self, node: Any, depth: int = 0) -> Any:
         """Recursive schema fixups: $refs, type:file, x-nullable,
         discriminator string -> object."""
+        _depth_guard(depth, "schema")
         if isinstance(node, list):
-            return [self._fix_schema(v) for v in node]
+            return [self._fix_schema(v, depth + 1) for v in node]
         if not isinstance(node, dict):
             return node
         ref = node.get("$ref")
@@ -359,19 +439,21 @@ class _Upgrader:
                 and not self._is_component_ref(ref)):
             # deep pointer, or a simple ref whose target doesn't exist —
             # either way _fix_ref would emit a dangling reference
-            resolved = self._hoist_deep_ref(ref)
+            resolved = self._hoist_deep_ref(ref, depth)
             siblings = {k: v for k, v in node.items() if k != "$ref"}
             if not siblings:
                 return resolved
             # keep siblings meaningful, mirroring the $ref+siblings policy
-            return {"allOf": [resolved], **self._fix_schema(siblings)}
+            return self._merge_ref_into_allof(
+                resolved, self._fix_schema(siblings, depth + 1))
         out: dict[str, Any] = {}
         for k, v in node.items():
             if k in ("properties", "patternProperties") and isinstance(v, dict):
                 # name -> schema map: the keys are opaque property names —
                 # a property named 'default'/'discriminator'/… must not
                 # trigger the keyword handling below
-                out[k] = {pn: self._fix_schema(ps) for pn, ps in v.items()}
+                out[k] = {pn: self._fix_schema(ps, depth + 1)
+                         for pn, ps in v.items()}
             elif k == "$ref" and isinstance(v, str):
                 out[k] = self._fix_ref(v)
             elif k == "x-nullable":
@@ -398,7 +480,7 @@ class _Upgrader:
                     and k[2:] not in node):
                 # a pre-OpenAPI-3 down-conversion artifact carrying real
                 # composition semantics — promote to the native keyword
-                out[k[2:]] = self._fix_schema(v)
+                out[k[2:]] = self._fix_schema(v, depth + 1)
                 self.assumptions.append(
                     f"{k} promoted to native {k[2:]}"
                 )
@@ -414,18 +496,15 @@ class _Upgrader:
             elif k in _DATA_KEYWORDS:
                 out[k] = v  # data value: pass through verbatim
             else:
-                out[k] = self._fix_schema(v)
-        if out.get("type") == "file":
-            out["type"] = "string"
-            out["format"] = "binary"
-        elif out.get("type") == "array" and "items" not in out:
-            # OpenAPI (3.0 and 3.1) requires items on an array schema
-            out["items"] = {}
-            self.assumptions.append(
-                "an array schema without 'items' got 'items: {}' (required "
-                "in OpenAPI 3)"
-            )
-        elif isinstance(out.get("type"), list):
+                out[k] = self._fix_schema(v, depth + 1)
+        # Multi-type collapse must run BEFORE the file/array fixups below,
+        # not after: it used to be a trailing `elif`, so a list type like
+        # ["array", "null"] or ["file"] skipped the array-needs-items and
+        # type:file fixups entirely and reached the output unfixed (#141
+        # A2). Collapsing first turns it into an ordinary scalar type that
+        # the existing fixups then handle exactly as if it had always been
+        # scalar.
+        if isinstance(out.get("type"), list):
             # JSON-Schema type array is invalid in OpenAPI 3.0; collapse to a
             # single type + nullable (to_openapi_31 re-expands for 3.1)
             types = [t for t in out["type"] if t != "null"]
@@ -441,6 +520,16 @@ class _Upgrader:
                     f"schema type {out.get('type')!r} chosen from multi-type "
                     f"array {node['type']} (OpenAPI 3.0 allows one type)"
                 )
+        if out.get("type") == "file":
+            out["type"] = "string"
+            out["format"] = "binary"
+        elif out.get("type") == "array" and "items" not in out:
+            # OpenAPI (3.0 and 3.1) requires items on an array schema
+            out["items"] = {}
+            self.assumptions.append(
+                "an array schema without 'items' got 'items: {}' (required "
+                "in OpenAPI 3)"
+            )
         if out.get("type") == "null":
             # JSON-Schema's 'null' type has no OAS 3.0 equivalent
             out.pop("type")
@@ -479,9 +568,11 @@ class _Upgrader:
         self._fix_default(out)
         if "$ref" in out and len(out) > 1:
             # OpenAPI 3.0 ignores siblings next to a schema $ref; wrap in
-            # allOf so the extra keys (e.g. description) stay meaningful
+            # allOf so the extra keys (e.g. description) stay meaningful.
+            # If a sibling 'allOf' already exists, merge into it instead
+            # of letting the dict-spread clobber the ref (#141 A1).
             ref = {"$ref": out.pop("$ref")}
-            out = {"allOf": [ref], **out}
+            out = self._merge_ref_into_allof(ref, out)
             self.assumptions.append(
                 "siblings next to a schema $ref wrapped in allOf so they "
                 "are not ignored in OpenAPI 3.0"
@@ -547,7 +638,14 @@ class _Upgrader:
                 )
 
     def _media_types(self, kind: str, op: dict, ctx: str) -> list[str]:
-        types = op.get(kind) or self.src.get(kind) or []
+        # an operation-level key that is *present* (even an empty list)
+        # is a deliberate override and must not inherit the global
+        # value — `op.get(kind) or self.src.get(kind)` used to treat an
+        # explicit `consumes: []`/`produces: []` the same as "absent"
+        # (#141 C), silently inheriting a global the operation meant to
+        # clear.
+        op_types = op.get(kind)
+        types = op_types if op_types is not None else (self.src.get(kind) or [])
         if isinstance(types, str):
             # spec violation seen in the wild: a bare string instead of an
             # array — list(str) would split it into characters
@@ -840,11 +938,28 @@ class _Upgrader:
         if "headers" in resp:
             headers = {}
             for hname, h in resp["headers"].items():
+                if not isinstance(h, dict):
+                    self.lossy.append(
+                        f"{ctx}: response header '{hname}' is not an "
+                        "object; dropped"
+                    )
+                    continue
                 hh = {k: v for k, v in h.items() if k == "description"}
-                hh["schema"] = {
-                    k: self._fix_schema(v) for k, v in h.items()
-                    if k in _SCHEMA_FIELDS
-                } or {"type": "string"}
+                # run the whole assembled schema through _fix_schema (not
+                # per-field) so its fixups apply as a unit: a multi-type
+                # 'type' array collapses correctly, and collectionFormat
+                # (not a real OpenAPI 3 schema field) is preserved as
+                # x-collectionFormat and recorded in x-s2o.lossy via
+                # _fix_schema's own handling instead of being silently
+                # dropped by the old per-field _SCHEMA_FIELDS filter
+                raw_schema = {
+                    k: v for k, v in h.items()
+                    if k in _SCHEMA_FIELDS or k == "collectionFormat"
+                }
+                hh["schema"] = (
+                    self._fix_schema(raw_schema) if raw_schema
+                    else {"type": "string"}
+                )
                 headers[hname] = hh
             out["headers"] = headers
         return out
@@ -860,8 +975,22 @@ class _Upgrader:
     }
 
     def _convert_security_schemes(self) -> dict:
+        raw = self.src.get("securityDefinitions")
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise ConversionError(
+                "securityDefinitions must be a mapping of scheme name -> "
+                f"security scheme object, got {type(raw).__name__}"
+            )
         out: dict[str, Any] = {}
-        for name, sd in (self.src.get("securityDefinitions") or {}).items():
+        for name, sd in raw.items():
+            if not isinstance(sd, dict):
+                self.lossy.append(
+                    f"securityDefinitions.{name}: not an object; "
+                    "dropped from securitySchemes"
+                )
+                continue
             t = sd.get("type")
             entry = self._one_security_scheme(name, t, sd)
             if entry is not None:
@@ -949,12 +1078,17 @@ class _Upgrader:
     def _gen_operation_id(self, method: str, path: str) -> str:
         raw = f"{method}_{path.strip('/') or 'root'}"
         raw = raw.replace("{", "").replace("}", "")
-        return _ID_RE.sub("_", raw).strip("_")[:64]
+        return _TOOL_ID_RE.sub("_", raw).strip("_")[:64]
 
     def _build_info(self) -> dict[str, Any]:
         # title and version are REQUIRED in OpenAPI 3; fill whichever is
         # missing (a present-but-partial info must still be completed)
-        info = dict(self.src.get("info") or {})
+        raw_info = self.src.get("info")
+        if raw_info is not None and not isinstance(raw_info, dict):
+            raise ConversionError(
+                f"info must be a mapping, got {type(raw_info).__name__}"
+            )
+        info = dict(raw_info or {})
         for field in ("title", "version"):
             val = info.get(field)
             if val is not None and not isinstance(val, str):
@@ -1004,6 +1138,22 @@ class _Upgrader:
             )
         return params
 
+    def _place_path(self, out_paths: dict, out_path: str, path: str,
+                    value: dict) -> None:
+        """Assign a converted path item, recording (not silently
+        overwriting) when two source path keys normalize to the same
+        OpenAPI 3 Paths-object key — e.g. 'pets' and '/pets' both become
+        '/pets' (#141 C); the later source key wins, matching the
+        duplicate-parameter/operationId 'later wins' policy used
+        elsewhere in this file."""
+        if out_path in out_paths:
+            self.lossy.append(
+                f"path '{path}' normalizes to '{out_path}', which "
+                "collides with an already-converted path; the later "
+                "definition overwrote the earlier one"
+            )
+        out_paths[out_path] = value
+
     def convert(self) -> dict[str, Any]:
         src = self.src
         out: dict[str, Any] = {
@@ -1048,7 +1198,8 @@ class _Upgrader:
                 )
                 continue
             if "$ref" in item:  # path item is a $ref (legal in OpenAPI 3)
-                out["paths"][out_path] = {"$ref": self._fix_ref(item["$ref"])}
+                self._place_path(out["paths"], out_path, path,
+                                 {"$ref": self._fix_ref(item["$ref"])})
                 continue
             new_item: dict[str, Any] = {}
             shared_raw = item.get("parameters", [])
@@ -1078,7 +1229,7 @@ class _Upgrader:
                         f"{ctx}: no operationId; generated '{op_id}'"
                     )
                 else:
-                    normalized = _ID_RE.sub("_", op_id).strip("_")[:64]
+                    normalized = _TOOL_ID_RE.sub("_", op_id).strip("_")[:64]
                     if not normalized:  # e.g. operationId was "!!!"
                         normalized = self._gen_operation_id(method, path)
                     if normalized != op_id:
@@ -1118,7 +1269,7 @@ class _Upgrader:
                 new_op["responses"] = responses
 
                 new_item[method] = new_op
-            out["paths"][out_path] = new_item
+            self._place_path(out["paths"], out_path, path, new_item)
 
         components: dict[str, Any] = {}
         if src.get("definitions"):
@@ -1148,11 +1299,17 @@ class _Upgrader:
             components["parameters"] = conv_params
         if request_bodies:
             components["requestBodies"] = request_bodies
-        if src.get("responses"):
+        responses_raw = src.get("responses")
+        if responses_raw:
+            if not isinstance(responses_raw, dict):
+                raise ConversionError(
+                    "top-level responses must be a mapping of name -> "
+                    f"Response Object, got {type(responses_raw).__name__}"
+                )
             components["responses"] = {
                 self._resp_key.get(name, name):
                     self._convert_response(r, {}, f"responses.{name}")
-                for name, r in src["responses"].items()
+                for name, r in responses_raw.items()
             }
         schemes = self._convert_security_schemes()
         if schemes:

@@ -1,10 +1,24 @@
 """tests/test_verify.py — verify()/checks.py의 구조화 검증 테스트."""
 from __future__ import annotations
 
+import dataclasses
 import sys
-import pytest
+from pathlib import Path
 
-from spec2openapi.checks import CheckRef, CheckResult, VerifyReport, verify
+import pytest
+import yaml
+
+from spec2openapi.checks import (
+    _READY_IDS,
+    _STATIC_CHECKS,
+    REGISTRY,
+    CheckRef,
+    CheckResult,
+    VerifyReport,
+    _result,
+    fastmcp_ready_problems,
+    verify,
+)
 
 
 def test_report_ok_and_complete_flags():
@@ -40,11 +54,9 @@ def test_report_to_dict_shape():
 
 def test_results_are_immutable():
     res = CheckResult(id="a", status="pass")
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         res.status = "fail"
 
-
-from spec2openapi.checks import REGISTRY, _result
 
 ALL_CHECK_IDS = {
     "document.mapping", "document.has-paths", "document.has-operations",
@@ -73,7 +85,10 @@ def test_result_helper_attaches_registry_refs():
     assert any(ref.id == "SEP-986" for ref in r.refs)
 
 
-from spec2openapi.checks import fastmcp_ready_problems
+def test_ready_ids_subset_of_static_checks():
+    # check_fastmcp_ready's frozen id set must only ever name checks that
+    # verify()'s static registry actually runs.
+    assert _READY_IDS <= {cid for cid, _ in _STATIC_CHECKS}
 
 
 def _spec(paths):
@@ -504,6 +519,53 @@ def test_choice_marker_group_not_a_dict_fails():
     assert res[0] == "fail"
 
 
+def test_choice_marker_accepts_bundled_sequence_branch():
+    # a members[] entry may itself be a list of names — a branch that is
+    # a bundled xsd:sequence of 2+ elements inside the choice — and must
+    # not be flagged as referencing "unknown properties" (#141 B2).
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}, "b": {}, "c": {}},
+        "x-soap-choice": [{"members": [["a", "b"], "c"], "required": True}],
+    }}}
+    report = verify(spec, deep=False)
+    assert _statuses(report, "x-soap.choice") == [("pass", "")]
+
+
+def test_choice_marker_flags_unknown_name_inside_bundled_branch():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}, "b": {}},
+        "x-soap-choice": [{"members": [["a", "ghost"]], "required": True}],
+    }}}
+    report = verify(spec, deep=False)
+    (res,) = [(s, m) for s, m in _statuses(report, "x-soap.choice")]
+    assert res[0] == "fail" and "ghost" in res[1]
+
+
+def test_choice_marker_flags_empty_bundled_branch():
+    spec = _spec({"/op": _soap_op()})
+    spec["components"] = {"schemas": {"C": {
+        "type": "object", "properties": {"a": {}},
+        "x-soap-choice": [{"members": [[]], "required": True}],
+    }}}
+    report = verify(spec, deep=False)
+    (res,) = [(s, m) for s, m in _statuses(report, "x-soap.choice")]
+    assert res[0] == "fail"
+
+
+def test_choice_marker_passes_on_sequence_branch_fixture():
+    # tests/fixtures/edgecases.wsdl's SeqChoice is the real-world shape
+    # that motivated the bundled-branch representation; the check must
+    # not false-positive on schema.py's actual output for it.
+    from spec2openapi import convert_wsdl
+
+    fixtures = Path(__file__).resolve().parent / "fixtures"
+    spec = convert_wsdl(str(fixtures / "edgecases.wsdl"))
+    report = verify(spec, deep=False)
+    assert all(s == "pass" for s, _ in _statuses(report, "x-soap.choice"))
+
+
 def test_choice_marker_passes_on_real_world_example():
     # examples/advanced.openapi.yaml uses the real x-soap-choice marker
     # shape emitted by schema.py; the check must not false-positive on it.
@@ -643,9 +705,27 @@ def test_tool_params_preserve_input_schema_order_not_alphabetized():
     assert tool["params"] == ["zeta", "alpha"]
 
 
+def test_fastmcp_roundtrip_reads_tool_fields_without_camelcase_compat(
+        monkeypatch):
+    # MCP SDK v2 renamed Tool.inputSchema to input_schema; with FastMCP's
+    # camelCase shim turned off the old name no longer resolves
+    fastmcp = pytest.importorskip("fastmcp")
+    monkeypatch.setattr(fastmcp.settings, "mcp_camelcase_compat", False)
+
+    spec = _spec({"/a": {"get": {
+        "operationId": "get_a", "summary": "s",
+        "parameters": [{"name": "zeta", "in": "query", "required": True,
+                        "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "ok"}}}}})
+    report = verify(spec)
+    (rt,) = [r for r in report.results if r.id == "fastmcp.roundtrip"]
+    assert rt.status == "pass", rt.message
+    assert rt.data["tools"][0]["params"] == ["zeta"]
+
+
 def test_fastmcp_roundtrip_closes_dummy_client_on_success(monkeypatch):
     pytest.importorskip("fastmcp")
-    import httpx as httpx_mod
+    import httpx2 as httpx_mod
 
     closed = []
     orig_aclose = httpx_mod.AsyncClient.aclose
@@ -668,7 +748,7 @@ def test_fastmcp_roundtrip_closes_dummy_client_on_success(monkeypatch):
 def test_fastmcp_roundtrip_closes_dummy_client_on_from_openapi_failure(
         monkeypatch):
     pytest.importorskip("fastmcp")
-    import httpx as httpx_mod
+    import httpx2 as httpx_mod
     from fastmcp import FastMCP
 
     closed = []
@@ -725,10 +805,6 @@ def test_deep_invalid_document_fails_schema_valid():
     assert osv.status == "fail"
 
 
-from pathlib import Path
-
-import yaml
-
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
 
@@ -752,7 +828,7 @@ def test_checks_module_does_not_import_optional_deps():
     # 새 프로세스에서 코어 import만으로 fastmcp/zeep가 로드되지 않아야 한다
     import subprocess
     code = ("import sys; import spec2openapi, spec2openapi.checks; "
-            "bad = {'fastmcp', 'zeep', 'httpx'} & set(sys.modules); "
+            "bad = {'fastmcp', 'zeep', 'httpx2'} & set(sys.modules); "
             "sys.exit(1 if bad else 0)")
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True)
     assert proc.returncode == 0, proc.stderr.decode()

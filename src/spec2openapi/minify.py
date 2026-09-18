@@ -7,9 +7,9 @@ outputSchema). Measured against that channel:
 - schema subtrees are copied verbatim into tool schemas, so foreign
   vendor ``x-*`` extensions there are dead weight (operation-level
   extensions never reach the payload and are left alone);
-- error responses and media-type examples never reach the payload, and
-  parameter-level ``example`` values are dropped while in-schema ones
-  survive.
+- error responses and media-type examples never reach the payload, while
+  in-schema and parameter-level ``example`` values do (a parameter's
+  example is copied into its property schema).
 
 ``minify_for_mcp`` removes the dead weight and, with ``enrich``, makes
 the invisible facts visible: error responses and payload examples are
@@ -123,15 +123,9 @@ def _keep_fn(keep_extensions: Iterable[str]) -> Callable[[str], bool]:
 
 def _resolve(spec: dict[str, Any], ref: Any) -> Any:
     """Resolve an internal '#/...' JSON pointer; None if unresolvable."""
-    if not (isinstance(ref, str) and ref.startswith("#/")):
-        return None
-    node: Any = spec
-    for part in ref[2:].split("/"):
-        part = part.replace("~1", "/").replace("~0", "~")
-        if not isinstance(node, dict) or part not in node:
-            return None
-        node = node[part]
-    return node
+    from .openapi import resolve_pointer
+
+    return resolve_pointer(spec, ref)
 
 
 def _truncate(text: str, cap: int) -> str:
@@ -304,13 +298,8 @@ def _split_folds(description: str) -> tuple[str, list[str]]:
     return "\n".join(lines), folds
 
 
-def _hoist_parameter_example(param: Any, *, drop_value_examples: bool,
-                             ctx: str, report: _Report) -> None:
+def _hoist_parameter_example(param: Any, *, ctx: str, report: _Report) -> None:
     if not isinstance(param, dict) or "$ref" in param or "example" not in param:
-        return
-    if drop_value_examples:
-        report.notes.append(f"{ctx}: parameter example not hoisted "
-                            "(drop_value_examples is enabled)")
         return
     schema = param.get("schema")
     if not isinstance(schema, dict):
@@ -347,7 +336,7 @@ def minify_for_mcp(
     caps the descriptions that reach tool payloads (operation, parameter,
     in-schema — and the ``summary`` of an operation without a
     description, since that is what FastMCP serves then).
-    ``drop_value_examples`` removes in-schema examples. ``enrich`` folds
+    ``drop_value_examples`` removes in-schema and parameter-level examples. ``enrich`` folds
     invisible facts into descriptions: ``"errors"`` (error responses)
     and ``"examples"`` (payload examples, plus hoisting parameter
     examples into their schemas). See the module docstring for the exact
@@ -429,6 +418,11 @@ def minify_for_mcp(
                 clean(param["schema"])
             for schema in _media_schemas(param):  # content-style params
                 clean(schema)
+            if drop_value_examples and "example" in param:
+                # FastMCP copies a parameter-level example into the
+                # parameter's property schema
+                del param["example"]
+                report.bump("droppedExamples")
             if max_description is not None:
                 desc = param.get("description")
                 if isinstance(desc, str) and len(desc) > max_description:
@@ -437,8 +431,7 @@ def minify_for_mcp(
             if do_enrich and "examples" in enrich:
                 name = param.get("name", "?")
                 _hoist_parameter_example(
-                    param, drop_value_examples=drop_value_examples,
-                    ctx=f"{ctx} parameter '{name}'", report=report)
+                    param, ctx=f"{ctx} parameter '{name}'", report=report)
 
     def process_operation(path: str, method: str, op: dict[str, Any]) -> None:
         ctx = f"{str(method).upper()} {path}"

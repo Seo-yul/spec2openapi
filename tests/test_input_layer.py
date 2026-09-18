@@ -120,6 +120,28 @@ def test_input_violations_are_conversion_errors(label, call):
         call()
 
 
+def test_backslash_member_name_cannot_escape(tmp_path):
+    """A member name that only becomes absolute after backslash
+    normalization must be rejected, not written outside the temp dir."""
+    target = tmp_path / "pwned.xsd"
+    escape = f"\\{target}".replace("/", "\\")
+    with pytest.raises(ConversionError):
+        convert_wsdl(files={escape: "x", "a.wsdl": PAINT_WSDL})
+    assert not target.exists()
+
+
+def test_zip_cap_enforced_before_decompression(monkeypatch):
+    """The uncompressed-size cap must reject a bomb without inflating it."""
+    from spec2openapi import parser
+
+    monkeypatch.setattr(parser, "_BUNDLE_SIZE_CAP", 4096)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("big.xsd", b"\0" * (1024 * 1024))  # ~1KB compressed
+    with pytest.raises(ConversionError, match="size cap"):
+        parser._zip_members(io.BytesIO(buf.getvalue()))
+
+
 def test_cli_stdin(tmp_path, monkeypatch, capsys):
     from spec2openapi.cli import main as cli_main
 

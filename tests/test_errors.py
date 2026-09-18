@@ -5,8 +5,7 @@ import logging
 
 import pytest
 
-from spec2openapi import (ConversionError, convert_swagger, convert_wsdl,
-                          load_spec)
+from spec2openapi import ConversionError, convert_swagger, convert_wsdl, load_spec
 from spec2openapi.cli import main as cli_main
 from spec2openapi.schema import SchemaConverter
 
@@ -160,8 +159,8 @@ def test_is_swagger2_false_for_non_mapping():
 
 def test_load_spec_accepts_url(monkeypatch):
     """load_spec fetches http(s) sources (no real network: urlopen mocked)."""
-    import io
     import contextlib
+    import io
 
     payload = b'{"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {}}'
 
@@ -271,3 +270,23 @@ def test_non_wsdl_xml_is_labeled_conversion_error(tmp_path):
 def test_strict_skip_is_conversion_error():
     from spec2openapi.parser import UnsupportedWsdlError
     assert issubclass(UnsupportedWsdlError, ConversionError)
+
+
+# -- non-dict responses/securityDefinitions/info are ConversionError (#141 C) --
+
+BASE = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {}}
+
+
+def test_non_dict_top_level_responses_is_conversion_error():
+    with pytest.raises(ConversionError, match="responses"):
+        convert_swagger({**BASE, "responses": ["not", "a", "mapping"]})
+
+
+def test_non_dict_security_definitions_is_conversion_error():
+    with pytest.raises(ConversionError, match="securityDefinitions"):
+        convert_swagger({**BASE, "securityDefinitions": ["nope"]})
+
+
+def test_non_dict_info_is_conversion_error():
+    with pytest.raises(ConversionError, match="info"):
+        convert_swagger({"swagger": "2.0", "info": "nope", "paths": {}})

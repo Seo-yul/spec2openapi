@@ -39,7 +39,8 @@ The fixed-runtime deployment model — build one image, swap the spec via a Kube
 - **FastMCP compatibility, guaranteed and verifiable** — operationIds are generated in FastMCP's tool-name alphabet (`[A-Za-z0-9_]`, unique, ≤64 chars) so *tool name == operationId*. `spec2openapi validate` proves it: static checks, `openapi-spec-validator`, and a real `FastMCP.from_openapi()` round-trip listing the resulting tools.
 - **Structured verification (`verify`)** — a library API that runs 21 checks over a converted document (Swagger- and WSDL-converted alike): document shape, MCP tool-name rules (SEP-986), tool descriptions, the full `x-soap` contract, and — with the optional deps installed — `openapi-spec-validator` plus the FastMCP in-memory round-trip. Returns a deterministic, JSON-serializable report in which every check carries normative citations and "could not check" (`skip`) is always distinguishable from "checked and passed". `verify` never raises; `spec2openapi validate --format json` exposes the same report on the CLI.
 - **MCP tool-payload minification (optional)** — `minify_for_mcp()` shrinks and enriches what FastMCP actually sends the model: foreign vendor extensions are stripped from schema subtrees, and error responses / payload examples — which the MCP tool shape otherwise drops — can be folded into tool descriptions deterministically. Serving behavior is unchanged. See [Minifying the LLM-facing surface](#minifying-the-llm-facing-surface-optional).
-- **SOAP bridge — required to *serve* SOAP specs** — `pip install "spec2openapi[mcp]"` adds the bridge (custom httpx transport) that implements the `x-soap` contract, plus FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors. **Swagger-converted (pure REST) specs do not need this** — any OpenAPI runtime serves them. Only SOAP-converted specs require the bridge at runtime.
+- **LLM-filled descriptions (optional)** — `spec2openapi agentize` writes the descriptions a source spec leaves empty: schema properties, operation summaries, parameter docs; optionally readable tool names (`--rename-tools`). The model returns strings only, into a fixed JSON Pointer whitelist; every suggestion carries a grounding grade and ungrounded ones are dropped; the result must pass `verify()` or nothing is written. See [Filling the gaps with an LLM](#filling-the-gaps-with-an-llm-optional).
+- **SOAP bridge — required to *serve* SOAP specs** — `pip install "spec2openapi[mcp]"` adds the bridge (custom httpx2 transport) that implements the `x-soap` contract, plus FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors. **Swagger-converted (pure REST) specs do not need this** — any OpenAPI runtime serves them. Only SOAP-converted specs require the bridge at runtime.
 
 ## Installation
 
@@ -52,7 +53,7 @@ pip install spec2openapi          # converter + CLI (zeep, lxml, PyYAML)
 pip install "spec2openapi[mcp]"   # + SOAP bridge & runtime — required to serve SOAP specs
 ```
 
-> The core install is enough to **convert** any spec and to serve **Swagger-converted (REST)** specs from your own runtime. The `[mcp]` extra is required only to **serve SOAP-converted** specs (it provides the bridge that turns JSON tool calls into SOAP envelopes).
+> The core install is enough to **convert** any spec and to serve **Swagger-converted (REST)** specs from your own runtime. The `[mcp]` extra is required only to **serve SOAP-converted** specs (it provides the bridge that turns JSON tool calls into SOAP envelopes). It installs FastMCP 4 and httpx2.
 
 ## Quick start
 
@@ -73,6 +74,9 @@ spec2openapi upgrade swagger2.json -o service.openapi.yaml
 # Prove the spec converts cleanly into MCP tools
 spec2openapi validate orders.openapi.yaml
 spec2openapi validate orders.openapi.yaml --format json   # machine-readable report
+
+# Fill empty descriptions with an LLM (optional extra; see below)
+spec2openapi agentize service.openapi.yaml --dry-run
 
 # Reference MCP runtime (requires the [mcp] extra)
 spec2openapi serve orders.openapi.yaml --transport http --port 8000
@@ -158,7 +162,9 @@ The generated paths (`/operations/...`) are *not* real REST endpoints — a SOAP
 | `headers[]` | `soap:header` parts with schema refs |
 | `faults[]` | declared faults with schema refs |
 
-Serialization rules (schema `xml` annotations): `xml.name`/`xml.namespace` (absent namespace = unqualified), `xml.attribute: true`, `xml.x-text: true` (simpleContent text), arrays repeat the element, and **property order = XSD sequence order** (do not alphabetize the document). `x-soap-choice` lists mutually exclusive property groups. `x-soap-substitution` marks a substitution-group value: the JSON is a self-describing single-key object (`{"creditCard": {…}}`) and the wire carries that member element itself — the head element never appears.
+Declared `soap:header` values (`headers[]`) never come from tool arguments — the runtime supplies them via `BridgeOptions.soap_headers` / `SPEC2OPENAPI_SOAP_HEADERS` (a JSON object keyed by part or element name). An operation that declares a header with no configured value is sent without it and logs a warning (once per operation/header).
+
+Serialization rules (schema `xml` annotations): `xml.name`/`xml.namespace` (absent namespace = unqualified), `xml.attribute: true`, `xml.x-text: true` (simpleContent text), arrays repeat the element, and **property order = XSD sequence order** (do not alphabetize the document). `x-soap-choice` lists mutually exclusive property groups: each entry in a group's `members` is one *branch* of the `xsd:choice` — a bare property name for the usual single-element branch, or a list of names when the branch is itself a sequence, whose elements belong together and are chosen or omitted as a unit. `x-soap-substitution` marks a substitution-group value: the JSON is a self-describing single-key object (`{"creditCard": {…}}`) and the wire carries that member element itself — the head element never appears.
 
 The `[mcp]` extra contains a verified implementation of this contract (`src/spec2openapi/bridge.py`) — use it directly (via `spec2openapi serve`) or as the reference for your own runtime. **There is no way to serve a SOAP-converted spec without an implementation of this contract**; a standard OpenAPI runtime cannot do it.
 
@@ -176,7 +182,7 @@ Pipelines that must not accept guessed conversions can pass `--strict` to `upgra
 
 ## Minifying the LLM-facing surface (optional)
 
-When a spec is served over MCP, the model never reads the OpenAPI document. FastMCP sends the tool list: `name`, `description`, `inputSchema`, and (FastMCP 3.x) an `outputSchema` built from the 2xx response schema. Everything else — `info`, unused components, error responses, media-type examples, the `$ref` structure — stays on the server. That has two costs: schema content is copied into tool schemas verbatim, so machine-to-machine vendor extensions burn context tokens in every `tools/list`; and human-authored facts with no slot in the tool shape (error responses, request/response examples) silently vanish.
+When a spec is served over MCP, the model never reads the OpenAPI document. FastMCP sends the tool list: `name`, `description`, `inputSchema`, and an `outputSchema` built from the 2xx response schema. Everything else — `info`, unused components, error responses, media-type examples, the `$ref` structure — stays on the server. That has two costs: schema content is copied into tool schemas verbatim, so machine-to-machine vendor extensions burn context tokens in every `tools/list`; and human-authored facts with no slot in the tool shape (error responses, request/response examples) silently vanish.
 
 `minify_for_mcp` addresses both directions as an optional post-processing step — the conversion pipeline itself is unchanged:
 
@@ -186,8 +192,8 @@ spec = spec2openapi.minify_for_mcp(spec, enrich=("errors", "examples"))
 ```
 
 - **Default**: foreign vendor `x-*` extensions are removed from schema subtrees (the locations FastMCP copies into tool payloads). Everything a runtime or a reader needs survives: `x-soap*` and `xml` annotations (SOAP bridge), `x-s2o`, `x-fastmcp-*`, the project's preservation extensions (`x-pattern`, `x-collectionFormat`), and documentation-bearing extensions (`x-enum-varnames`, `x-example`, ...). Protect your own with `keep_extensions=("x-acme-*",)`.
-- **`enrich`**: `"errors"` folds error responses into the description (`Errors: 404 (not found); ...` — they never reach the model otherwise); `"examples"` folds request/response payload examples (`Example request: {...}`) and hoists parameter-level `example` values into the parameter schema, where FastMCP actually shows them. Only facts already in the document are used — nothing is invented, and re-runs never duplicate a fold.
-- **Opt-in trims**: `max_description=N` caps the descriptions that reach the payload (truncated text is marked with `…`); `drop_value_examples=True` strips in-schema examples — they usually *help* the model format arguments, so measure before enabling.
+- **`enrich`**: `"errors"` folds error responses into the description (`Errors: 404 (not found); ...` — they never reach the model otherwise); `"examples"` folds request/response payload examples (`Example request: {...}`) and hoists parameter-level `example` values into the parameter schema. Only facts already in the document are used — nothing is invented, and re-runs never duplicate a fold.
+- **Opt-in trims**: `max_description=N` caps the descriptions that reach the payload (truncated text is marked with `…`); `drop_value_examples=True` strips in-schema and parameter-level examples — they usually *help* the model format arguments, so measure before enabling.
 
 For any option combination the output is a valid OpenAPI document, still passes `check_fastmcp_ready`, and serves identically — no option touches the callable surface, and SOAP bridge envelopes are byte-identical. What was removed or folded is summarized under `x-s2o.minify`. Minification is one-way: write the result to a separate file and keep the original.
 
@@ -211,16 +217,80 @@ mcp = spec2openapi.from_openapi_spec(
 
 WSDL-converted specs tag every operation with its service name, so service-per-agent subsets need no extra tagging. The reference CLI (`spec2openapi serve`) does not expose route maps — use the Python entry point when you need a subset.
 
+## Filling the gaps with an LLM (optional)
+
+`spec2openapi agentize` uses an LLM to write the descriptions a source
+spec leaves empty — schema properties, operation summaries, parameter
+docs — so the tool surface an agent reads says what to send.
+
+```bash
+pip install 'spec2openapi[llm-anthropic]'
+export ANTHROPIC_API_KEY=...          # or: ant auth login
+
+# Swagger 2.0 / OpenAPI 3.x
+spec2openapi agentize petstore.json --dry-run          # what would change
+spec2openapi agentize petstore.json -o petstore.openapi.json
+
+# WSDL — the same command; conversion happens first
+spec2openapi agentize service.wsdl -o service.openapi.yaml
+```
+
+OpenAI works the same way; pass `--model` explicitly:
+
+```bash
+pip install 'spec2openapi[llm-openai]'
+export OPENAI_API_KEY=...
+spec2openapi agentize petstore.json --provider openai --model <model-id> -o out.json
+```
+
+**Credentials** come from the environment — `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY`, read natively by each SDK; the Anthropic SDK also
+authenticates from an `ant auth login` profile. `--dry-run` needs none,
+since it returns before a provider is constructed.
+
+| Flag | Effect |
+|------|--------|
+| `--dry-run` | list what would be filled; makes no API call |
+| `--target properties,desc,params,examples` | choose what to fill, in priority order |
+| `--rename-tools` | replace machine-generated `operationId`s with readable tool names |
+| `--self-check` | re-read the finished tool payload and report operations still ambiguous |
+| `--allow-speculative` | apply suggestions the model graded as unfounded |
+| `--overwrite` | replace existing descriptions regardless of quality |
+| `--language <name>` | output language; detected from the spec when omitted |
+| `--max-ops N` | stop before calling if the spec exceeds N operations |
+
+The output language is decided before the first call — detected from the
+prose already in the spec, not left to the model — and printed with the
+preflight line so you can see it before paying for anything. Override it
+with `--language`.
+
+What a run guarantees:
+
+- The model returns **strings only**, and where they may be written is a
+  fixed whitelist — `type`, `required`, `$ref`, `x-soap` and `xml` are
+  unreachable by any response.
+- Every suggestion carries a **grounding** grade (`named` / `documented`
+  / `inferred` / `speculative`); ungrounded guesses are dropped unless
+  `--allow-speculative` is given.
+- A run that writes anything must pass `verify()`, or nothing is written.
+- What was generated is recorded under `x-s2o.agentize` as JSON Pointers,
+  outside the schema nodes — so re-runs are idempotent and a reviewer can
+  tell model-written prose from the rest.
+
+`agentize` also applies `minify_for_mcp`'s deterministic clean-up, so that
+appears in the diff too. The output is a text spec; review it with
+`git diff`.
+
 ## Kubernetes: one image, many MCP servers
 
 ```bash
-docker build -t spec2openapi:0.6.0 .
+docker build -t spec2openapi:0.7.0 .
 spec2openapi convert <wsdl> -o openapi.yaml
 kubectl create configmap my-mcp-spec --from-file=openapi.yaml
 kubectl apply -f k8s/example.yaml    # Deployment mounts /config/openapi.yaml
 ```
 
-Only the ConfigMap changes per service; credentials live in a Secret (`SPEC2OPENAPI_ENDPOINT`, `SPEC2OPENAPI_AUTH` = `basic`|`wsse`, `SPEC2OPENAPI_USERNAME`/`PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`). The MCP endpoint is `http://<service>:8000/mcp` (streamable HTTP).
+Only the ConfigMap changes per service; credentials live in a Secret (`SPEC2OPENAPI_ENDPOINT`, `SPEC2OPENAPI_AUTH` = `basic`|`wsse`, `SPEC2OPENAPI_USERNAME`/`PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`, `SPEC2OPENAPI_SOAP_HEADERS`). TLS certificates are checked against the operating system's trust store; with `SPEC2OPENAPI_TRUST_ENV` on, `SSL_CERT_FILE` / `SSL_CERT_DIR` take precedence. The MCP endpoint is `http://<service>:8000/mcp` (streamable HTTP).
 
 ## Limitations
 
@@ -259,8 +329,10 @@ src/spec2openapi/
   swagger.py   Swagger 2.0 -> OpenAPI 3.x upgrader (x-s2o report)
   convert.py   core public API
   checks.py    structured verification (verify / VerifyReport)
-  cli.py       convert / upgrade / inspect / validate / serve
-  bridge.py    [mcp] SOAP bridge (httpx transport)
+  minify.py    optional shrink/enrich of the MCP tool payload
+  agentize/    [llm-*] optional LLM-written descriptions (quarantined)
+  cli.py       convert / upgrade / inspect / validate / agentize / serve
+  bridge.py    [mcp] SOAP bridge (httpx2 transport)
   server.py    [mcp] FastMCP glue
 ```
 

@@ -11,8 +11,16 @@ import collections
 from dataclasses import dataclass
 from typing import Any
 
-from .openapi import _FASTMCP_NORM_RE, _SAFE_TOOL_RE, _operations
-from .swagger import _DATA_KEYWORDS, is_swagger2
+from .errors import MCP_HINT
+from .openapi import (
+    _DATA_KEYWORDS,
+    _FASTMCP_NORM_RE,
+    _SAFE_TOOL_RE,
+    _SCHEMA_REF_PREFIX,
+    _operations,
+    schema_ref_name,
+)
+from .swagger import is_swagger2
 
 
 @dataclass(frozen=True)
@@ -186,13 +194,23 @@ def _result(cid: str, status: str, message: str = "", location: str = "",
                        data=data)
 
 
+def _finding(cid: str, message: str, location: str = "") -> CheckResult:
+    """A warn/fail finding whose status is the check's registered level."""
+    return _result(cid, REGISTRY[cid]["level"], message, location)
+
+
 def _op_location(path: object, method: object) -> str:
     return f"paths.{path}.{method}"
 
 
+def _op_display(op: dict, path: object, method: object) -> str:
+    """The operationId, or a "METHOD path" fallback when it is absent."""
+    return op.get("operationId") or f"{str(method).upper()} {path}"
+
+
 def _check_has_paths(spec):
     if not spec.get("paths"):
-        return [_result("document.has-paths", "fail", "spec has no paths")]
+        return [_finding("document.has-paths", "spec has no paths")]
     return []
 
 
@@ -204,8 +222,7 @@ def _check_has_operations(spec):
         return [_result("document.has-operations", "skip",
                         "not checked: spec has no paths")]
     if not any(True for _ in _operations(spec)):
-        return [_result("document.has-operations", "fail",
-                        "spec has no operations")]
+        return [_finding("document.has-operations", "spec has no operations")]
     return []
 
 
@@ -213,8 +230,8 @@ def _check_tool_name_present(spec):
     out = []
     for path, method, op in _operations(spec):
         if not op.get("operationId"):
-            out.append(_result(
-                "tool-name.present", "fail",
+            out.append(_finding(
+                "tool-name.present",
                 f"{str(method).upper()} {path}: missing operationId",
                 location=_op_location(path, method)))
     return out
@@ -227,8 +244,8 @@ def _check_tool_name_safe(spec):
         if not oid:
             continue
         if not isinstance(oid, str) or not _SAFE_TOOL_RE.fullmatch(oid):
-            out.append(_result(
-                "tool-name.safe", "fail",
+            out.append(_finding(
+                "tool-name.safe",
                 f"{oid}: not a safe MCP tool name",
                 location=_op_location(path, method)))
     return out
@@ -262,8 +279,8 @@ def _check_tool_name_unique(spec):
             rendered = sorted(dupes)
         except TypeError:
             rendered = sorted(dupes, key=repr)
-        return [_result("tool-name.unique", "fail",
-                        f"duplicate operationIds: {rendered}")]
+        return [_finding("tool-name.unique",
+                         f"duplicate operationIds: {rendered}")]
     return []
 
 
@@ -276,8 +293,8 @@ def _check_normalization_collision(spec):
     out = []
     for tool, oids in sorted(by_tool.items()):
         if len(oids) > 1:
-            out.append(_result(
-                "tool-name.normalization-collision", "fail",
+            out.append(_finding(
+                "tool-name.normalization-collision",
                 "operationIds collide after FastMCP normalization "
                 f"('{tool}'): {sorted(oids)}"))
     return out
@@ -293,8 +310,8 @@ def _check_xsoap_input_element(spec):
         if isinstance(xsoap, dict):
             inp = xsoap.get("input")
             if not (isinstance(inp, dict) and inp.get("element")):
-                out.append(_result(
-                    "x-soap.input-element", "fail",
+                out.append(_finding(
+                    "x-soap.input-element",
                     f"{oid}: x-soap.input.element missing",
                     location=_op_location(path, method)))
     return out
@@ -302,12 +319,12 @@ def _check_xsoap_input_element(spec):
 
 def _check_openapi3(spec):
     if is_swagger2(spec):
-        return [_result("document.openapi3", "fail",
-                        "Swagger 2.0 document: run convert_swagger first")]
+        return [_finding("document.openapi3",
+                         "Swagger 2.0 document: run convert_swagger first")]
     v = spec.get("openapi")
     if not (isinstance(v, str) and v.startswith("3.")):
-        return [_result("document.openapi3", "fail",
-                        f"openapi version {v!r} is not 3.x")]
+        return [_finding("document.openapi3",
+                         f"openapi version {v!r} is not 3.x")]
     return []
 
 
@@ -318,8 +335,8 @@ def _check_tool_name_normalized(spec):
         if (isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid)):
             norm = _FASTMCP_NORM_RE.sub("_", oid)
             if norm != oid:
-                out.append(_result(
-                    "tool-name.normalized", "warn",
+                out.append(_finding(
+                    "tool-name.normalized",
                     f"operationId '{oid}' is exposed as tool '{norm}' "
                     "(FastMCP normalization)",
                     location=_op_location(path, method)))
@@ -330,9 +347,9 @@ def _check_tool_description(spec):
     out = []
     for path, method, op in _operations(spec):
         if not (op.get("description") or op.get("summary")):
-            name = op.get("operationId") or f"{str(method).upper()} {path}"
-            out.append(_result(
-                "tool-description.present", "warn",
+            name = _op_display(op, path, method)
+            out.append(_finding(
+                "tool-description.present",
                 f"{name}: operation has neither description nor summary; "
                 "the MCP tool will expose no description",
                 location=_op_location(path, method)))
@@ -347,10 +364,14 @@ def _soap_operations(spec):
 
 
 def _check_xsoap_version(spec):
+    # not routed through _finding(): this check has two levels for one
+    # id (absent soapVersion -> warn, invalid soapVersion -> fail), so
+    # the status must stay explicit at each call site rather than come
+    # from REGISTRY's single registered level.
     out = []
     for path, method, op, xsoap in _soap_operations(spec):
         sv = xsoap.get("soapVersion")
-        oid = op.get("operationId") or f"{str(method).upper()} {path}"
+        oid = _op_display(op, path, method)
         loc = _op_location(path, method)
         if sv is None:
             # the bridge falls back to 1.1 when soapVersion is absent —
@@ -373,9 +394,9 @@ def _check_xsoap_output_element(spec):
         if "output" in xsoap:
             meta = xsoap["output"]
             if not (isinstance(meta, dict) and meta.get("element")):
-                oid = op.get("operationId") or f"{str(method).upper()} {path}"
-                out.append(_result(
-                    "x-soap.output-element", "warn",
+                oid = _op_display(op, path, method)
+                out.append(_finding(
+                    "x-soap.output-element",
                     f"{oid}: x-soap.output.element missing; response Body "
                     "matching cannot be verified",
                     location=_op_location(path, method)))
@@ -386,9 +407,9 @@ def _check_xsoap_endpoint(spec):
     out = []
     for path, method, op, xsoap in _soap_operations(spec):
         if not xsoap.get("endpoint"):
-            oid = op.get("operationId") or f"{str(method).upper()} {path}"
-            out.append(_result(
-                "x-soap.endpoint", "warn",
+            oid = _op_display(op, path, method)
+            out.append(_finding(
+                "x-soap.endpoint",
                 f"{oid}: x-soap.endpoint missing (set SPEC2OPENAPI_ENDPOINT "
                 "at runtime)",
                 location=_op_location(path, method)))
@@ -400,22 +421,20 @@ def _check_xsoap_mixed_rest(spec):
     has_rest = any(not isinstance(op.get("x-soap"), dict)
                    for _, _, op in _operations(spec))
     if has_soap and has_rest:
-        return [_result(
-            "x-soap.mixed-rest", "warn",
+        return [_finding(
+            "x-soap.mixed-rest",
             "spec mixes x-soap and plain REST operations; the reference "
             "runtime routes all traffic through the SOAP bridge, so REST "
             "operations are not served correctly")]
     return []
 
 
-_SCHEMA_REF_PREFIX = "#/components/schemas/"
-
 # schema keywords whose *values* are data, not sub-schemas, so a
 # dict shaped like {"$ref": ...} inside them is a data value, not an
-# actual reference to resolve. Reuses swagger.py's _DATA_KEYWORDS (the
+# actual reference to resolve. Reuses openapi.py's _DATA_KEYWORDS (the
 # set applied when the upgrader protects data values from schema
-# rewriting) plus "const", a 3.1/2020-12 data keyword swagger.py's
-# Swagger-2.0-only upgrader has no reason to know about.
+# rewriting) plus "const", a 3.1/2020-12 data keyword the Swagger-2.0-
+# only upgrader has no reason to know about.
 _DATA_SUBTREE_KEYS = frozenset(_DATA_KEYWORDS) | {"const"}
 
 
@@ -451,15 +470,13 @@ def _check_xsoap_refs(spec):
     schemas = _component_schemas(spec)
 
     def _resolvable(ref: str) -> bool:
-        if not ref.startswith(_SCHEMA_REF_PREFIX):
-            return False
         # a pointer into a component (.../A/properties/b) only needs its
         # first segment (the component name) to exist
-        name = ref[len(_SCHEMA_REF_PREFIX):].split("/", 1)[0]
-        return name in schemas
+        name = schema_ref_name(ref)
+        return name is not None and name in schemas
 
     for path, method, op, xsoap in _soap_operations(spec):
-        oid = op.get("operationId") or f"{str(method).upper()} {path}"
+        oid = _op_display(op, path, method)
         loc = _op_location(path, method)
         for kind in ("headers", "faults"):
             entries = xsoap.get(kind)
@@ -468,15 +485,15 @@ def _check_xsoap_refs(spec):
             for entry in entries:
                 ref = entry.get("schema") if isinstance(entry, dict) else None
                 if isinstance(ref, str) and not _resolvable(ref):
-                    out.append(_result(
-                        "x-soap.refs", "fail",
+                    out.append(_finding(
+                        "x-soap.refs",
                         f"{oid}: x-soap.{kind} schema '{ref}' does not "
                         "resolve to components.schemas", location=loc))
         for section in (op.get("requestBody"), op.get("responses")):
             for ref in _iter_ref_strings(section):
                 if ref.startswith(_SCHEMA_REF_PREFIX) and not _resolvable(ref):
-                    out.append(_result(
-                        "x-soap.refs", "fail",
+                    out.append(_finding(
+                        "x-soap.refs",
                         f"{oid}: schema ref '{ref}' does not resolve to "
                         "components.schemas", location=loc))
     return out
@@ -518,17 +535,17 @@ def _check_xsoap_substitution(spec):
             continue
         members = sub.get("members")
         if not isinstance(members, list):
-            out.append(_result("x-soap.substitution", "fail",
-                               "x-soap-substitution.members missing",
-                               location=loc))
+            out.append(_finding("x-soap.substitution",
+                                "x-soap-substitution.members missing",
+                                location=loc))
             continue
         member_els = set()
         bad_member = False
         for m in members:
             el = m.get("element") if isinstance(m, dict) else None
             if not isinstance(el, str) or not el:
-                out.append(_result(
-                    "x-soap.substitution", "fail",
+                out.append(_finding(
+                    "x-soap.substitution",
                     "x-soap-substitution member without an element name",
                     location=loc))
                 bad_member = True
@@ -544,26 +561,39 @@ def _check_xsoap_substitution(spec):
                 else None
             if not (isinstance(props, dict) and len(props) == 1
                     and branch.get("required") == list(props)):
-                out.append(_result(
-                    "x-soap.substitution", "fail",
+                out.append(_finding(
+                    "x-soap.substitution",
                     "oneOf branch is not a self-describing "
                     "single-property object", location=loc))
                 bad_branch = True
             else:
                 branch_props.add(next(iter(props)))
         if not bad_branch and not bad_member and branch_props != member_els:
-            out.append(_result(
-                "x-soap.substitution", "fail",
+            out.append(_finding(
+                "x-soap.substitution",
                 f"oneOf branches {sorted(branch_props, key=repr)} do not "
                 f"match substitution members "
                 f"{sorted(member_els, key=repr)}", location=loc))
     return out
 
 
+def _valid_choice_member(m: Any, names: set) -> bool:
+    """A members[] entry is a bare property name (one branch), or a
+    non-empty list of property names — a branch that is itself a
+    bundled xsd:sequence of 2+ elements (#141 B2)."""
+    if isinstance(m, str):
+        return m in names
+    if isinstance(m, list) and m:
+        return all(isinstance(n, str) and n in names for n in m)
+    return False
+
+
 def _check_xsoap_choice(spec):
-    # actual emitted/consumed shape (schema.py ~317, bridge.py ~256):
-    # x-soap-choice is a list of {"members": [name, ...], "required":
-    # bool} group dicts, not a list of name-lists.
+    # actual emitted/consumed shape (schema.py's _choice_groups,
+    # bridge.py's _choice_violations): x-soap-choice is a list of
+    # {"members": [...], "required": bool} group dicts. Each members[]
+    # entry is either a bare property name, or a list of property names
+    # for a branch that bundles 2+ elements together.
     out = []
     for loc, node in _iter_schema_nodes(spec):
         groups = node.get("x-soap-choice")
@@ -573,22 +603,22 @@ def _check_xsoap_choice(spec):
         names = set(props) if isinstance(props, dict) else set()
         for group in groups:
             if not isinstance(group, dict):
-                out.append(_result(
-                    "x-soap.choice", "fail",
+                out.append(_finding(
+                    "x-soap.choice",
                     "x-soap-choice group is not an object", location=loc))
                 continue
             members = group.get("members")
             if not isinstance(members, list):
-                out.append(_result(
-                    "x-soap.choice", "fail",
+                out.append(_finding(
+                    "x-soap.choice",
                     "x-soap-choice group without a members list",
                     location=loc))
                 continue
             unknown = [m for m in members
-                       if not (isinstance(m, str) and m in names)]
+                       if not _valid_choice_member(m, names)]
             if unknown:
-                out.append(_result(
-                    "x-soap.choice", "fail",
+                out.append(_finding(
+                    "x-soap.choice",
                     f"x-soap-choice references unknown properties: "
                     f"{unknown}", location=loc))
     return out
@@ -700,11 +730,10 @@ def _run_openapi_validator(spec: dict) -> list[CheckResult]:
 def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
     try:
         import anyio
-        import httpx
+        import httpx2
         from fastmcp import Client, FastMCP
     except ImportError:
-        msg = ("fastmcp not installed "
-               "(pip install 'spec2openapi[mcp]')")
+        msg = f"fastmcp not installed ({MCP_HINT})"
         return [_result("fastmcp.roundtrip", "skip", msg),
                 _result("fastmcp.tool-materialized", "skip", msg)]
 
@@ -725,7 +754,7 @@ def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
 
     # supply a dummy client so specs without a `servers` entry still
     # convert — verify measures tool convertibility, not deployment
-    dummy = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+    dummy = httpx2.AsyncClient(base_url="http://spec2openapi.invalid")
     try:
         mcp = FastMCP.from_openapi(openapi_spec=spec, name="verify",
                                    client=dummy)
@@ -753,7 +782,7 @@ def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
                         "round-trip failed")]
     data = {"tools": [
         {"name": t.name,
-         "params": list(((getattr(t, "inputSchema", None) or {})
+         "params": list(((getattr(t, "input_schema", None) or {})
                          .get("properties") or {}))}
         for t in sorted(tools, key=lambda t: t.name)]}
     results = [_result("fastmcp.roundtrip", "pass", data=data)]

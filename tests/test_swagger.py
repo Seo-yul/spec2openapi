@@ -1,14 +1,12 @@
 """Swagger 2.0 -> OpenAPI 3.x upgrade tests."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 from fastmcp import Client, FastMCP
 
-from spec2openapi import (ConversionError, convert_swagger, is_swagger2,
-                          load_spec)
+from spec2openapi import ConversionError, convert_swagger, is_swagger2, load_spec
 from spec2openapi.cli import main as cli_main
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -156,9 +154,9 @@ async def test_fastmcp_roundtrip(upgraded):
         tools = {t.name: t for t in await client.list_tools()}
     assert set(tools) == op_ids
     # query params surface as tool args
-    assert "limit" in tools["get_pets"].inputSchema["properties"]
+    assert "limit" in tools["get_pets"].input_schema["properties"]
     # body schema properties surface too
-    assert "name" in tools["addPet"].inputSchema["properties"]
+    assert "name" in tools["addPet"].input_schema["properties"]
 
 
 def test_upgrade_cli(tmp_path, capsys):
@@ -189,6 +187,24 @@ def test_repeated_records_aggregated():
     out = convert_swagger(src)
     hits = [a for a in out["x-s2o"]["assumptions"] if "siblings next to" in a]
     assert len(hits) == 1 and hits[0].endswith("(×2)")
+
+
+def test_default_response_nulls_not_aliased_to_source():
+    # a response literally named "default" must be null-stripped and
+    # rebuilt like any other response, not kept as an opaque, unstripped
+    # alias of the source subtree (#141 A3).
+    from spec2openapi.swagger import _Upgrader
+
+    src = {"swagger": "2.0", "info": {"title": "t", "version": "1"}, "paths": {},
+           "responses": {"default": {"description": "d",
+                                     "schema": {"type": "object",
+                                               "properties": None}}}}
+    up = _Upgrader(src)
+    stripped_default = up.src["responses"]["default"]
+    assert "properties" not in stripped_default["schema"]
+    assert stripped_default is not src["responses"]["default"]
+    # the untouched input is not mutated in place
+    assert src["responses"]["default"]["schema"]["properties"] is None
 
 
 def test_strict_error_lists_aggregated_records():

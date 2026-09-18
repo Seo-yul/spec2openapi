@@ -7,6 +7,158 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-18
+
+### Added
+- `spec2openapi agentize` — an optional command that uses an LLM to write
+  the descriptions a source spec leaves empty: schema properties, operation
+  summaries, and parameter docs. `--rename-tools` also replaces
+  machine-generated `operationId`s with readable tool names, and
+  `--self-check` re-reads the finished tool payload and reports operations
+  that are still ambiguous.
+
+  The generative path is separate from the deterministic one: it is its own
+  subcommand, and `minify_for_mcp` and the converters are untouched. The
+  model returns **strings only**, and where they may be written is a regex
+  whitelist over JSON Pointers — `type`, `required`, `$ref`, `xml` and the
+  `x-soap` runtime contract are unreachable by any response. Every
+  suggestion carries a grounding grade (`named` / `documented` / `inferred`
+  / `speculative`); ungrounded guesses are dropped unless
+  `--allow-speculative` is given. Deterministic work runs first, so the
+  model is only asked what the document does not already answer. After
+  applying, `verify()` re-runs and **any failure aborts the run and writes
+  nothing**. What was generated is recorded under root `x-s2o.agentize` as
+  JSON Pointers, outside the schema nodes, so re-runs are idempotent and a
+  reviewer can tell model-written prose from the rest.
+
+  The output language is decided before the first call — detected from the
+  prose already in the spec — and printed with the preflight line;
+  `--language` overrides it.
+
+  Requires an optional extra: `pip install 'spec2openapi[llm-anthropic]'`
+  or `[llm-openai]`. `import spec2openapi` pulls in neither SDK, and the
+  base install gains no dependencies. `--dry-run` makes no API call.
+  Documented in both READMEs.
+
+### Changed
+- The `[mcp]` extra requires FastMCP 4 (`fastmcp>=4.0`) and uses `httpx2`
+  instead of `httpx`. `SoapBridgeTransport` is an
+  `httpx2.AsyncBaseTransport`, so a hand-built client mounts it on an
+  `httpx2.AsyncClient`. TLS certificates are checked against the operating
+  system's trust store; with `SPEC2OPENAPI_TRUST_ENV` on, `SSL_CERT_FILE` /
+  `SSL_CERT_DIR` take precedence.
+- `minify_for_mcp(drop_value_examples=True)` also removes parameter-level
+  `example` values, which FastMCP copies into the tool's input schema.
+- `x-soap-choice` entries describe *branches*, not individual elements
+  (#141). A `members[]` entry is still a bare property name for the usual
+  single-element branch, but a branch that is itself an `xsd:sequence` now
+  appears as a list of names: those elements belong together and are
+  chosen or omitted as a unit. Previously they were flattened into
+  separate members, so the bridge rejected a payload the XSD requires.
+  Documented in both READMEs; the SOAP bridge and the `x-soap.choice`
+  verification check understand both shapes, and the bridge rejects a
+  payload that fills a bundled branch only partway — those elements are
+  chosen or omitted as a unit.
+
+### Fixed
+- `verify()`'s FastMCP round-trip and `agentize --self-check` read tool
+  input schemas by the MCP SDK's `input_schema` field, so the reported
+  parameters stay correct with FastMCP's camelCase compatibility layer
+  turned off.
+- Each converted spec gets its own SOAP fault schema (#142). Every 3.0
+  document from `convert_wsdl` previously aliased one process-global
+  dict, so editing `components.schemas.SoapFault` on one spec silently
+  changed every later conversion in the same process.
+- `spec_has_soap` and the runtime's REST detection now agree with the
+  canonical operation walk (#142): the REST check skipped the `trace`
+  method entirely, and `spec_has_soap` had no method filter, so a value
+  under a path item that was not an operation could read as SOAP.
+- Conversion no longer silently drops a `$ref` that has sibling keys
+  including `allOf` (#141) — the sibling spread overwrote the wrapper, so
+  the referenced schema vanished with no `x-s2o.lossy` record.
+- Multi-type schemas (`type: ["array", "null"]`, `type: ["file"]`) are
+  collapsed *before* the `type: file` and array-needs-`items` fixups run,
+  so they no longer emit documents that fail validation (#141).
+- `nullable` survives the OpenAPI 3.1 conversion on schemas where it
+  cannot be folded into a `type` — `allOf`/`$ref`-wrapped, enum-only, or
+  type-less schemas are now expressed as `anyOf: [schema, {type: null}]`
+  instead of losing the null case (#141).
+- A property literally named `nullable`, `enum`, or `exclusiveMinimum` is
+  no longer mangled by the 3.1 conversion: keys inside `properties` maps
+  are names, not keywords (#141).
+- The `default` response subtree is no longer treated as opaque data by
+  the null-stripping pass, which left invalid `null` values in the output
+  and shared the subtree with the input document by reference (#141).
+- The OpenAPI 3.1 conversion walks name-keyed maps (`responses`, `headers`,
+  component maps) instead of copying any entry whose key happens to match a
+  JSON Schema data keyword. A `default` response carrying a `nullable`
+  schema previously reached the output unconverted, producing a 3.1
+  document with a keyword JSON Schema 2020-12 does not define. Media-type
+  `examples` stay opaque — an Example Object's `value` is data, not schema.
+- XSD enumerations and numeric bounds are converted to the base type, so
+  a restriction on `xs:int` no longer yields the unsatisfiable
+  `{type: integer, enum: ["1", "2"]}`, and 64-bit bounds keep their
+  precision instead of passing through `float` (#141).
+- A document nested past 200 levels raises `ConversionError` instead of
+  `RecursionError`, keeping the "every failure is a ConversionError"
+  contract (#141).
+- A doc/literal wrapper of simple type carries the `xml: {x-text: true}`
+  annotation, so the bridge serializes its value as the wrapper's text
+  rather than a `<value>` child element (#141).
+- `nillable` is preserved on complex and `$ref` elements; a complexType
+  containing only `xsd:any` is no longer misclassified as simpleContent;
+  XSD `pattern` facets are anchored to match XSD semantics; and the
+  metadata scrapers honor `--huge-tree` instead of dropping all facets and
+  documentation on very large WSDLs (#141).
+- Malformed `responses`/`securityDefinitions`/`info` sections raise
+  `ConversionError` instead of a raw `AttributeError`/`ValueError`; a path
+  key that collides after normalization is recorded rather than silently
+  overwriting; response-header conversion applies the full schema fixups
+  and records dropped `collectionFormat`; and an operation-level empty
+  `consumes`/`produces` now clears the global instead of inheriting it
+  (#141).
+- The SOAP bridge no longer reports a failed call as a success (#140): an
+  HTTP 4xx/5xx response whose body is a well-formed non-Fault envelope was
+  answered as HTTP 200, telling the model an operation that never ran had
+  succeeded. It now returns the real status with a fault payload, like the
+  empty / non-XML / no-Body branches always did.
+- Declared `soap:header` parts are serialized instead of silently dropped
+  (#140). Values are injected at deployment level — `BridgeOptions(
+  soap_headers=...)` or `SPEC2OPENAPI_SOAP_HEADERS` (a JSON object keyed by
+  part or element name) — and a header the spec declares but the runtime
+  cannot supply now logs a warning once per operation instead of producing
+  an envelope the server rejects.
+- Response values are coerced on OpenAPI 3.1 specs too (#140): `_coerce`
+  compared `type` only to the 3.0 string form, so a spec converted with
+  `--openapi-version 3.1` returned numbers and booleans to the model as
+  JSON strings.
+- `NaN`/`INF` values from the wire are left as strings rather than coerced
+  to non-finite floats that serialize as invalid JSON (#140).
+- `components:`, `components.schemas:`, and `paths:` present-but-null no
+  longer crash the bridge's spec index with `AttributeError` (#140).
+- A null `soapAction` no longer sends the literal `SOAPAction: "None"`, and
+  an unquoted `soapVersion: 1.2` (which YAML reads as a float) no longer
+  falls back to 1.1 framing (#140). Version normalization is now shared by
+  envelope construction, request headers, and response parsing, so framing
+  and namespace cannot disagree.
+
+### Security
+- Bundle member names are now validated after backslash normalization, and
+  every write is confined to the extraction directory by an absolute-path
+  containment check (#139). A member named `\tmp\x` previously passed the
+  guard (not absolute on POSIX, no `..`) and then escaped the temp
+  directory when the name was normalized for `os.path.join` — an arbitrary
+  file write for callers converting untrusted bundles.
+- The uncompressed-size cap is enforced *while* decompressing an archive
+  instead of after (#139): declared member sizes are rejected up front and
+  each member is read one byte past the remaining budget, so a zip bomb is
+  refused without ever allocating the memory the cap is meant to bound.
+- A set-but-empty `SPEC2OPENAPI_VERIFY` no longer disables TLS certificate
+  verification (#139). Empty now means "leave the default" for every
+  boolean env var, matching `SPEC2OPENAPI_TIMEOUT` and the string vars;
+  previously the common `VERIFY=""` manifest idiom silently turned
+  certificate validation off for every SOAP call.
+
 ## [0.6.0] - 2026-08-16
 
 ### Added
@@ -411,7 +563,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.3.0...v0.4.0

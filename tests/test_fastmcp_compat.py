@@ -35,7 +35,7 @@ async def test_fastmcp_roundtrip_all_fixtures(wsdl, openapi_version):
     assert set(tools) == op_ids
     for name, tool in tools.items():
         assert TOOL_NAME_RE.fullmatch(name)
-        schema = tool.inputSchema or {}
+        schema = tool.input_schema or {}
         assert schema.get("type", "object") == "object"
 
 
@@ -46,7 +46,7 @@ async def test_tool_schema_content_matches_wsdl():
         tools = {t.name: t for t in await client.list_tools()}
     tool = tools["SubmitApplication"]
 
-    props = tool.inputSchema["properties"]
+    props = tool.input_schema["properties"]
     assert set(props) >= {"applicant", "payment", "discount", "email",
                           "phone", "tags", "mode"}
     # facet + doc survive into the tool schema FastMCP hands to the LLM

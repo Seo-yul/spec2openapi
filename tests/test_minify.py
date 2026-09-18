@@ -10,10 +10,12 @@ which spec locations reach tool payloads.
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 from pathlib import Path
 
 import pytest
+import yaml
 from fastmcp import Client, FastMCP
 
 from spec2openapi import (
@@ -206,14 +208,25 @@ def test_parameter_example_hoisting():
     assert "example" not in shared
 
 
-def test_hoisting_yields_to_drop_value_examples():
+def test_drop_value_examples_removes_parameter_examples():
     mini = minify_for_mcp(fixture_spec(), drop_value_examples=True,
                           enrich=("examples",))
-    region = create_pet(mini)["parameters"][0]
-    assert region["example"] == "eu-west-1"      # left in place
-    assert "example" not in region["schema"]     # nothing added
-    assert any("drop_value_examples" in n
-               for n in mini["x-s2o"]["minify"]["notes"])
+    region, trace = create_pet(mini)["parameters"]
+    assert "example" not in region
+    assert "example" not in region["schema"]     # nothing hoisted
+    assert "example" not in trace
+    shared = mini["components"]["parameters"]["SharedLimit"]
+    assert "example" not in shared
+    assert "example" not in shared["schema"]
+
+
+async def test_dropped_parameter_example_never_reaches_the_tool_schema():
+    mini = minify_for_mcp(fixture_spec(), drop_value_examples=True)
+    mcp = FastMCP.from_openapi(openapi_spec=mini, name="minify")
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+    region = tools["createPet"].input_schema["properties"]["region"]
+    assert "example" not in region
 
 
 async def test_hoisted_example_reaches_the_tool_schema():
@@ -221,7 +234,7 @@ async def test_hoisted_example_reaches_the_tool_schema():
     mcp = FastMCP.from_openapi(openapi_spec=mini, name="minify")
     async with Client(mcp) as client:
         tools = {t.name: t for t in await client.list_tools()}
-    region = tools["createPet"].inputSchema["properties"]["region"]
+    region = tools["createPet"].input_schema["properties"]["region"]
     assert region.get("example") == "eu-west-1"
 
 
@@ -310,8 +323,8 @@ async def _tool_payload_sizes(spec: dict) -> dict[str, int]:
     return {
         t.name: len(json.dumps(
             {"description": t.description or "",
-             "inputSchema": t.inputSchema,
-             "outputSchema": getattr(t, "outputSchema", None)},
+             "inputSchema": t.input_schema,
+             "outputSchema": getattr(t, "output_schema", None)},
             ensure_ascii=False, sort_keys=True))
         for t in tools
     }
@@ -372,7 +385,7 @@ _EXPECTED_LEAKS = {
     "SUMMARY_MARKER": False,       # dropped whenever description exists
     "OPWIRING_MARKER": False,      # operation-level x-* never leaks
     "PARAMDESC_MARKER": True,      # merged into inputSchema
-    "PARAMEX_MARKER": False,       # parameter-level example is dropped
+    "PARAMEX_MARKER": True,        # copied into the property schema
     "REQEX_MARKER": False,         # media-type examples are dropped
     "SCHEMAWIRING_MARKER": False,  # input-schema root x-* is discarded
     "VALEX_MARKER": True,          # in-schema example survives
@@ -385,10 +398,6 @@ _EXPECTED_LEAKS = {
 
 # --- review-hardening regressions (PR #129) ---------------------------------
 # One test per confirmed finding of the PR review, in its severity order.
-
-import datetime
-
-import yaml
 
 
 def _tiny(op_extra: dict | None = None, **root_extra) -> dict:
@@ -579,8 +588,8 @@ async def test_leak_map_regression():
         tools = await client.list_tools()
     tool = tools[0]
     blob = json.dumps(
-        {"description": tool.description, "inputSchema": tool.inputSchema,
-         "outputSchema": getattr(tool, "outputSchema", None)},
+        {"description": tool.description, "inputSchema": tool.input_schema,
+         "outputSchema": getattr(tool, "output_schema", None)},
         ensure_ascii=False)
     leaked = {m: (m in blob) for m in _EXPECTED_LEAKS}
     assert leaked == _EXPECTED_LEAKS

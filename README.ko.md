@@ -32,7 +32,7 @@ pip install "spec2openapi[mcp]"   # + SOAP 브리지·런타임 — SOAP 스펙 
 pip install -e ".[dev]"
 ```
 
-> 코어만 설치해도 모든 스펙을 **변환**할 수 있으며, **Swagger 변환 결과(REST)** 스펙은 직접 만든 런타임으로 서빙할 수 있다. `[mcp]` extra는 **SOAP 변환 스펙을 서빙**할 때만 필요하다(JSON tool 호출을 SOAP envelope으로 바꾸는 브리지를 제공한다).
+> 코어만 설치해도 모든 스펙을 **변환**할 수 있으며, **Swagger 변환 결과(REST)** 스펙은 직접 만든 런타임으로 서빙할 수 있다. `[mcp]` extra는 **SOAP 변환 스펙을 서빙**할 때만 필요하다(JSON tool 호출을 SOAP envelope으로 바꾸는 브리지를 제공한다). 이 extra는 FastMCP 4와 httpx2를 설치한다.
 
 ## CLI
 
@@ -54,6 +54,9 @@ spec2openapi upgrade swagger2.json -o service.openapi.yaml   # 파일 또는 URL
 # + FastMCP.from_openapi 라운드트립으로 tool 생성까지 확인)
 spec2openapi validate orders.openapi.yaml
 spec2openapi validate orders.openapi.yaml --format json   # 기계가 읽는 검증 보고서
+
+# 빈 설명을 LLM으로 채우기 (선택 extra 필요, 아래 참조)
+spec2openapi agentize service.openapi.yaml --dry-run
 
 # 참조 MCP 런타임 ([mcp] extra 필요)
 spec2openapi serve orders.openapi.yaml --transport http --port 8000
@@ -161,7 +164,7 @@ deep copy하지 않음), 입력을 계속 쓰면서 결과를 수정하려면 `c
 
 ## LLM에게 실리는 표면 최소화 (선택 기능)
 
-스펙을 MCP로 서빙하면 모델은 OpenAPI 문서를 읽지 않는다. FastMCP가 보내는 것은 tool 목록이며, 각 tool은 `name`, `description`, `inputSchema`, 그리고 FastMCP 3.x부터는 2xx 응답 스키마로 만든 `outputSchema`를 담는다. 나머지(`info`, 참조되지 않는 컴포넌트, 에러 응답, 미디어타입 example, `$ref` 구조)는 서버에 남는다. 그래서 두 가지 비용이 생긴다. 스키마 내용은 tool 스키마로 그대로 복사되므로 기계 배선용 벤더 확장이 모든 `tools/list` 응답에서 컨텍스트 토큰을 낭비하고, tool 형태에 자리가 없는 정보(에러 응답, request/response example)는 사람이 써 두었어도 모델에게 전달되지 않는다.
+스펙을 MCP로 서빙하면 모델은 OpenAPI 문서를 읽지 않는다. FastMCP가 보내는 것은 tool 목록이며, 각 tool은 `name`, `description`, `inputSchema`, 그리고 2xx 응답 스키마로 만든 `outputSchema`를 담는다. 나머지(`info`, 참조되지 않는 컴포넌트, 에러 응답, 미디어타입 example, `$ref` 구조)는 서버에 남는다. 그래서 두 가지 비용이 생긴다. 스키마 내용은 tool 스키마로 그대로 복사되므로 기계 배선용 벤더 확장이 모든 `tools/list` 응답에서 컨텍스트 토큰을 낭비하고, tool 형태에 자리가 없는 정보(에러 응답, request/response example)는 사람이 써 두었어도 모델에게 전달되지 않는다.
 
 `minify_for_mcp`는 이 두 방향을 모두 다루는 선택적 후처리 단계다. 변환 파이프라인 자체는 그대로다.
 
@@ -171,8 +174,8 @@ spec = spec2openapi.minify_for_mcp(spec, enrich=("errors", "examples"))
 ```
 
 - **기본 동작**: 보존 목록에 없는 벤더 `x-*` 확장을 스키마 서브트리에서 제거한다(FastMCP가 tool 페이로드로 복사하는 위치들). 런타임과 독자가 필요로 하는 것은 전부 살아남는다. SOAP 브리지가 읽는 `x-soap*`와 `xml` 어노테이션, `x-s2o`, `x-fastmcp-*`, 이 프로젝트의 보존용 확장(`x-pattern`, `x-collectionFormat`), 문서성 확장(`x-enum-varnames`, `x-example` 등)이 그렇다. 자체 확장은 `keep_extensions=("x-acme-*",)`로 지킨다.
-- **`enrich`**: `"errors"`는 에러 응답을 `Errors: 404 (not found); ...` 형태의 한 줄로 description에 접어 넣는다(에러 응답은 그 외의 방법으로는 모델에게 전달되지 않는다). `"examples"`는 request/response 페이로드 example을 `Example request: {...}` 줄로 접고, 파라미터 수준 `example` 값을 스키마 안으로 옮겨 FastMCP가 실제로 보여주는 위치에 놓는다. 문서에 이미 있는 사실만 사용하며 아무것도 지어내지 않고, 다시 실행해도 중복으로 접히지 않는다.
-- **opt-in 축소**: `max_description=N`은 페이로드에 도달하는 description 길이를 제한한다(잘린 텍스트는 `…`로 표시). `drop_value_examples=True`는 스키마 안의 example을 제거하는데, example은 보통 모델의 인자 형식을 돕는 정보이므로 효과를 측정한 뒤 켜는 것을 권한다.
+- **`enrich`**: `"errors"`는 에러 응답을 `Errors: 404 (not found); ...` 형태의 한 줄로 description에 접어 넣는다(에러 응답은 그 외의 방법으로는 모델에게 전달되지 않는다). `"examples"`는 request/response 페이로드 example을 `Example request: {...}` 줄로 접고, 파라미터 수준 `example` 값을 파라미터 스키마 안으로 옮긴다. 문서에 이미 있는 사실만 사용하며 아무것도 지어내지 않고, 다시 실행해도 중복으로 접히지 않는다.
+- **opt-in 축소**: `max_description=N`은 페이로드에 도달하는 description 길이를 제한한다(잘린 텍스트는 `…`로 표시). `drop_value_examples=True`는 스키마 안과 파라미터 수준의 example을 제거하는데, example은 보통 모델의 인자 형식을 돕는 정보이므로 효과를 측정한 뒤 켜는 것을 권한다.
 
 어떤 옵션 조합에서도 결과물은 유효한 OpenAPI 문서이고 `check_fastmcp_ready`를 통과하며 동일하게 서빙된다. 어떤 옵션도 호출 표면을 건드리지 않으므로 SOAP 브리지 envelope도 바이트 단위로 같다. 제거되거나 접힌 내용은 `x-s2o.minify`에 요약된다. 경량화는 단방향이므로 결과는 별도 파일로 저장하고 원본을 보관한다.
 
@@ -196,6 +199,69 @@ mcp = spec2openapi.from_openapi_spec(
 
 WSDL에서 변환된 스펙은 모든 operation에 서비스 이름이 태그로 붙어 있으므로, 서비스 단위 서브셋에는 별도 태깅이 필요 없다. 참조 CLI(`spec2openapi serve`)는 route map을 노출하지 않으므로, 서브셋이 필요하면 파이썬 진입점을 쓴다.
 
+## LLM으로 빈틈 채우기 (선택 기능)
+
+`spec2openapi agentize`는 원본 스펙에서 비어 있는 설명 — 스키마 property,
+operation summary, parameter 설명 — 을 LLM으로 채운다. agent가 읽는 tool
+표면이 무엇을 보내야 하는지 말해 주게 만드는 것이 목적이다.
+
+```bash
+pip install 'spec2openapi[llm-anthropic]'
+export ANTHROPIC_API_KEY=...          # 또는: ant auth login
+
+# Swagger 2.0 / OpenAPI 3.x
+spec2openapi agentize petstore.json --dry-run          # 무엇이 바뀔지 미리 본다
+spec2openapi agentize petstore.json -o petstore.openapi.json
+
+# WSDL — 명령은 동일하다; 변환이 먼저 일어날 뿐이다
+spec2openapi agentize service.wsdl -o service.openapi.yaml
+```
+
+OpenAI도 동일하게 쓰되 `--model`을 명시한다.
+
+```bash
+pip install 'spec2openapi[llm-openai]'
+export OPENAI_API_KEY=...
+spec2openapi agentize petstore.json --provider openai --model <모델-id> -o out.json
+```
+
+**자격증명**은 환경변수에서 온다 — `ANTHROPIC_API_KEY` 또는
+`OPENAI_API_KEY`를 각 SDK가 네이티브로 읽는다. Anthropic SDK는
+`ant auth login` 프로필로도 인증된다. `--dry-run`은 provider를 만들기 전에
+반환하므로 자격증명이 필요 없다.
+
+| 플래그 | 동작 |
+|--------|------|
+| `--dry-run` | 채울 대상만 출력한다. API 호출 없음 |
+| `--target properties,desc,params,examples` | 채울 대상을 고른다. 나열 순서가 우선순위 |
+| `--rename-tools` | 기계 생성된 `operationId`를 읽기 좋은 tool 이름으로 바꾼다 |
+| `--self-check` | 완성된 tool payload를 다시 읽고 여전히 모호한 operation을 보고한다 |
+| `--allow-speculative` | 모델이 근거 없다고 매긴 제안까지 적용한다 |
+| `--overwrite` | 기존 설명을 품질과 무관하게 전부 교체한다 |
+| `--language <이름>` | 출력 언어. 생략하면 스펙에서 판정한다 |
+| `--max-ops N` | operation이 N개를 넘으면 호출 전에 중단한다 |
+
+출력 언어는 첫 호출 전에 확정된다 — 모델에게 맡기지 않고 스펙에 이미
+쓰인 산문에서 판정하며, 비용이 발생하기 전에 preflight 줄로 함께 출력된다.
+`--language`로 직접 지정할 수 있다.
+
+실행이 보장하는 것:
+
+- 모델은 **문자열만** 돌려주고, 쓸 수 있는 위치는 고정된 화이트리스트로
+  제한된다 — `type`, `required`, `$ref`, `x-soap`, `xml`은 어떤 응답으로도
+  도달할 수 없다.
+- 모든 제안은 **grounding** 등급(`named` / `documented` / `inferred` /
+  `speculative`)을 달고 오며, 근거 없는 추측은 `--allow-speculative`가
+  없으면 폐기된다.
+- 무언가를 쓴 실행은 반드시 `verify()`를 통과해야 하고, 통과하지 못하면
+  아무것도 쓰지 않는다.
+- 무엇이 생성됐는지는 `x-s2o.agentize`에 JSON Pointer로, 스키마 노드
+  바깥에 기록된다 — 그래서 재실행은 멱등이고 리뷰어는 모델이 쓴 문장을
+  구분할 수 있다.
+
+`agentize`는 `minify_for_mcp`의 결정론적 정리도 함께 적용하므로 그 결과도
+diff에 나타난다. 출력은 텍스트 스펙이니 `git diff`로 확인하면 된다.
+
 ## x-soap 확장 명세 (런타임 구현 계약)
 
 오퍼레이션 레벨 `paths.*.post.x-soap`:
@@ -212,6 +278,8 @@ WSDL에서 변환된 스펙은 모든 operation에 서비스 이름이 태그로
 | `headers[]` | soap:header 파트: `{part, element, namespace, schema}` |
 | `faults[]` | 선언된 fault: `{name, element, namespace, schema}` |
 
+`headers[]`로 선언된 soap:header 값은 도구 인자로 전달되지 않는다 — 런타임이 `BridgeOptions.soap_headers` / `SPEC2OPENAPI_SOAP_HEADERS`(part 또는 element 이름을 키로 하는 JSON 객체)로 공급한다. 값이 설정되지 않은 헤더는 경고를 로그로 남기고(오퍼레이션·헤더별 최초 1회) 생략한 채 전송된다.
+
 XML 직렬화 규칙(스키마의 `xml` 어노테이션):
 
 - `xml.name` / `xml.namespace`: 엘리먼트 로컬명과 네임스페이스. namespace가 없으면 unqualified로 직렬화한다(rpc 파트, elementFormDefault=unqualified).
@@ -219,18 +287,18 @@ XML 직렬화 규칙(스키마의 `xml` 어노테이션):
 - `xml.x-text: true`: 자식 엘리먼트가 아니라 부모의 텍스트 내용(simpleContent의 값).
 - 배열 프로퍼티: 같은 이름의 엘리먼트 반복.
 - `properties`의 키 순서 = XSD sequence 순서. 스펙 후처리 시 순서를 바꾸면 안 된다.
-- `x-soap-choice`: 그룹당 하나만 넣어야 하는 프로퍼티 목록(스키마 차원에서는 전부 optional 처리됨).
+- `x-soap-choice`: 그룹당 하나만 넣어야 하는 프로퍼티 목록(스키마 차원에서는 전부 optional 처리됨). `members`의 각 항목은 `xsd:choice`의 **브랜치** 하나다. 보통은 프로퍼티 이름 하나지만, 브랜치가 `sequence`인 경우에는 이름의 **리스트**가 온다 — 그 원소들은 함께 묶여 한 단위로 선택되거나 생략되며, 서로 배타적인 관계가 아니다.
 - `x-soap-substitution`: substitution group 값의 표식. JSON은 멤버 이름을 키로 한 자기서술 단일키 객체(`{"creditCard": {…}}`)이며, 와이어에는 그 멤버 element 자체가 실린다 — head element는 절대 등장하지 않는다.
 
 루트 `x-soap`에는 원본 WSDL 경로, 생성기 버전, 스킵된 오퍼레이션 목록이 기록된다.
 
 ## SOAP 브리지 ([mcp] extra) — SOAP 스펙 서빙에 필수
 
-`from_openapi_spec()`와 SOAP 브리지(커스텀 httpx transport)가 위 계약을 구현한다. tool 호출 JSON을 SOAP envelope으로 직렬화하고, 응답 XML을 응답 스키마에 맞춰 타입이 지정된 JSON으로 되돌리며, SOAP Fault는 MCP tool 에러로 매핑한다. **SOAP 변환 스펙은 이 계약을 구현하지 않고는 서빙할 수 없다.** 표준 OpenAPI 런타임만으로는 불가능하다. 반대로 Swagger 변환(순수 REST) 스펙은 `[mcp]` 없이 어떤 OpenAPI 런타임으로도 서빙된다.
+`from_openapi_spec()`와 SOAP 브리지(커스텀 httpx2 transport)가 위 계약을 구현한다. tool 호출 JSON을 SOAP envelope으로 직렬화하고, 응답 XML을 응답 스키마에 맞춰 타입이 지정된 JSON으로 되돌리며, SOAP Fault는 MCP tool 에러로 매핑한다. **SOAP 변환 스펙은 이 계약을 구현하지 않고는 서빙할 수 없다.** 표준 OpenAPI 런타임만으로는 불가능하다. 반대로 Swagger 변환(순수 REST) 스펙은 `[mcp]` 없이 어떤 OpenAPI 런타임으로도 서빙된다.
 
 > **SOAP + REST 혼합 스펙 주의.** 현재 참조 런타임은 한 경로라도 `x-soap`이 있으면 *전체* 트래픽을 SOAP 브리지로 라우팅하므로, 혼합 스펙의 REST 오퍼레이션은 올바르게 서빙되지 않는다. 해결 전까지 SOAP 스펙과 REST 스펙을 분리해서 쓸 것.
 
-런타임 환경변수: `SPEC2OPENAPI_ENDPOINT`(엔드포인트 오버라이드), `SPEC2OPENAPI_AUTH`(`basic`|`wsse`), `SPEC2OPENAPI_USERNAME`/`SPEC2OPENAPI_PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`.
+런타임 환경변수: `SPEC2OPENAPI_ENDPOINT`(엔드포인트 오버라이드), `SPEC2OPENAPI_AUTH`(`basic`|`wsse`), `SPEC2OPENAPI_USERNAME`/`SPEC2OPENAPI_PASSWORD`, `SPEC2OPENAPI_TIMEOUT`, `SPEC2OPENAPI_VERIFY`, `SPEC2OPENAPI_TRUST_ENV`, `SPEC2OPENAPI_SOAP_HEADERS`(선언된 `soap:header` 파트 값; part 이름 또는 element 이름을 키로 하는 JSON 객체). TLS 인증서는 운영체제 신뢰 저장소로 검증하며, `SPEC2OPENAPI_TRUST_ENV`가 켜져 있으면 `SSL_CERT_FILE`/`SSL_CERT_DIR`를 우선한다.
 
 `Dockerfile`(고정 이미지)과 `k8s/example.yaml`(ConfigMap으로 스펙을 교체하고 Secret으로 자격증명 주입)이 쿠버네티스 운영 예시다. 자체 런타임을 만든다면 `src/spec2openapi/bridge.py`를 참조 구현으로 삼으면 된다.
 
@@ -256,8 +324,10 @@ src/spec2openapi/
   swagger.py   Swagger 2.0 -> OpenAPI 3.x 업그레이드 (x-s2o 리포트)
   convert.py   코어 공개 API (convert_wsdl / load_spec / dump_spec)
   checks.py    구조화 검증 (verify / VerifyReport)
-  cli.py       convert / upgrade / inspect / validate / serve
-  bridge.py    [mcp] SOAP 브리지: JSON <-> SOAP envelope httpx transport
+  minify.py    MCP tool payload 축소/보강 (선택)
+  agentize/    [llm-*] LLM이 쓴 설명 채우기 (결정론 경로와 분리)
+  cli.py       convert / upgrade / inspect / validate / agentize / serve
+  bridge.py    [mcp] SOAP 브리지: JSON <-> SOAP envelope httpx2 transport
   server.py    [mcp] FastMCP 결합 (from_openapi_spec / from_wsdl)
 Dockerfile     참조 런타임 이미지
 k8s/           ConfigMap + Deployment + Service 예시
