@@ -83,8 +83,8 @@ def test_coerce_handles_openapi_31_type_arrays(text, schema, expected):
 
 @pytest.mark.parametrize("text", ["NaN", "INF", "-INF", "Infinity", "-Infinity"])
 def test_coerce_number_rejects_non_finite(text):
-    """xsd NaN/INF/-INF must not become a non-finite float: httpx's JSON
-    encoder emits a bare (invalid-JSON) token for it (#140 F4)."""
+    """xsd NaN/INF/-INF must not become a non-finite float: httpx2's JSON
+    encoder rejects it (#140 F4)."""
     result = _coerce(text, {"type": "number"})
     assert result == text  # left as the original string, not float("nan")
     # must round-trip through strict JSON without raising
@@ -275,3 +275,25 @@ def test_validate_ignores_path_level_extensions(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "missing operationId" not in out
     assert rc == 0
+
+
+def test_runtime_uses_httpx2_without_fastmcp_deprecations(calculator_wsdl):
+    pytest.importorskip("fastmcp")
+    import warnings
+
+    import httpx2
+    from fastmcp.exceptions import FastMCPDeprecationWarning
+
+    from spec2openapi.bridge import SoapBridgeTransport
+    from spec2openapi.server import from_openapi_spec
+
+    rest = {"openapi": "3.0.3", "info": {"title": "r", "version": "1"},
+            "servers": [{"url": "http://rest.invalid"}],
+            "paths": {"/ping": {"get": {
+                "operationId": "ping",
+                "responses": {"200": {"description": "ok"}}}}}}
+    assert issubclass(SoapBridgeTransport, httpx2.AsyncBaseTransport)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FastMCPDeprecationWarning)
+        from_openapi_spec(rest)
+        from_openapi_spec(convert_wsdl(calculator_wsdl))

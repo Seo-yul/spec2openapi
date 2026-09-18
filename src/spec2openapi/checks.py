@@ -730,7 +730,7 @@ def _run_openapi_validator(spec: dict) -> list[CheckResult]:
 def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
     try:
         import anyio
-        import httpx
+        import httpx2
         from fastmcp import Client, FastMCP
     except ImportError:
         msg = f"fastmcp not installed ({MCP_HINT})"
@@ -754,7 +754,7 @@ def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
 
     # supply a dummy client so specs without a `servers` entry still
     # convert — verify measures tool convertibility, not deployment
-    dummy = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+    dummy = httpx2.AsyncClient(base_url="http://spec2openapi.invalid")
     try:
         mcp = FastMCP.from_openapi(openapi_spec=spec, name="verify",
                                    client=dummy)
@@ -782,7 +782,7 @@ def _run_fastmcp_roundtrip(spec: dict) -> list[CheckResult]:
                         "round-trip failed")]
     data = {"tools": [
         {"name": t.name,
-         "params": list(((getattr(t, "inputSchema", None) or {})
+         "params": list(((getattr(t, "input_schema", None) or {})
                          .get("properties") or {}))}
         for t in sorted(tools, key=lambda t: t.name)]}
     results = [_result("fastmcp.roundtrip", "pass", data=data)]

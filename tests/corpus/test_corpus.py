@@ -83,7 +83,7 @@ def test_corpus_sweep():
     pytest.importorskip("fastmcp")
     pytest.importorskip("openapi_spec_validator")
     import anyio
-    import httpx
+    import httpx2
     from fastmcp import Client, FastMCP
     from openapi_spec_validator import validate as osv_validate
 
@@ -134,7 +134,7 @@ def test_corpus_sweep():
                     )
                 if ver == "3.0" and out is not None:
                     try:
-                        client = httpx.AsyncClient(
+                        client = httpx2.AsyncClient(
                             base_url="http://corpus.invalid"
                         )
                         mcp = FastMCP.from_openapi(

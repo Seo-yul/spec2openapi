@@ -39,7 +39,7 @@ async def test_list_tools(calc_mcp):
         tools = {t.name: t for t in await client.list_tools()}
         assert set(tools) == {"Add", "Divide"}
         assert "Adds two integers" in (tools["Add"].description or "")
-        props = tools["Add"].inputSchema.get("properties", {})
+        props = tools["Add"].input_schema.get("properties", {})
         assert "a" in props and "b" in props
 
 

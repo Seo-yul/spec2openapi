@@ -161,7 +161,7 @@ def _tool_payloads(spec: dict) -> tuple[list[dict] | None, str]:
     try:
         import asyncio
 
-        import httpx
+        import httpx2
         from fastmcp import Client, FastMCP
     except ImportError:
         from ..errors import MCP_HINT
@@ -179,21 +179,21 @@ def _tool_payloads(spec: dict) -> tuple[list[dict] | None, str]:
         return None, ("실행 중인 이벤트 루프 안에서는 FastMCP round-trip 을 "
                       "할 수 없다; 동기 컨텍스트에서 호출하라")
 
-    # client 생성 자체를 try 안에 둔다 (Ruling 63) - httpx.AsyncClient()는
+    # client 생성 자체를 try 안에 둔다 (Ruling 63) - httpx2.AsyncClient()는
     # 잘못된 proxy 환경변수 등으로 생성 시점에 실패할 수 있고, 이 함수
     # 바깥의 어떤 호출자도 일반 Exception을 잡지 않는다
     # (cmd_agentize는 AgentizeError만, main()은 ValueError/OSError만) -
     # 밖에 두면 완료된 유료 보강 전체를 트레이스백으로 날린다.
     client = None
     try:
-        client = httpx.AsyncClient(base_url="http://spec2openapi.invalid")
+        client = httpx2.AsyncClient(base_url="http://spec2openapi.invalid")
 
         async def _list():
             try:
                 mcp = FastMCP.from_openapi(spec, client=client)
                 async with Client(mcp) as c:
                     return [{"name": t.name, "description": t.description,
-                             "inputSchema": t.inputSchema}
+                             "inputSchema": t.input_schema}
                             for t in await c.list_tools()]
             finally:
                 await client.aclose()

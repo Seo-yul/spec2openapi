@@ -173,5 +173,5 @@ async def test_stress_roundtrips_through_fastmcp(stress_spec, stress_s2o):
     mcp = FastMCP.from_openapi(openapi_spec=stress_spec, name="stress")
     async with Client(mcp) as client:
         tools = {t.name: t for t in await client.list_tools()}
-    tree_schema = json.dumps(tools["EchoTree"].inputSchema)
+    tree_schema = json.dumps(tools["EchoTree"].input_schema)
     assert "Node" in tree_schema  # self-referencing definition present

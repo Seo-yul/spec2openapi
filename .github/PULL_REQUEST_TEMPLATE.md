@@ -25,7 +25,7 @@ Closes #XXX
       `spec2openapi validate`
 - [ ] No sorting introduced in the emit path (property order = XSD sequence
       order)
-- [ ] Core/`[mcp]` dependency split respected (no `fastmcp`/`httpx` imports in
+- [ ] Core/`[mcp]` dependency split respected (no `fastmcp`/`httpx2` imports in
       core modules)
 - [ ] `CHANGELOG.md` updated under `Unreleased`
 - [ ] Docs updated (`README.md` / `README.ko.md`) if behavior changed

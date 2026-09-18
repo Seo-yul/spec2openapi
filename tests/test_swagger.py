@@ -154,9 +154,9 @@ async def test_fastmcp_roundtrip(upgraded):
         tools = {t.name: t for t in await client.list_tools()}
     assert set(tools) == op_ids
     # query params surface as tool args
-    assert "limit" in tools["get_pets"].inputSchema["properties"]
+    assert "limit" in tools["get_pets"].input_schema["properties"]
     # body schema properties surface too
-    assert "name" in tools["addPet"].inputSchema["properties"]
+    assert "name" in tools["addPet"].input_schema["properties"]
 
 
 def test_upgrade_cli(tmp_path, capsys):

@@ -106,12 +106,12 @@ def test_response_wraps_wire_element_back(spec):
 def test_fastmcp_roundtrip_keeps_branches(spec):
     pytest.importorskip("fastmcp")
     import anyio
-    import httpx
+    import httpx2
     from fastmcp import Client, FastMCP
 
     mcp = FastMCP.from_openapi(
         openapi_spec=spec, name="subst",
-        client=httpx.AsyncClient(base_url="http://x.invalid"),
+        client=httpx2.AsyncClient(base_url="http://x.invalid"),
     )
 
     async def _tools():
@@ -120,7 +120,7 @@ def test_fastmcp_roundtrip_keeps_branches(spec):
 
     tools = anyio.run(_tools)
     assert [t.name for t in tools] == ["Pay"]
-    arg = str(tools[0].inputSchema)
+    arg = str(tools[0].input_schema)
     # FastMCP normalizes oneOf to anyOf; the alternatives must survive
     assert "creditCard" in arg and "bankTransfer" in arg
 
