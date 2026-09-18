@@ -170,6 +170,12 @@ def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
     if shape is not None:
         value = raw
         if isinstance(raw, str):
+            if len(raw) > MAX_EXAMPLE:
+                # 상한을 넘는 원문은 파싱하지 않는다 - 두 호출부 모두 뒤이어
+                # _example_ok 로 크기를 검사해 거부한다. 파싱 뒤의 정리는
+                # 재귀이고 3.12+ 의 디코더는 재귀 한도보다 깊은 중첩도
+                # 파싱하므로, 상한 안의 원문만 다뤄야 깊이가 한도에 닿지 않는다.
+                return True, raw
             try:
                 value = json.loads(raw)
             except (ValueError, RecursionError):

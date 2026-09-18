@@ -599,6 +599,24 @@ def test_deeply_nested_json_example_is_rejected_not_raised():
     assert any("example" in r for r in rep.rejected)
 
 
+@pytest.mark.parametrize("depth", [2_000, 5_000])
+def test_a_nested_json_example_over_the_size_cap_is_rejected_not_raised(depth):
+    """3.12+ 의 C 디코더는 재귀 한도보다 깊은 중첩도 파싱한다 - 그 뒤의
+    정리가 터지지 않도록 상한을 넘는 원문은 파싱 전에 거른다."""
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["ids"] = {
+        "type": "array"}
+    raw = "[" * depth + "]" * depth
+    for sug in (Suggestion("#/components/schemas/Pet/properties/ids/example",
+                           raw, "named"),
+                Suggestion("#/components/schemas/Pet/properties/ids/description",
+                           "ID 목록", "named", example=raw)):
+        out, rep = apply_suggestions(spec, [sug])
+        assert "example" not in out["components"]["schemas"]["Pet"][
+            "properties"]["ids"]
+        assert any("example" in r for r in rep.rejected)
+
+
 def _two_folded_ops():
     spec = base_spec()
     spec["paths"] = {
