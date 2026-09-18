@@ -747,13 +747,58 @@ def test_input_that_fails_verify_is_rejected_before_any_model_call():
     assert provider.calls == []
 
 
-def test_result_counts_attempted_model_calls():
+def test_result_counts_suggestion_calls_and_answers():
+    """calls/answered 는 제안을 만드는 pass 2 호출만 센다 - 용어집
+    응답만으로는 문서에 쓸 것이 하나도 나오지 않는다."""
     provider = scripted_provider()
     result = agentize_spec(pipeline_spec(), provider)
-    assert result.calls == len(provider.calls) == 3
+    assert len(provider.calls) == 3          # 용어집 + 스키마 + operation
+    assert (result.calls, result.answered) == (2, 2)
 
 
-def test_result_counts_failed_model_calls_too():
+def test_result_counts_failed_suggestion_calls_too():
     provider = FP({})  # 모든 요청이 ProviderError
     result = agentize_spec(pipeline_spec(), provider)
-    assert result.calls == len(provider.calls) == len(result.failures) == 3
+    assert (result.calls, result.answered) == (2, 0)
+    assert len(result.failures) == 3
+
+
+def test_a_glossary_answer_alone_is_not_an_answer():
+    from spec2openapi.agentize.providers import ProviderError
+
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        raise ProviderError("rate limited")
+    result = agentize_spec(pipeline_spec(), FP(respond))
+    assert (result.calls, result.answered) == (2, 0)
+
+
+def test_rename_tools_may_fix_a_missing_operation_id():
+    """--rename-tools 는 operationId 가 없는 operation 에 이름을 새로 쓸 수
+    있다 - tool-name 결함만 있는 입력은 호출 전에 막지 않는다."""
+    from spec2openapi.minify import minify_for_mcp
+
+    spec = _fold_spec()
+    del spec["paths"]["/pets"]["get"]["operationId"]
+    result = agentize_spec(
+        spec, _op_provider("Lists every pet.", "list_pets"),
+        rename_tools=True)
+    op = result.spec["paths"]["/pets"]["get"]
+    assert op["operationId"] == "list_pets"
+    assert op["description"] == "Lists every pet.\nErrors: 404 (Not found)."
+    assert result.spec["x-s2o"]["minify"]["folded"] == {
+        "list_pets": ["errors"]}
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == op["description"]
+
+
+def test_rename_tools_does_not_waive_other_verify_failures():
+    spec = _fold_spec()
+    op = spec["paths"]["/pets"]["get"]
+    del op["operationId"]
+    op["x-soap"] = {"soapVersion": "9.9", "soapAction": "x"}
+    provider = _op_provider("Lists every pet.", "list_pets")
+    with pytest.raises(AgentizeError, match="soapVersion"):
+        agentize_spec(spec, provider, rename_tools=True)
+    assert provider.calls == []

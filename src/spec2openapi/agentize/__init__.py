@@ -66,15 +66,26 @@ class AgentizeResult:
     targets: list[Target] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     self_check: list[str] | None = None
-    #: pass 1·2 에서 시도한 provider 호출 수 (self-check 제외). failures 와
-    #: 같으면 호출이 전부 실패한 것이다.
+    #: 제안을 만드는 pass 2 호출 수와 그중 응답을 받은 수. 용어집(pass 1)
+    #: 응답만으로는 문서에 쓸 것이 나오지 않으므로 세지 않는다.
     calls: int = 0
+    answered: int = 0
 
 
-def _verify_failures(spec: dict) -> str:
-    """verify() 의 fail 메시지를 한 줄로 잇는다. 통과하면 빈 문자열."""
+#: --rename-tools 가 operationId 를 새로 쓰거나 바꿔 고칠 수 있는 검사.
+_RENAME_FIXABLE = ("tool-name.",)
+
+
+def _verify_failures(spec: dict, *, rename_tools: bool = False) -> str:
+    """verify() 의 fail 메시지를 한 줄로 잇는다. 통과하면 빈 문자열.
+
+    rename_tools 면 개명으로 고칠 수 있는 실패는 빼고 본다 - 그 판정은
+    적용 뒤의 verify 가 한다.
+    """
+    waived = _RENAME_FIXABLE if rename_tools else ()
     verdict = verify(spec)
-    return "; ".join(r.message for r in verdict.results if r.status == "fail")
+    return "; ".join(r.message for r in verdict.results
+                     if r.status == "fail" and not r.id.startswith(waived))
 
 
 def _schema_targets(targets: Iterable[Target]) -> dict[str, list[str]]:
@@ -276,22 +287,22 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
 
     failures: list[str] = []
 
-    def _finish(spec_out: dict, rep: ApplyReport,
-               tgts: list[Target], calls: int = 0) -> AgentizeResult:
+    def _finish(spec_out: dict, rep: ApplyReport, tgts: list[Target],
+               calls: int = 0, answered: int = 0) -> AgentizeResult:
         # self-check 는 이 실행이 무엇을 썼는지와 무관하게 "이 tool 을
         # 호출할 수 있는가"를 묻는다. 채울 것이 없었던 실행에서도
         # 사용자가 답을 원할 수 있으므로 모든 경로에서 실행한다.
         checks = run_self_check(spec_out, provider) if self_check else None
         return AgentizeResult(spec=spec_out, report=rep, targets=tgts,
                               failures=failures, self_check=checks,
-                              calls=calls)
+                              calls=calls, answered=answered)
 
     if not targets:
         return _finish(working, ApplyReport(), [])
 
     # 입력이 이미 verify 를 통과하지 못하면 결과도 통과할 수 없다 - 유료
     # 호출을 다 쓰고 나서 취소하지 않도록 첫 호출 전에 멈춘다.
-    problems = _verify_failures(working)
+    problems = _verify_failures(working, rename_tools=rename_tools)
     if problems:
         raise AgentizeError(f"입력 스펙이 verify를 통과하지 못해 LLM을 "
                             f"호출하기 전에 중단한다: {problems}")
@@ -423,14 +434,15 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
     out, report = apply_suggestions(
         working, suggestions, allow_speculative=allow_speculative,
         rename_tools=rename_tools)
-    calls = 1 + n_2a_ok + n_2a_fail + n_2b_ok + n_2b_fail
+    calls = n_2a_ok + n_2a_fail + n_2b_ok + n_2b_fail
+    answered = n_2a_ok + n_2b_ok
 
     if not report.applied and not report.renamed:
         # 문서에 아무것도 새로 쓰지 않았다. minify_for_mcp 와 같은 계약을
         # 따른다: 아무것도 바꾸지 않은 실행은 동일한 문서를 반환한다.
         # targets 가 애초에 없을 때의 조기 반환과 같은 원칙이며, 문서가
         # 그대로이므로 verify 판정도 입력과 같다.
-        return _finish(working, report, targets, calls)
+        return _finish(working, report, targets, calls, answered)
 
     problems = _verify_failures(out)
     if problems:
@@ -439,4 +451,4 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
 
     record_provenance(out, report, provider=getattr(provider, "name", "?"),
                       model=getattr(provider, "model", "?"), targets=kinds)
-    return _finish(out, report, targets, calls)
+    return _finish(out, report, targets, calls, answered)

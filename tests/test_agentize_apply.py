@@ -571,6 +571,73 @@ def test_json_object_example_on_object_property_is_parsed_and_written():
         "example"] == {"color": "brown"}
 
 
+@pytest.mark.parametrize("raw", ["[NaN, 1]", "[Infinity]", "[1e999]",
+                                 '{"x": -Infinity}'])
+def test_non_finite_json_example_on_structured_property_is_rejected(raw):
+    spec = base_spec()
+    props = spec["components"]["schemas"]["Pet"]["properties"]
+    props["ids"] = {"type": "array"}
+    props["meta"] = {"type": "object"}
+    target = "meta" if raw.startswith("{") else "ids"
+    out, rep = apply_suggestions(spec, [Suggestion(
+        f"#/components/schemas/Pet/properties/{target}/example", raw,
+        "named")])
+    assert "example" not in out["components"]["schemas"]["Pet"][
+        "properties"][target]
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_deeply_nested_json_example_is_rejected_not_raised():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["ids"] = {
+        "type": "array"}
+    raw = "[" * 100_000 + "]" * 100_000
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/ids/example", raw, "named")])
+    assert "example" not in out["components"]["schemas"]["Pet"][
+        "properties"]["ids"]
+    assert any("example" in r for r in rep.rejected)
+
+
+def _two_folded_ops():
+    spec = base_spec()
+    spec["paths"] = {
+        "/a": {"get": {"operationId": "a",
+                       "description": "Errors: 404 (A missing).",
+                       "responses": {"200": {"description": "ok"}}}},
+        "/b": {"get": {"operationId": "b",
+                       "description": "Errors: 409 (B conflict).",
+                       "responses": {"200": {"description": "ok"}}}}}
+    spec["x-s2o"] = {"minify": {"folded": {"a": ["errors"],
+                                           "b": ["errors", "examples"]}}}
+    return spec
+
+
+def test_chained_renames_keep_each_fold_record_with_its_operation():
+    """a->b, b->c 를 한 번에 적용해도 각 기록은 자기 operation 을 따라간다."""
+    out, _ = apply_suggestions(_two_folded_ops(), [
+        Suggestion("#/paths/~1a/get/description", "A 를 조회한다", "named"),
+        Suggestion("#/paths/~1a/get/operationId", "b", "named"),
+        Suggestion("#/paths/~1b/get/description", "B 를 조회한다", "named"),
+        Suggestion("#/paths/~1b/get/operationId", "c", "named"),
+    ], rename_tools=True)
+    assert out["x-s2o"]["minify"]["folded"] == {
+        "b": ["errors"], "c": ["errors", "examples"]}
+    assert out["paths"]["/a"]["get"]["description"] == (
+        "A 를 조회한다\nErrors: 404 (A missing).")
+    assert out["paths"]["/b"]["get"]["description"] == (
+        "B 를 조회한다\nErrors: 409 (B conflict).")
+
+
+def test_swapped_names_swap_their_fold_records():
+    out, _ = apply_suggestions(_two_folded_ops(), [
+        Suggestion("#/paths/~1a/get/operationId", "b", "named"),
+        Suggestion("#/paths/~1b/get/operationId", "a", "named"),
+    ], rename_tools=True)
+    assert out["x-s2o"]["minify"]["folded"] == {
+        "b": ["errors"], "a": ["errors", "examples"]}
+
+
 def test_example_is_not_written_next_to_a_ref():
     """$ref 필드는 type 을 확인할 수 없다 - example 을 붙이지 않는다."""
     spec = base_spec()

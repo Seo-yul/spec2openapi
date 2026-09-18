@@ -120,8 +120,9 @@ def _truncate(text: str) -> str:
 def _example_ok(value: Any) -> bool:
     """JSON 직렬화 가능하고 상한 안에 드는 값인가."""
     try:
-        rendered = json.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
+        # NaN/Infinity 는 어떤 RFC 8259 파서도 읽지 못하는 토큰이 된다
+        rendered = json.dumps(value, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
         return False
     return len(rendered) <= MAX_EXAMPLE
 
@@ -171,7 +172,7 @@ def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
         if isinstance(raw, str):
             try:
                 value = json.loads(raw)
-            except ValueError:
+            except (ValueError, RecursionError):
                 return False, None
         return (True, value) if isinstance(value, shape) else (False, None)
     if declared_type == "boolean":
@@ -228,29 +229,35 @@ def _op_fold_key(pointer: str, op: dict) -> str | None:
     return _fold_key(_unescape_pointer_token(m.group(1)), m.group(2), op)
 
 
-def _kept_folds(spec: dict, pointer: str, op: dict) -> str:
+def _kept_folds(spec: dict, key: str | None, op: dict) -> str:
     """operation 설명을 새로 쓸 때 이어 붙일, minify 가 접어 넣은 줄.
 
     새 설명이 이 줄까지 덮으면 folded 기록만 남아 다시 돌린 minify 도
     복원하지 못한다. 기록에 있는 operation 만 벗긴다 - 사용자가 쓴
-    marker 모양 줄을 우리 것으로 오인하지 않기 위해서다.
+    marker 모양 줄을 우리 것으로 오인하지 않기 위해서다. key 는 이
+    실행에서 개명되기 전의 기록 키다.
     """
     folded = _fold_record(spec)
-    key = _op_fold_key(pointer, op)
     desc = op.get("description")
     if folded is None or key not in folded or not isinstance(desc, str):
         return ""
     return "".join("\n" + line for line in _split_folds(desc)[1])
 
 
-def _move_fold_key(spec: dict, old: str | None, new: str | None) -> None:
-    """개명한 operation 의 fold 기록을 새 이름으로 옮긴다. 옛 이름에
-    남으면 다음 minify 가 같은 줄을 한 번 더 접어 넣는다."""
+def _move_fold_keys(spec: dict, moves: dict[str, str]) -> None:
+    """개명한 operation 의 fold 기록을 새 이름으로 옮긴다.
+
+    옛 이름에 남으면 다음 minify 가 같은 줄을 한 번 더 접어 넣는다.
+    원래 키 기준으로 한 번에 옮긴다 - 하나씩 옮기면 a->b, b->c 같은
+    이어진 개명이나 맞바꾸기에서 아직 개명 전인 operation 의 기록을
+    덮어쓴다.
+    """
     folded = _fold_record(spec)
-    if folded is None or old is None or new is None or old == new:
+    if not folded or not moves:
         return
-    if old in folded:
-        folded[new] = folded.pop(old)
+    moved = {moves.get(k, k): v for k, v in folded.items()}
+    folded.clear()
+    folded.update(moved)
 
 
 def _safe(pointer: str) -> str:
@@ -290,6 +297,9 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
     """제안을 적용한 새 스펙과 보고서를 돌려준다. 입력은 변경하지 않는다."""
     out = copy.deepcopy(spec)
     report = ApplyReport()
+    # operation 별 이 실행 이전의 fold 기록 키, 그리고 개명으로 옮길 키.
+    fold_keys: dict[int, str | None] = {}
+    fold_moves: dict[str, str] = {}
 
     for sug in suggestions:
         ptr = sug.pointer
@@ -335,9 +345,12 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                 continue
             if isinstance(prior, str) and prior:
                 report.renamed[ptr.rsplit("/", 1)[0]] = prior
-            old_key = _op_fold_key(ptr, parent)
+            old_key = fold_keys.setdefault(id(parent),
+                                           _op_fold_key(ptr, parent))
             parent[key] = text
-            _move_fold_key(out, old_key, _op_fold_key(ptr, parent))
+            new_key = _op_fold_key(ptr, parent)
+            if old_key is not None and new_key is not None:
+                fold_moves[old_key] = new_key
         elif key == "example":
             ok_type, typed = _example_for(parent, text)
             if not ok_type:
@@ -351,7 +364,8 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                 continue
             parent[key] = typed
         elif key == "description":
-            parent[key] = _truncate(text) + _kept_folds(out, ptr, parent)
+            fold_key = fold_keys.get(id(parent)) or _op_fold_key(ptr, parent)
+            parent[key] = _truncate(text) + _kept_folds(out, fold_key, parent)
         else:
             parent[key] = _truncate(text)
         report.applied[ptr] = sug.grounding
@@ -373,6 +387,7 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                     f"{_safe(ptr)}: example 이 직렬화 불가이거나 "
                     f"{MAX_EXAMPLE}자를 넘음")
 
+    _move_fold_keys(out, fold_moves)
     return out, report
 
 

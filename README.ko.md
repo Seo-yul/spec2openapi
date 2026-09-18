@@ -255,8 +255,9 @@ spec2openapi agentize petstore.json --provider openai --model <모델-id> -o out
   없으면 폐기된다.
 - 무언가를 쓴 실행은 반드시 `verify()`를 통과해야 하고, 통과하지 못하면
   아무것도 쓰지 않는다. 입력이 이미 `verify()`를 통과하지 못하면 첫 모델
-  호출 전에 중단하며, `--dry-run`도 이를 알린다.
-- `array`/`object` 필드에는 그 모양의 JSON으로 파싱되는 example만 쓰고,
+  호출 전에 중단하며, `--dry-run`도 이를 알린다. `--rename-tools`를 쓰면
+  tool 이름 문제는 실행이 고치도록 남겨 둔다.
+- `array`/`object` 필드에는 그 모양의 유한한 JSON으로 파싱되는 example만 쓰고,
   `$ref` 필드에는 example을 쓰지 않는다.
 - operation 설명을 새로 써도 `minify_for_mcp`가 접어 넣은 `Errors: ...` /
   `Example ...:` 줄은 끝에 그대로 남는다.

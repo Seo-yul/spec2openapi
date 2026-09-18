@@ -14,16 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record to the new `operationId`. A later minify no longer loses or
   duplicates those lines (#153).
 - `agentize` rejects an input that already fails `verify()` before the
-  first model call instead of after every call; `--dry-run` reports it
+  first model call instead of after every call; `--dry-run` reports it.
+  With `--rename-tools`, tool-name failures are left for the run to fix
   (#153).
 - `agentize` writes an example on an `array` / `object` property only when
-  it parses as JSON of that shape, and none on a `$ref` property (#153).
+  it parses as finite JSON of that shape, and none on a `$ref` property
+  (#153).
 - An operation without an `operationId` whose description holds only folded
   lines counts as undocumented, matching the `"METHOD /path"` key minify
   records it under (#153).
-- `spec2openapi agentize` exits 2 with "모든 LLM 호출이 실패" only when every
-  provider call failed; a run where some calls answered writes its output
-  (#153).
+- `spec2openapi agentize` exits 2 with "모든 LLM 호출이 실패" only when none
+  of the calls that produce suggestions answered; a run where some did
+  writes its output (#153).
 
 ## [0.7.0] - 2026-09-18
 

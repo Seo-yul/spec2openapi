@@ -329,7 +329,8 @@ def cmd_agentize(args) -> int:
             print("  (이 스펙은 손댈 곳이 없다)")
         print(f"operation {n_ops}건, 대상 스키마 {schemas}건, "
               f"예상 LLM 호출 {calls}회")
-        problems = _verify_failures(_working) if targets else ""
+        problems = (_verify_failures(_working, rename_tools=args.rename_tools)
+                    if targets else "")
         if problems:
             # 실제 실행은 첫 호출 전에 멈춘다 - 호출 수만 보여주면 사용자가
             # 틀린 전제로 판단한다 (Ruling 55).
@@ -373,11 +374,12 @@ def cmd_agentize(args) -> int:
         print(f"warn: {note}", file=sys.stderr)
     rep = result.report
 
-    if result.calls and len(result.failures) >= result.calls:
-        # provider 호출이 전부 실패해 아무것도 적용되지 않았다. 일부라도
-        # 응답했으면 - 적용된 것이 없더라도 - 0으로 산출물을 쓰는 부분
-        # 실패 격리를 유지하되, 전부 실패한 빈 산출물을 성공으로 보고하면
-        # 안 된다 (Ruling 56).
+    if result.calls and not result.answered:
+        # 제안을 만드는 provider 호출이 전부 실패해 아무것도 적용되지
+        # 않았다(용어집 응답만으로는 쓸 것이 없다). 일부라도 응답했으면 -
+        # 적용된 것이 없더라도 - 0으로 산출물을 쓰는 부분 실패 격리를
+        # 유지하되, 전부 실패한 빈 산출물을 성공으로 보고하면 안 된다
+        # (Ruling 56).
         print("error: 모든 LLM 호출이 실패해 적용된 것이 없다; "
               "출력 파일을 쓰지 않는다", file=sys.stderr)
         return 2
