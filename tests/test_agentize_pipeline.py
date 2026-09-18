@@ -674,3 +674,86 @@ def test_a_provider_failure_in_self_check_is_still_reported_as_a_note():
 
     notes = run_self_check(pipeline_spec(), FP(boom))
     assert notes and all("self-check 실패" in n for n in notes)
+
+
+# --- #153: fold 기록, 사전 verify, 호출 수 ------------------------------------
+
+def _fold_spec():
+    return {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/pets": {"get": {
+                "operationId": "get_pets",
+                "responses": {"200": {"description": "ok"},
+                              "404": {"description": "Not found"}}}}}}
+
+
+def _op_provider(description, operation_id=None):
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        reply = {"summary": None, "description": description,
+                 "grounding": "named", "parameters": []}
+        if operation_id:
+            reply["operationId"] = operation_id
+        return reply
+    return FP(respond)
+
+
+def test_operation_description_keeps_minify_fold_lines():
+    """새 설명이 minify 가 접어 넣은 줄까지 덮으면 folded 기록만 남고
+    에러 안내는 사라진다 - 다시 돌린 minify 도 복원하지 못한다."""
+    from spec2openapi.minify import minify_for_mcp
+
+    result = agentize_spec(_fold_spec(), _op_provider("Lists every pet."))
+    op = result.spec["paths"]["/pets"]["get"]
+    assert op["description"] == "Lists every pet.\nErrors: 404 (Not found)."
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == op["description"]
+
+
+def test_rename_moves_the_fold_record_to_the_new_operation_id():
+    from spec2openapi.minify import minify_for_mcp
+
+    result = agentize_spec(_fold_spec(), _op_provider(None, "list_pets"),
+                           rename_tools=True)
+    assert result.spec["x-s2o"]["minify"]["folded"] == {
+        "list_pets": ["errors"]}
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == (
+        "Errors: 404 (Not found).")
+
+
+def test_rename_with_a_new_description_keeps_one_copy_of_the_fold_lines():
+    from spec2openapi.minify import minify_for_mcp
+
+    result = agentize_spec(
+        _fold_spec(), _op_provider("Lists every pet.", "list_pets"),
+        rename_tools=True)
+    op = result.spec["paths"]["/pets"]["get"]
+    assert op["operationId"] == "list_pets"
+    assert op["description"] == "Lists every pet.\nErrors: 404 (Not found)."
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == op["description"]
+    assert again["x-s2o"]["minify"]["folded"] == {"list_pets": ["errors"]}
+
+
+def test_input_that_fails_verify_is_rejected_before_any_model_call():
+    """입력이 이미 verify 를 통과하지 못하면 결과도 통과할 수 없다 -
+    유료 호출을 다 쓴 뒤가 아니라 호출 전에 멈춘다."""
+    spec = _fold_spec()
+    del spec["paths"]["/pets"]["get"]["operationId"]
+    provider = _op_provider("Lists every pet.")
+    with pytest.raises(AgentizeError, match="missing operationId"):
+        agentize_spec(spec, provider)
+    assert provider.calls == []
+
+
+def test_result_counts_attempted_model_calls():
+    provider = scripted_provider()
+    result = agentize_spec(pipeline_spec(), provider)
+    assert result.calls == len(provider.calls) == 3
+
+
+def test_result_counts_failed_model_calls_too():
+    provider = FP({})  # 모든 요청이 ProviderError
+    result = agentize_spec(pipeline_spec(), provider)
+    assert result.calls == len(provider.calls) == len(result.failures) == 3

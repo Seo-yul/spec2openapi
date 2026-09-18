@@ -286,6 +286,13 @@ def _fold_errors(op: dict[str, Any], spec: dict[str, Any]) -> str | None:
     return _ERRORS_MARKER + "; ".join(parts) + "."
 
 
+def _fold_key(path: str, method: str, op: dict[str, Any]) -> str:
+    """The x-s2o.minify.folded key of an operation: its operationId, or
+    "METHOD /path" when it has none. agentize reads and moves the record
+    by the same key, so it must be computed in one place."""
+    return str(op.get("operationId") or f"{str(method).upper()} {path}")
+
+
 def _split_folds(description: str) -> tuple[str, list[str]]:
     """Separate trailing fold lines (from a previous run) from the base.
 
@@ -447,7 +454,7 @@ def minify_for_mcp(
                     for schema in _media_schemas(resp):
                         clean(schema)
 
-        op_key = str(op.get("operationId") or ctx)
+        op_key = _fold_key(path, method, op)
         done = set(folded_map.get(op_key, ()))
         raw = op.get("description")
         original = raw if isinstance(raw, str) else ""

@@ -522,6 +522,68 @@ def test_example_on_property_without_a_declared_type_is_unaffected():
     assert rep.rejected == []
 
 
+def test_string_example_on_array_property_is_rejected():
+    """모델의 example 은 언제나 문자열이다. 배열 필드에 "[1, 2]" 같은
+    문자열이 붙으면 FastMCP 가 그대로 payload 에 실어 agent 를 오도한다."""
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["ids"] = {
+        "type": "array", "items": {"type": "integer"}}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/ids/description",
+        "연결된 ID 목록", "named", example="1, 2")])
+    assert "example" not in out["components"]["schemas"]["Pet"][
+        "properties"]["ids"]
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_json_array_example_on_array_property_is_parsed_and_written():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["ids"] = {
+        "type": "array", "items": {"type": "integer"}}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/ids/description",
+        "연결된 ID 목록", "named", example="[1, 2]")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["ids"][
+        "example"] == [1, 2]
+    assert rep.rejected == []
+
+
+def test_json_example_of_the_wrong_shape_on_object_property_is_rejected():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["meta"] = {
+        "type": "object"}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/meta/example",
+        "[1, 2]", "named")])
+    assert "example" not in out["components"]["schemas"]["Pet"][
+        "properties"]["meta"]
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_json_object_example_on_object_property_is_parsed_and_written():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["meta"] = {
+        "type": "object"}
+    out, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/meta/example",
+        '{"color": "brown"}', "named")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["meta"][
+        "example"] == {"color": "brown"}
+
+
+def test_example_is_not_written_next_to_a_ref():
+    """$ref 필드는 type 을 확인할 수 없다 - example 을 붙이지 않는다."""
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["owner"] = {
+        "$ref": "#/components/schemas/Pet"}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/owner/description",
+        "소유자", "named", example="바둑이 주인")])
+    node = out["components"]["schemas"]["Pet"]["properties"]["owner"]
+    assert "example" not in node
+    assert any("example" in r for r in rep.rejected)
+
+
 def test_example_terminal_pointer_also_rejects_a_type_mismatch():
     """side channel(example=) 뿐 아니라 /example 로 끝나는 포인터
     경로도 같은 검사를 받아야 한다 (Ruling 53)."""
