@@ -882,3 +882,42 @@ def test_rename_preflight_survives_a_non_string_operation_id(bad_id):
                          "description": "Returns one pet by its id."})
     result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
     assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
+
+
+def _null_description_spec():
+    """YAML 의 빈 `description:` 은 null 이다 - 검증기는 실패로 보지만
+    agentize 가 채우는 바로 그 자리다."""
+    return {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/x": {"get": {
+                "operationId": "getX", "description": None,
+                "parameters": [{"name": "q", "in": "query",
+                                "description": None,
+                                "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "ok"}}}}}}
+
+
+def test_a_null_field_the_run_fills_does_not_fail_the_preflight():
+    from spec2openapi import verify
+
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        return {"summary": None, "description": "Reads one record by key.",
+                "grounding": "named",
+                "parameters": [{"name": "q", "description":
+                                "Free-text search query.",
+                                "grounding": "named"}]}
+    result = agentize_spec(_null_description_spec(), FP(respond))
+    op = result.spec["paths"]["/x"]["get"]
+    assert op["description"] == "Reads one record by key."
+    assert op["parameters"][0]["description"] == "Free-text search query."
+    assert verify(result.spec).ok
+
+
+def test_a_null_field_the_run_will_not_fill_still_fails_the_preflight():
+    """kinds 가 desc 뿐이면 parameter 의 null 은 채워지지 않는다."""
+    provider = FP(lambda user: {"domain": "x", "overview": "y",
+                                "glossary": []})
+    with pytest.raises(AgentizeError, match="verify"):
+        agentize_spec(_null_description_spec(), provider, kinds=("desc",))
+    assert provider.calls == []

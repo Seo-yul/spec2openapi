@@ -24,6 +24,7 @@ from ..minify import minify_for_mcp
 from ..openapi import _SAFE_TOOL_RE, _operations, _unescape_pointer_token
 from .apply import (
     ApplyReport,
+    _resolve_parent,
     already_generated,
     apply_suggestions,
     can_record,
@@ -147,19 +148,27 @@ def _preflight_problems(working: dict, targets: list[Target], *,
                         rename_tools: bool = False) -> str:
     """LLM 을 부르기 전에 이미 확정된 verify 실패. 없으면 빈 문자열.
 
-    입력이 verify 를 통과하지 못하면 결과도 통과할 수 없다. 다만
-    --rename-tools 는 질의하는 operation 중 operationId 가 없거나 이름
-    규칙을 어기는 것에는 새 이름을 내라고 지시받는다. 그 operation 들에
-    서로 겹치지 않는 임시 operationId 를 넣은 사본으로 본다 - 개명으로도
-    고칠 수 없는 실패만 남는다. 읽을 만한 이름은 유지하라는 지시를 받고,
-    operation 을 하나씩 보는 모델은 이름이 겹치는지 알 수 없으므로 중복
-    이름은 그대로 둔 채 본다. 검사 id 로 봐주면 질의되지 않는 operation
-    까지 봐주거나, 이름 결함이 함께 깨는 다른 검사를 놓친다.
+    가장 잘 풀린 실행의 결과를 흉내 낸 사본을 검사한다 - 그래도 실패하면
+    어떤 응답으로도 고칠 수 없는 입력이다.
+
+    - 이번 실행이 채울 대상 자리에는 임시 문자열을 넣는다. 값이 비어
+      있는(null) description 처럼 그 자리 자체가 실패 원인일 수 있다.
+    - --rename-tools 면 질의하는 operation 중 operationId 가 없거나 이름
+      규칙을 어기는 것에 서로 겹치지 않는 임시 operationId 를 넣는다. 개명
+      지시가 새 이름을 내라고 하는 경우다. 읽을 만한 이름은 유지하라는
+      지시를 받고, operation 을 하나씩 보는 모델은 이름이 겹치는지 알 수
+      없으므로 중복 이름은 그대로 둔 채 본다.
+
+    검사 id 로 실패를 봐주면 채우지 않을 자리까지 봐주거나, 한 결함이
+    함께 깨는 다른 검사(openapi.schema-valid 등)를 놓친다.
     """
-    spec = working
+    spec = copy.deepcopy(working)
+    for t in targets:
+        parent, key = _resolve_parent(spec, t.pointer)
+        if isinstance(parent, dict):
+            parent[key] = "s2o preflight placeholder"
     if rename_tools:
         queried = _queried_operations(targets)
-        spec = copy.deepcopy(working)
         # operationId 는 신뢰할 수 없는 입력이다 - list/dict 일 수 있다
         taken = {oid for _, _, op in _operations(spec)
                  if isinstance(oid := op.get("operationId"), str)}

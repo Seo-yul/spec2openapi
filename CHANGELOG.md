@@ -13,10 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new description, and `--rename-tools` moves the `x-s2o.minify.folded`
   record to the new `operationId`. A later minify no longer loses or
   duplicates those lines (#153).
-- `agentize` rejects an input that already fails `verify()` before the
-  first model call instead of after every call; `--dry-run` reports it.
-  With `--rename-tools`, a missing or rule-breaking `operationId` on an
-  operation the run queries is left for it to fix (#153).
+- `agentize` rejects an input that fails `verify()` in a way the run cannot
+  fix before the first model call instead of after every call; `--dry-run`
+  reports it. Fields the run fills (an empty `description:`, for instance)
+  and, with `--rename-tools`, a missing or rule-breaking `operationId` on an
+  operation it queries are left for it to fix (#153).
 - `agentize` writes an example on an `array` / `object` property only when
   it parses as finite JSON of that shape, and none on a property whose type
   comes from `$ref` or an untyped `allOf` / `oneOf` / `anyOf` (#153).

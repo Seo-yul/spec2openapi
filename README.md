@@ -273,10 +273,10 @@ What a run guarantees:
   / `inferred` / `speculative`); ungrounded guesses are dropped unless
   `--allow-speculative` is given.
 - A run that writes anything must pass `verify()`, or nothing is written.
-  An input that already fails `verify()` is rejected before the first
-  model call, and `--dry-run` says so; with `--rename-tools`, a missing or
-  rule-breaking `operationId` on an operation the run queries is left for
-  it to fix.
+  An input that fails `verify()` in a way the run cannot fix is rejected
+  before the first model call, and `--dry-run` says so. Fields the run
+  fills — and, with `--rename-tools`, a missing or rule-breaking
+  `operationId` on an operation it queries — are left for it to fix.
 - An `array` / `object` field only gets an example that parses as finite
   JSON of that shape; a field whose type comes from `$ref` or an untyped
   `allOf` / `oneOf` / `anyOf` gets none.

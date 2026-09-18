@@ -418,3 +418,16 @@ def test_dry_run_warns_about_a_tool_name_rename_tools_cannot_reach(
     rc = main(["agentize", str(src), "--dry-run", "--rename-tools"])
     assert rc == 0
     assert "missing operationId" in capsys.readouterr().out
+
+
+def test_dry_run_does_not_warn_about_a_null_field_the_run_fills(
+        tmp_path, capsys):
+    src = tmp_path / "in.json"
+    src.write_text(json.dumps({
+        "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+        "paths": {"/x": {"get": {
+            "operationId": "getX", "description": None,
+            "responses": {"200": {"description": "ok"}}}}}}))
+    rc = main(["agentize", str(src), "--dry-run"])
+    assert rc == 0
+    assert "verify" not in capsys.readouterr().out
