@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- An XSD `fractionDigits` facet is kept as `x-fractionDigits` instead of a
+  `multipleOf` of `10^-n`, which binary floating point cannot represent
+  exactly — validators rejected valid values such as `0.07` (#159).
+
+### Fixed
+- The SOAP bridge unwraps the 3.1 nullable form `anyOf: [X, {type: null}]`,
+  so a nillable complex element keeps its content and namespace on a spec
+  converted with `--openapi-version 3.1` (#159).
+- A simpleType declared without facets no longer borrows the facets or
+  documentation of a same-named type in another namespace (#159).
+- Enumerations on a restriction of a user simpleType take the base's XSD
+  builtin type (`[1, 2]`, not `["1", "2"]` on an integer) (#159).
+- Swagger upgrader: formData becomes `multipart/form-data` when `consumes`
+  asks for it; Response Object `examples` keep their `null` values; a
+  `$ref` to a global body parameter follows the operation's own `consumes`;
+  `required: "false"` on body and formData parameters is false; a property
+  named `default`/`enum`/`example`/`examples` is cleaned like any other
+  schema; a non-mapping response and a non-string operationId raise
+  `ConversionError` (a number is used as text) (#159).
+- `validate`, `serve` and `agentize` read an http(s) URL without a file
+  extension as OpenAPI/Swagger when it serves JSON or YAML, accept a zip
+  bundle like `convert`, and `load_spec` reads flow-style YAML that starts
+  with `{` (#159).
+
 ## [0.8.0] - 2026-09-18
 
 ### Added
