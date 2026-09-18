@@ -663,6 +663,35 @@ def test_example_is_not_written_on_a_composed_untyped_field(wrapper):
     assert any("example" in r for r in rep.rejected)
 
 
+@pytest.mark.parametrize("via", ["field", "pointer"])
+def test_json_escaped_control_characters_are_cleaned_after_parsing(via):
+    """정리는 파싱 전 원문에 적용된다. JSON 문자열 안의 유니코드 이스케이프는
+    파싱 뒤에야 실제 ESC 가 된다 - 파싱한 값(키 포함)도 같은 정리를 받는다."""
+    import json
+
+    esc, bell = chr(27), chr(7)
+    raw_list = json.dumps([esc + "[2Jevil", "a" + bell + "b"])
+    raw_obj = json.dumps({esc + "[31mkey": esc + "[0mvalue"})
+    assert esc not in raw_list and esc not in raw_obj  # 이스케이프된 원문
+    spec = base_spec()
+    props = spec["components"]["schemas"]["Pet"]["properties"]
+    props["tags"] = {"type": "array", "items": {"type": "string"}}
+    props["meta"] = {"type": "object"}
+    base = "#/components/schemas/Pet/properties"
+    if via == "field":
+        sugs = [Suggestion(f"{base}/tags/description", "태그 목록", "named",
+                           example=raw_list),
+                Suggestion(f"{base}/meta/description", "메타", "named",
+                           example=raw_obj)]
+    else:
+        sugs = [Suggestion(f"{base}/tags/example", raw_list, "named"),
+                Suggestion(f"{base}/meta/example", raw_obj, "named")]
+    out, _ = apply_suggestions(spec, sugs)
+    got = out["components"]["schemas"]["Pet"]["properties"]
+    assert got["tags"]["example"] == ["evil", "ab"]
+    assert got["meta"]["example"] == {"key": "value"}
+
+
 def test_example_is_not_written_next_to_a_ref():
     """$ref 필드는 type 을 확인할 수 없다 - example 을 붙이지 않는다."""
     spec = base_spec()

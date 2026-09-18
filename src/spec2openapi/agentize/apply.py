@@ -174,6 +174,9 @@ def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
                 value = json.loads(raw)
             except (ValueError, RecursionError):
                 return False, None
+            # 정리는 파싱 전 원문에 적용됐다 - JSON 이스케이프는 파싱 뒤에야
+            # 실제 제어문자가 되므로 파싱한 값을 다시 정리한다.
+            value = _clean_value(value)
         return (True, value) if isinstance(value, shape) else (False, None)
     if declared_type == "boolean":
         if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
@@ -297,7 +300,8 @@ def _clean_value(value: Any) -> Any:
     if isinstance(value, str):
         return _clean(value)
     if isinstance(value, dict):
-        return {k: _clean_value(v) for k, v in value.items()}
+        return {(_clean(k) if isinstance(k, str) else k): _clean_value(v)
+                for k, v in value.items()}
     if isinstance(value, list):
         return [_clean_value(v) for v in value]
     return value
