@@ -414,3 +414,70 @@ def test_a_stray_katakana_mark_does_not_make_chinese_japanese():
     spec = {"info": {"description":
                      "查询用户订单信息，返回订单列表。支持分页查询。迈克尔・杰克逊"}}
     assert detect_language(spec) == "Chinese"
+
+
+# --- cycle 3 follow-up: where an inline simpleType is recorded -----------------
+
+_CODE_NAMED = """<xsd:simpleType name="code"><xsd:restriction base="xsd:string">
+    <xsd:enumeration value="USD"/><xsd:enumeration value="EUR"/>
+  </xsd:restriction></xsd:simpleType>"""
+_INLINE_CODE = """<xsd:element name="code"><xsd:simpleType>
+      <xsd:restriction base="xsd:string"><xsd:maxLength value="3"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>"""
+
+
+@pytest.mark.parametrize("outer", ["xsd:int", "tns:code"])
+def test_a_nested_inline_type_does_not_leak_to_a_same_named_outer_element(
+        outer):
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  {_CODE_NAMED}
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="inner"><xsd:complexType><xsd:sequence>
+      {_INLINE_CODE}
+    </xsd:sequence></xsd:complexType></xsd:element>
+    <xsd:element name="code" type="{outer}"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    spec = convert_wsdl(content=_wsdl(types))
+    outer_code = _req_props(spec)["code"]
+    assert "maxLength" not in outer_code
+    if outer == "tns:code":
+        assert outer_code["enum"] == ["USD", "EUR"]
+    inner = _req_props(spec)["inner"]
+    ref = (inner.get("allOf") or [inner])[0].get("$ref")
+    inner_schema = (spec["components"]["schemas"][ref.rsplit("/", 1)[-1]]
+                    if ref else inner)
+    inner_code = inner_schema["properties"]["code"]
+    assert inner_code["maxLength"] == 3 and "enum" not in inner_code
+
+
+@pytest.mark.parametrize("via", ["extension", "group"])
+def test_an_inherited_inline_type_keeps_its_own_facets(via):
+    if via == "extension":
+        decl = f"""<xsd:complexType name="Base"><xsd:sequence>{_INLINE_CODE}
+  </xsd:sequence></xsd:complexType>
+  <xsd:complexType name="Derived"><xsd:complexContent>
+    <xsd:extension base="tns:Base"><xsd:sequence>
+      <xsd:element name="extra" type="xsd:string"/>
+    </xsd:sequence></xsd:extension></xsd:complexContent></xsd:complexType>"""
+    else:
+        decl = f"""<xsd:group name="G"><xsd:sequence>{_INLINE_CODE}
+  </xsd:sequence></xsd:group>
+  <xsd:complexType name="Derived"><xsd:sequence>
+    <xsd:group ref="tns:G"/>
+    <xsd:element name="extra" type="xsd:string"/>
+  </xsd:sequence></xsd:complexType>"""
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  {_CODE_NAMED}
+  {decl}
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="d" type="tns:Derived"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    derived = convert_wsdl(content=_wsdl(types))["components"]["schemas"][
+        "Derived"]
+    props = derived.get("properties") or {}
+    for part in derived.get("allOf", []):
+        props = {**props, **(part.get("properties") or {})}
+    code = props["code"]
+    assert code["maxLength"] == 3 and "enum" not in code

@@ -204,6 +204,27 @@ class SchemaConverter:
                     return value
         return None
 
+    def _inline_facets(self, qkey: tuple[str, str] | None,
+                       el_name: str) -> dict[str, Any] | None:
+        """Facets of el_name's inline anonymous simpleType, declared in the
+        container qkey or in one it extends or whose group it references;
+        None when the element is declared with a type instead."""
+        if qkey is None:
+            return None
+        todo, seen = [tuple(qkey)], set()
+        while todo:
+            key = todo.pop(0)
+            if key in seen:
+                continue
+            seen.add(key)
+            hit = self.meta.inline_simple.get((key[0], key[1], el_name))
+            if hit is not None:
+                return hit
+            if el_name in self.meta.declared_children.get(key, ()):
+                return None  # declared right here, with a type
+            todo.extend(self.meta.inherits.get(key, ()))
+        return None
+
     def _child_doc(self, qkey: tuple[str, str] | None, child: str) -> str | None:
         if qkey is None:
             return None
@@ -515,8 +536,7 @@ class SchemaConverter:
         if sub is not None:
             return sub
 
-        inline = (self.meta.inline_simple.get((qkey[0], qkey[1], el_name))
-                  if qkey else None)
+        inline = self._inline_facets(qkey, el_name)
         if inline is not None and not isinstance(el_type, zx.ComplexType):
             base = self._simple_to_schema(el_type, inline_facets=inline)
         else:
