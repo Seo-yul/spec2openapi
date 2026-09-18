@@ -248,8 +248,13 @@ def _facets_from_restriction(
     restriction = st.find(f"{{{XSD_NS}}}restriction")
     if restriction is None:
         return {}
-    return _own_facets(restriction,
-                       _restriction_number_kind(restriction, simple_types))
+    facets = _own_facets(restriction,
+                         _restriction_number_kind(restriction, simple_types))
+    # list length facets count items, not characters
+    if _simple_type_facets(st, simple_types or {})[1] == "list":
+        facets.pop("minLength", None)
+        facets.pop("maxLength", None)
+    return facets
 
 
 def _named_simple_type(

@@ -848,3 +848,32 @@ def test_an_inherited_elements_doc_outranks_its_anonymous_types():
         k: v for part in derived.get("allOf", [])
         for k, v in (part.get("properties") or {}).items()}
     assert props["d"]["description"] == "elem doc"
+
+
+def test_the_declaring_elements_doc_outranks_a_nested_same_named_child():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="item"><xsd:complexType><xsd:sequence>
+      <xsd:element name="id" type="xsd:string">
+        <xsd:annotation><xsd:documentation>item id</xsd:documentation>
+        </xsd:annotation></xsd:element>
+    </xsd:sequence></xsd:complexType></xsd:element>
+    <xsd:element name="id">
+      <xsd:annotation><xsd:documentation>request id</xsd:documentation>
+      </xsd:annotation>
+      <xsd:simpleType><xsd:restriction base="xsd:string"/></xsd:simpleType>
+    </xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    props = _req_props(convert_wsdl(content=_wsdl(types)))
+    assert props["id"]["description"] == "request id"
+
+
+@pytest.mark.parametrize("base", ["xsd:NMTOKENS", "tns:Words"])
+def test_a_named_list_types_length_facets_are_dropped(base):
+    v = _one_prop('<xsd:element name="v" type="tns:Ids"/>', extra=f"""
+      <xsd:simpleType name="Words"><xsd:list itemType="xsd:string"/>
+      </xsd:simpleType>
+      <xsd:simpleType name="Ids"><xsd:restriction base="{base}">
+        <xsd:maxLength value="3"/></xsd:restriction></xsd:simpleType>""")
+    assert "maxLength" not in v and "minLength" not in v

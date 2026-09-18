@@ -584,13 +584,13 @@ class SchemaConverter:
         node = getattr(el_type, "_s2o_simple_node", None)
         if node is not None:
             # an anonymous type is declared inside its element, so that
-            # element's documentation is exact and outranks the type's; a
-            # same-named child of another container (the _child_doc
-            # fallbacks) does not
+            # element's documentation is exact and outranks the type's;
+            # the name-keyed docs (which can hold a same-named nested or
+            # other container's child) only fill in when it has none
             parent = node.getparent()
-            own_doc = ((qkey is not None
-                        and self.meta.child_docs.get((*qkey, el_name)))
-                       or (_doc_text(parent) if parent is not None else None))
+            own_doc = ((_doc_text(parent) if parent is not None else None)
+                       or (qkey is not None
+                           and self.meta.child_docs.get((*qkey, el_name))))
             if own_doc:
                 base["description"] = own_doc
             elif doc and "description" not in base:
