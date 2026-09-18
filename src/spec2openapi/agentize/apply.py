@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from ..minify import _fold_key, _split_folds
 from ..openapi import (
     _HTTP_METHODS,
     _SAFE_TOOL_RE,
@@ -119,8 +120,9 @@ def _truncate(text: str) -> str:
 def _example_ok(value: Any) -> bool:
     """JSON 직렬화 가능하고 상한 안에 드는 값인가."""
     try:
-        rendered = json.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
+        # NaN/Infinity 는 어떤 RFC 8259 파서도 읽지 못하는 토큰이 된다
+        rendered = json.dumps(value, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
         return False
     return len(rendered) <= MAX_EXAMPLE
 
@@ -130,6 +132,10 @@ def _example_ok(value: Any) -> bool:
 _UNCHECKED_EXAMPLE_TYPES = (None, "string")
 
 _NUMERIC_EXAMPLE_TYPES = ("integer", "number")
+
+#: 모델의 example 은 응답 스키마상 언제나 문자열이다. 이 type 들에는
+#: JSON 으로 파싱해 모양이 맞을 때만 쓴다.
+_STRUCTURED_EXAMPLE_TYPES = {"array": list, "object": dict}
 
 
 def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
@@ -148,8 +154,9 @@ def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
       실제 bool로 파싱해 돌려준다.
     - "integer"/"number"면 문자열이 그 type으로 파싱될 때만 통과시키고
       파싱된 값을 돌려준다.
-    - 그 외 type(object/array 등)은 model이 판단할 영역이 아니므로
-      막지 않는다 - 이 함수는 스칼라 type 모순만 잡는다.
+    - "array"/"object"면 문자열을 JSON으로 파싱해 모양(list/dict)이 맞을
+      때만 통과시키고 파싱된 값을 돌려준다. 모델의 example은 언제나
+      문자열이라, 파싱하지 않으면 배열·객체 필드에 문자열이 붙는다.
     """
     if isinstance(declared_type, list):
         # 3.1 의 nullable 스칼라는 ["integer", "null"] 로 온다.
@@ -159,6 +166,24 @@ def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
             (t for t in declared_type if t != "null"), None)
     if not isinstance(declared_type, str) or declared_type in _UNCHECKED_EXAMPLE_TYPES:
         return True, raw
+    shape = _STRUCTURED_EXAMPLE_TYPES.get(declared_type)
+    if shape is not None:
+        value = raw
+        if isinstance(raw, str):
+            if len(raw) > MAX_EXAMPLE:
+                # 상한을 넘는 원문은 파싱하지 않는다 - 두 호출부 모두 뒤이어
+                # _example_ok 로 크기를 검사해 거부한다. 파싱 뒤의 정리는
+                # 재귀이고 3.12+ 의 디코더는 재귀 한도보다 깊은 중첩도
+                # 파싱하므로, 상한 안의 원문만 다뤄야 깊이가 한도에 닿지 않는다.
+                return True, raw
+            try:
+                value = json.loads(raw)
+            except (ValueError, RecursionError):
+                return False, None
+            # 정리는 파싱 전 원문에 적용됐다 - JSON 이스케이프는 파싱 뒤에야
+            # 실제 제어문자가 되므로 파싱한 값을 다시 정리한다.
+            value = _clean_value(value)
+        return (True, value) if isinstance(value, shape) else (False, None)
     if declared_type == "boolean":
         if isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
             return True, raw.strip().lower() == "true"
@@ -177,6 +202,83 @@ def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
             return False, None
         return True, parsed
     return True, raw
+
+
+#: 다른 스키마에서 type 을 가져오는 합성 키워드. 변환기는 형제 키가 있는
+#: $ref 를 allOf 로 감싼다.
+_COMPOSITION_KEYS = ("allOf", "oneOf", "anyOf")
+
+
+def _type_from_elsewhere(parent: dict) -> bool:
+    """type 을 $ref 나 type 선언 없는 합성에서 가져오는 필드인가."""
+    return "$ref" in parent or ("type" not in parent and any(
+        k in parent for k in _COMPOSITION_KEYS))
+
+
+def _example_for(parent: dict, raw: Any) -> tuple[bool, Any]:
+    """부모 스키마에 맞춘 example. type 을 다른 스키마에서 가져오는 필드는
+    type 을 확인할 수 없어 받지 않는다."""
+    if _type_from_elsewhere(parent):
+        return False, None
+    return _typed_example(raw, parent.get("type"))
+
+
+def _example_rejection(parent: dict) -> str:
+    if _type_from_elsewhere(parent):
+        return "$ref·합성 필드에는 example 을 쓰지 않음"
+    return "example 이 선언된 type과 맞지 않음"
+
+
+#: operation 의 description/operationId 포인터. minify 의 fold 기록과
+#: 맞물리는 필드다.
+_OP_FIELD = re.compile(
+    rf"^#/paths/([^/]+)/({_METHOD})/(?:description|operationId)\Z")
+
+
+def _fold_record(spec: dict) -> dict | None:
+    s2o = spec.get("x-s2o")
+    minify = s2o.get("minify") if isinstance(s2o, dict) else None
+    folded = minify.get("folded") if isinstance(minify, dict) else None
+    return folded if isinstance(folded, dict) else None
+
+
+def _op_fold_key(pointer: str, op: dict) -> str | None:
+    """operation 필드 포인터면 minify 의 fold 기록 키, 아니면 None."""
+    m = _OP_FIELD.match(pointer)
+    if m is None:
+        return None
+    return _fold_key(_unescape_pointer_token(m.group(1)), m.group(2), op)
+
+
+def _kept_folds(spec: dict, key: str | None, op: dict) -> str:
+    """operation 설명을 새로 쓸 때 이어 붙일, minify 가 접어 넣은 줄.
+
+    새 설명이 이 줄까지 덮으면 folded 기록만 남아 다시 돌린 minify 도
+    복원하지 못한다. 기록에 있는 operation 만 벗긴다 - 사용자가 쓴
+    marker 모양 줄을 우리 것으로 오인하지 않기 위해서다. key 는 이
+    실행에서 개명되기 전의 기록 키다.
+    """
+    folded = _fold_record(spec)
+    desc = op.get("description")
+    if folded is None or key not in folded or not isinstance(desc, str):
+        return ""
+    return "".join("\n" + line for line in _split_folds(desc)[1])
+
+
+def _move_fold_keys(spec: dict, moves: dict[str, str]) -> None:
+    """개명한 operation 의 fold 기록을 새 이름으로 옮긴다.
+
+    옛 이름에 남으면 다음 minify 가 같은 줄을 한 번 더 접어 넣는다.
+    원래 키 기준으로 한 번에 옮긴다 - 하나씩 옮기면 a->b, b->c 같은
+    이어진 개명이나 맞바꾸기에서 아직 개명 전인 operation 의 기록을
+    덮어쓴다.
+    """
+    folded = _fold_record(spec)
+    if not folded or not moves:
+        return
+    moved = {moves.get(k, k): v for k, v in folded.items()}
+    folded.clear()
+    folded.update(moved)
 
 
 def _safe(pointer: str) -> str:
@@ -204,7 +306,8 @@ def _clean_value(value: Any) -> Any:
     if isinstance(value, str):
         return _clean(value)
     if isinstance(value, dict):
-        return {k: _clean_value(v) for k, v in value.items()}
+        return {(_clean(k) if isinstance(k, str) else k): _clean_value(v)
+                for k, v in value.items()}
     if isinstance(value, list):
         return [_clean_value(v) for v in value]
     return value
@@ -216,6 +319,9 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
     """제안을 적용한 새 스펙과 보고서를 돌려준다. 입력은 변경하지 않는다."""
     out = copy.deepcopy(spec)
     report = ApplyReport()
+    # operation 별 이 실행 이전의 fold 기록 키, 그리고 개명으로 옮길 키.
+    fold_keys: dict[int, str | None] = {}
+    fold_moves: dict[str, str] = {}
 
     for sug in suggestions:
         ptr = sug.pointer
@@ -261,12 +367,17 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                 continue
             if isinstance(prior, str) and prior:
                 report.renamed[ptr.rsplit("/", 1)[0]] = prior
+            old_key = fold_keys.setdefault(id(parent),
+                                           _op_fold_key(ptr, parent))
             parent[key] = text
+            new_key = _op_fold_key(ptr, parent)
+            if old_key is not None and new_key is not None:
+                fold_moves[old_key] = new_key
         elif key == "example":
-            ok_type, typed = _typed_example(text, parent.get("type"))
+            ok_type, typed = _example_for(parent, text)
             if not ok_type:
                 report.rejected.append(
-                    f"{_safe(ptr)}: example 이 선언된 type과 맞지 않음")
+                    f"{_safe(ptr)}: {_example_rejection(parent)}")
                 continue
             if not _example_ok(typed):
                 report.rejected.append(
@@ -274,6 +385,18 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                     f"{MAX_EXAMPLE}자를 넘음")
                 continue
             parent[key] = typed
+        elif key == "description":
+            fold_key = fold_keys.get(id(parent)) or _op_fold_key(ptr, parent)
+            folds = _kept_folds(out, fold_key, parent)
+            if folds:
+                # 모델은 접힌 줄이 붙은 원래 설명을 보고 쓴다 - 그 줄을
+                # 되풀이해도 기록된 한 벌만 남긴다.
+                text = _split_folds(text)[0].strip()
+                if not text:
+                    report.rejected.append(
+                        f"{_safe(ptr)}: 접힌 줄 외에 설명이 없음")
+                    continue
+            parent[key] = _truncate(text) + folds
         else:
             parent[key] = _truncate(text)
         report.applied[ptr] = sug.grounding
@@ -284,10 +407,10 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
         if (sug.example is not None and key == "description"
                 and _SCHEMA_TARGET.match(ptr)):
             cleaned = _clean_value(copy.deepcopy(sug.example))
-            ok_type, typed = _typed_example(cleaned, parent.get("type"))
+            ok_type, typed = _example_for(parent, cleaned)
             if not ok_type:
                 report.rejected.append(
-                    f"{_safe(ptr)}: example 이 선언된 type과 맞지 않음")
+                    f"{_safe(ptr)}: {_example_rejection(parent)}")
             elif _example_ok(typed):
                 parent.setdefault("example", typed)
             else:
@@ -295,6 +418,7 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
                     f"{_safe(ptr)}: example 이 직렬화 불가이거나 "
                     f"{MAX_EXAMPLE}자를 넘음")
 
+    _move_fold_keys(out, fold_moves)
     return out, report
 
 

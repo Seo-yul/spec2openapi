@@ -522,6 +522,207 @@ def test_example_on_property_without_a_declared_type_is_unaffected():
     assert rep.rejected == []
 
 
+def test_string_example_on_array_property_is_rejected():
+    """모델의 example 은 언제나 문자열이다. 배열 필드에 "[1, 2]" 같은
+    문자열이 붙으면 FastMCP 가 그대로 payload 에 실어 agent 를 오도한다."""
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["ids"] = {
+        "type": "array", "items": {"type": "integer"}}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/ids/description",
+        "연결된 ID 목록", "named", example="1, 2")])
+    assert "example" not in out["components"]["schemas"]["Pet"][
+        "properties"]["ids"]
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_json_array_example_on_array_property_is_parsed_and_written():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["ids"] = {
+        "type": "array", "items": {"type": "integer"}}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/ids/description",
+        "연결된 ID 목록", "named", example="[1, 2]")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["ids"][
+        "example"] == [1, 2]
+    assert rep.rejected == []
+
+
+def test_json_example_of_the_wrong_shape_on_object_property_is_rejected():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["meta"] = {
+        "type": "object"}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/meta/example",
+        "[1, 2]", "named")])
+    assert "example" not in out["components"]["schemas"]["Pet"][
+        "properties"]["meta"]
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_json_object_example_on_object_property_is_parsed_and_written():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["meta"] = {
+        "type": "object"}
+    out, _ = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/meta/example",
+        '{"color": "brown"}', "named")])
+    assert out["components"]["schemas"]["Pet"]["properties"]["meta"][
+        "example"] == {"color": "brown"}
+
+
+@pytest.mark.parametrize("raw", ["[NaN, 1]", "[Infinity]", "[1e999]",
+                                 '{"x": -Infinity}'])
+def test_non_finite_json_example_on_structured_property_is_rejected(raw):
+    spec = base_spec()
+    props = spec["components"]["schemas"]["Pet"]["properties"]
+    props["ids"] = {"type": "array"}
+    props["meta"] = {"type": "object"}
+    target = "meta" if raw.startswith("{") else "ids"
+    out, rep = apply_suggestions(spec, [Suggestion(
+        f"#/components/schemas/Pet/properties/{target}/example", raw,
+        "named")])
+    assert "example" not in out["components"]["schemas"]["Pet"][
+        "properties"][target]
+    assert any("example" in r for r in rep.rejected)
+
+
+def test_deeply_nested_json_example_is_rejected_not_raised():
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["ids"] = {
+        "type": "array"}
+    raw = "[" * 100_000 + "]" * 100_000
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/ids/example", raw, "named")])
+    assert "example" not in out["components"]["schemas"]["Pet"][
+        "properties"]["ids"]
+    assert any("example" in r for r in rep.rejected)
+
+
+@pytest.mark.parametrize("depth", [2_000, 5_000])
+def test_a_nested_json_example_over_the_size_cap_is_rejected_not_raised(depth):
+    """3.12+ 의 C 디코더는 재귀 한도보다 깊은 중첩도 파싱한다 - 그 뒤의
+    정리가 터지지 않도록 상한을 넘는 원문은 파싱 전에 거른다."""
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["ids"] = {
+        "type": "array"}
+    raw = "[" * depth + "]" * depth
+    for sug in (Suggestion("#/components/schemas/Pet/properties/ids/example",
+                           raw, "named"),
+                Suggestion("#/components/schemas/Pet/properties/ids/description",
+                           "ID 목록", "named", example=raw)):
+        out, rep = apply_suggestions(spec, [sug])
+        assert "example" not in out["components"]["schemas"]["Pet"][
+            "properties"]["ids"]
+        assert any("example" in r for r in rep.rejected)
+
+
+def _two_folded_ops():
+    spec = base_spec()
+    spec["paths"] = {
+        "/a": {"get": {"operationId": "a",
+                       "description": "Errors: 404 (A missing).",
+                       "responses": {"200": {"description": "ok"}}}},
+        "/b": {"get": {"operationId": "b",
+                       "description": "Errors: 409 (B conflict).",
+                       "responses": {"200": {"description": "ok"}}}}}
+    spec["x-s2o"] = {"minify": {"folded": {"a": ["errors"],
+                                           "b": ["errors", "examples"]}}}
+    return spec
+
+
+def test_chained_renames_keep_each_fold_record_with_its_operation():
+    """a->b, b->c 를 한 번에 적용해도 각 기록은 자기 operation 을 따라간다."""
+    out, _ = apply_suggestions(_two_folded_ops(), [
+        Suggestion("#/paths/~1a/get/description", "A 를 조회한다", "named"),
+        Suggestion("#/paths/~1a/get/operationId", "b", "named"),
+        Suggestion("#/paths/~1b/get/description", "B 를 조회한다", "named"),
+        Suggestion("#/paths/~1b/get/operationId", "c", "named"),
+    ], rename_tools=True)
+    assert out["x-s2o"]["minify"]["folded"] == {
+        "b": ["errors"], "c": ["errors", "examples"]}
+    assert out["paths"]["/a"]["get"]["description"] == (
+        "A 를 조회한다\nErrors: 404 (A missing).")
+    assert out["paths"]["/b"]["get"]["description"] == (
+        "B 를 조회한다\nErrors: 409 (B conflict).")
+
+
+def test_a_description_of_only_fold_lines_is_rejected():
+    out, rep = apply_suggestions(_two_folded_ops(), [Suggestion(
+        "#/paths/~1a/get/description", "Errors: 404 (A missing).", "named")])
+    assert out["paths"]["/a"]["get"]["description"] == (
+        "Errors: 404 (A missing).")
+    assert "#/paths/~1a/get/description" not in rep.applied
+    assert rep.rejected
+
+
+def test_swapped_names_swap_their_fold_records():
+    out, _ = apply_suggestions(_two_folded_ops(), [
+        Suggestion("#/paths/~1a/get/operationId", "b", "named"),
+        Suggestion("#/paths/~1b/get/operationId", "a", "named"),
+    ], rename_tools=True)
+    assert out["x-s2o"]["minify"]["folded"] == {
+        "b": ["errors"], "a": ["errors", "examples"]}
+
+
+@pytest.mark.parametrize("wrapper", ["allOf", "oneOf", "anyOf"])
+def test_example_is_not_written_on_a_composed_untyped_field(wrapper):
+    """변환기는 형제 키가 있는 $ref 를 allOf 로 감싼다 - type 이 없는 합성
+    필드도 type 을 확인할 수 없다."""
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["owner"] = {
+        wrapper: [{"$ref": "#/components/schemas/Pet"}]}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/owner/description",
+        "소유자", "named", example="바둑이 주인")])
+    node = out["components"]["schemas"]["Pet"]["properties"]["owner"]
+    assert node["description"] == "소유자"
+    assert "example" not in node
+    assert any("example" in r for r in rep.rejected)
+
+
+@pytest.mark.parametrize("via", ["field", "pointer"])
+def test_json_escaped_control_characters_are_cleaned_after_parsing(via):
+    """정리는 파싱 전 원문에 적용된다. JSON 문자열 안의 유니코드 이스케이프는
+    파싱 뒤에야 실제 ESC 가 된다 - 파싱한 값(키 포함)도 같은 정리를 받는다."""
+    import json
+
+    esc, bell = chr(27), chr(7)
+    raw_list = json.dumps([esc + "[2Jevil", "a" + bell + "b"])
+    raw_obj = json.dumps({esc + "[31mkey": esc + "[0mvalue"})
+    assert esc not in raw_list and esc not in raw_obj  # 이스케이프된 원문
+    spec = base_spec()
+    props = spec["components"]["schemas"]["Pet"]["properties"]
+    props["tags"] = {"type": "array", "items": {"type": "string"}}
+    props["meta"] = {"type": "object"}
+    base = "#/components/schemas/Pet/properties"
+    if via == "field":
+        sugs = [Suggestion(f"{base}/tags/description", "태그 목록", "named",
+                           example=raw_list),
+                Suggestion(f"{base}/meta/description", "메타", "named",
+                           example=raw_obj)]
+    else:
+        sugs = [Suggestion(f"{base}/tags/example", raw_list, "named"),
+                Suggestion(f"{base}/meta/example", raw_obj, "named")]
+    out, _ = apply_suggestions(spec, sugs)
+    got = out["components"]["schemas"]["Pet"]["properties"]
+    assert got["tags"]["example"] == ["evil", "ab"]
+    assert got["meta"]["example"] == {"key": "value"}
+
+
+def test_example_is_not_written_next_to_a_ref():
+    """$ref 필드는 type 을 확인할 수 없다 - example 을 붙이지 않는다."""
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["owner"] = {
+        "$ref": "#/components/schemas/Pet"}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/owner/description",
+        "소유자", "named", example="바둑이 주인")])
+    node = out["components"]["schemas"]["Pet"]["properties"]["owner"]
+    assert "example" not in node
+    assert any("example" in r for r in rep.rejected)
+
+
 def test_example_terminal_pointer_also_rejects_a_type_mismatch():
     """side channel(example=) 뿐 아니라 /example 로 끝나는 포인터
     경로도 같은 검사를 받아야 한다 (Ruling 53)."""

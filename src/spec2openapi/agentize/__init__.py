@@ -13,6 +13,7 @@ import 시점에 어떤 LLM SDK도 끌어오지 않는다 - provider 어댑터�
 """
 from __future__ import annotations
 
+import copy
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -20,9 +21,10 @@ from typing import Any, Iterable
 from ..checks import _component_schemas, verify
 from ..errors import ConversionError
 from ..minify import minify_for_mcp
-from ..openapi import _operations, _unescape_pointer_token
+from ..openapi import _SAFE_TOOL_RE, _operations, _unescape_pointer_token
 from .apply import (
     ApplyReport,
+    _resolve_parent,
     already_generated,
     apply_suggestions,
     can_record,
@@ -66,6 +68,16 @@ class AgentizeResult:
     targets: list[Target] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     self_check: list[str] | None = None
+    #: 제안을 만드는 pass 2 호출 수와 그중 응답을 받은 수. 용어집(pass 1)
+    #: 응답만으로는 문서에 쓸 것이 나오지 않으므로 세지 않는다.
+    calls: int = 0
+    answered: int = 0
+
+
+def _verify_failures(spec: dict) -> str:
+    """verify() 의 fail 메시지를 한 줄로 잇는다. 통과하면 빈 문자열."""
+    verdict = verify(spec)
+    return "; ".join(r.message for r in verdict.results if r.status == "fail")
 
 
 def _schema_targets(targets: Iterable[Target]) -> dict[str, list[str]]:
@@ -123,6 +135,81 @@ def plan(spec: dict, *, kinds: Iterable[str] = KINDS,
     targets = [t for t in find_targets(working, kinds=kinds, policy=policy)
               if t.pointer not in done]
     return working, targets
+
+
+def _queried_operations(targets: Iterable[Target]) -> set[str]:
+    """pass 2b 가 질의할 operation 의 base 포인터 - desc 나 params 대상이
+    있는 operation 뿐이다. --rename-tools 도 이 operation 만 개명한다."""
+    return ({t.pointer.rsplit("/", 1)[0] for t in targets if t.kind == "desc"}
+            | set(_param_pointers(targets)))
+
+
+def _summary_replaceable(op: dict) -> bool:
+    """pass 2b 가 desc 대상 operation 의 summary 도 다시 쓰는가. 멀쩡한
+    summary 는 --overwrite 없이 덮어쓰지 않는다."""
+    return bool(low_value_reason(op.get("summary"),
+                                 name=op.get("operationId")))
+
+
+def _queried_pointers(targets: Iterable[Target]) -> set[str]:
+    """이번 실행이 모델에게 실제로 묻는 대상 포인터. pass 2a 는 속성
+    대상을, pass 2b 는 desc 대상을 모두 묻지만, 한 operation 안에서 이름이
+    겹치는 파라미터는 묻지 않는다(_param_pointers) - 그 자리는 채워지지
+    않는다."""
+    params = {ptr for by_name in _param_pointers(targets).values()
+              for ptr in by_name.values()}
+    return {t.pointer for t in targets if t.kind != "params"} | params
+
+
+def _preflight_problems(working: dict, targets: list[Target], *,
+                        rename_tools: bool = False) -> str:
+    """LLM 을 부르기 전에 이미 확정된 verify 실패. 없으면 빈 문자열.
+
+    가장 잘 풀린 실행의 결과를 흉내 낸 사본을 검사한다 - 그래도 실패하면
+    어떤 응답으로도 고칠 수 없는 입력이다.
+
+    - 이번 실행이 모델에게 묻는 대상 자리(_queried_pointers)와, pass 2b 가
+      함께 다시 쓰는 저품질 summary 자리에는 임시 문자열을 넣는다. 값이
+      비어 있는(null) description·summary 처럼 그 자리 자체가 실패 원인일
+      수 있다.
+    - --rename-tools 면 질의하는 operation 중 operationId 가 없거나 이름
+      규칙을 어기는 것에 서로 겹치지 않는 임시 operationId 를 넣는다. 개명
+      지시가 새 이름을 내라고 하는 경우다. 읽을 만한 이름은 유지하라는
+      지시를 받고, operation 을 하나씩 보는 모델은 이름이 겹치는지 알 수
+      없으므로 중복 이름은 그대로 둔 채 본다.
+
+    검사 id 로 실패를 봐주면 채우지 않을 자리까지 봐주거나, 한 결함이
+    함께 깨는 다른 검사(openapi.schema-valid 등)를 놓친다.
+    """
+    spec = copy.deepcopy(working)
+    writable = set(_queried_pointers(targets))
+    for t in targets:
+        if t.kind == "desc":
+            summary_ptr = f"{t.pointer.rsplit('/', 1)[0]}/summary"
+            op, _ = _resolve_parent(working, summary_ptr)
+            if isinstance(op, dict) and _summary_replaceable(op):
+                writable.add(summary_ptr)
+    for pointer in writable:
+        parent, key = _resolve_parent(spec, pointer)
+        if isinstance(parent, dict):
+            parent[key] = "s2o preflight placeholder"
+    if rename_tools:
+        queried = _queried_operations(targets)
+        # operationId 는 신뢰할 수 없는 입력이다 - list/dict 일 수 있다
+        taken = {oid for _, _, op in _operations(spec)
+                 if isinstance(oid := op.get("operationId"), str)}
+        n = 0
+        for path, method, op in _operations(spec):
+            if f"#/paths/{escape_token(path)}/{method}" not in queried:
+                continue
+            oid = op.get("operationId")
+            if isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid):
+                continue
+            n += 1
+            while f"s2o_rename_{n}" in taken:
+                n += 1
+            op["operationId"] = f"s2o_rename_{n}"
+    return _verify_failures(spec)
 
 
 def call_estimate(targets: Iterable[Target], *, tool_count: int = 0
@@ -267,17 +354,26 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
 
     failures: list[str] = []
 
-    def _finish(spec_out: dict, rep: ApplyReport,
-               tgts: list[Target]) -> AgentizeResult:
+    def _finish(spec_out: dict, rep: ApplyReport, tgts: list[Target],
+               calls: int = 0, answered: int = 0) -> AgentizeResult:
         # self-check 는 이 실행이 무엇을 썼는지와 무관하게 "이 tool 을
         # 호출할 수 있는가"를 묻는다. 채울 것이 없었던 실행에서도
         # 사용자가 답을 원할 수 있으므로 모든 경로에서 실행한다.
         checks = run_self_check(spec_out, provider) if self_check else None
         return AgentizeResult(spec=spec_out, report=rep, targets=tgts,
-                              failures=failures, self_check=checks)
+                              failures=failures, self_check=checks,
+                              calls=calls, answered=answered)
 
     if not targets:
         return _finish(working, ApplyReport(), [])
+
+    # 입력이 이미 verify 를 통과하지 못하면 결과도 통과할 수 없다 - 유료
+    # 호출을 다 쓰고 나서 취소하지 않도록 첫 호출 전에 멈춘다.
+    problems = _preflight_problems(working, targets,
+                                   rename_tools=rename_tools)
+    if problems:
+        raise AgentizeError(f"입력 스펙이 verify를 통과하지 못해 LLM을 "
+                            f"호출하기 전에 중단한다: {problems}")
 
     outline = spec_outline(working)
 
@@ -382,8 +478,7 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
             # /description 만 낸다). description 이 저품질이라는
             # 이유로 멀쩡한 summary 까지 덮어쓰면 사용자가 쓴 글이
             # --overwrite 없이 소리 없이 사라진다.
-            if reply.get("summary") and low_value_reason(
-                    op.get("summary"), name=op.get("operationId")):
+            if reply.get("summary") and _summary_replaceable(op):
                 suggestions.append(Suggestion(f"{base}/summary",
                                               reply["summary"], grounding))
         if rename_tools and reply.get("operationId"):
@@ -406,21 +501,21 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
     out, report = apply_suggestions(
         working, suggestions, allow_speculative=allow_speculative,
         rename_tools=rename_tools)
+    calls = n_2a_ok + n_2a_fail + n_2b_ok + n_2b_fail
+    answered = n_2a_ok + n_2b_ok
 
     if not report.applied and not report.renamed:
         # 문서에 아무것도 새로 쓰지 않았다. minify_for_mcp 와 같은 계약을
         # 따른다: 아무것도 바꾸지 않은 실행은 동일한 문서를 반환한다.
         # targets 가 애초에 없을 때의 조기 반환과 같은 원칙이며, 문서가
         # 그대로이므로 verify 판정도 입력과 같다.
-        return _finish(working, report, targets)
+        return _finish(working, report, targets, calls, answered)
 
-    verdict = verify(out)
-    if not verdict.ok:
-        problems = "; ".join(r.message for r in verdict.results
-                             if r.status == "fail")
+    problems = _verify_failures(out)
+    if problems:
         raise AgentizeError(f"보강 결과가 verify를 통과하지 못해 전체를 "
                             f"취소한다: {problems}")
 
     record_provenance(out, report, provider=getattr(provider, "name", "?"),
                       model=getattr(provider, "model", "?"), targets=kinds)
-    return _finish(out, report, targets)
+    return _finish(out, report, targets, calls, answered)

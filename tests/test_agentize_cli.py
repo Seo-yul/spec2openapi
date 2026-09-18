@@ -235,7 +235,8 @@ def test_total_provider_failure_writes_nothing_and_exits_2(
             spec={"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
                   "paths": {}},
             report=ApplyReport(),
-            failures=["pass 1 용어집: 모의 실패", "pass 2b operation x: 모의 실패"]))
+            failures=["pass 1 용어집: 모의 실패", "pass 2b operation x: 모의 실패"],
+            calls=1, answered=0))
     rc = main(["agentize", str(EXAMPLES / "orders.openapi.yaml"),
                "-o", str(out)])
     assert rc == 2
@@ -266,7 +267,8 @@ def test_partial_failure_still_writes_and_exits_0(monkeypatch, tmp_path,
             spec={"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
                   "paths": {}},
             report=report,
-            failures=["pass 2b operation x: 모의 실패"]))
+            failures=["pass 2b operation x: 모의 실패"],
+            calls=2, answered=1))
     rc = main(["agentize", str(EXAMPLES / "orders.openapi.yaml"),
                "-o", str(out)])
     assert rc == 0
@@ -317,3 +319,115 @@ def test_rename_tools_output_is_reported(monkeypatch, capsys):
     assert rc == 0
     err = capsys.readouterr().err
     assert "createPet" in err and "create_pet" in err
+
+
+def test_partial_failure_with_nothing_applied_is_not_a_total_failure(
+        monkeypatch, tmp_path, capsys):
+    """pass 1 만 실패하고 pass 2 는 응답했지만 제안이 전부 폐기된 실행은
+    "모든 LLM 호출이 실패"가 아니다 - 산출물을 쓰고 0 으로 끝난다."""
+    from spec2openapi.agentize import AgentizeResult
+    from spec2openapi.agentize.apply import ApplyReport
+
+    class _Stub:
+        name = "stub"
+        model = "stub-1"
+
+    out = tmp_path / "out.yaml"
+    monkeypatch.setattr("spec2openapi.cli._resolve_provider",
+                        lambda args: _Stub())
+    monkeypatch.setattr(
+        "spec2openapi.cli._agentize_run",
+        lambda *a, **k: AgentizeResult(
+            spec={"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+                  "paths": {}},
+            report=ApplyReport(dropped_speculative=2),
+            failures=["pass 1 용어집: 모의 실패"],
+            calls=2, answered=2))
+    rc = main(["agentize", str(EXAMPLES / "orders.openapi.yaml"),
+               "-o", str(out)])
+    assert rc == 0
+    assert out.exists()
+    assert "모든 LLM 호출이 실패" not in capsys.readouterr().err
+
+
+def test_dry_run_warns_when_the_input_fails_verify(tmp_path, capsys):
+    """실제 실행은 호출 전에 멈출 입력이다 - dry-run 이 호출 수만 보여주면
+    사용자가 틀린 전제로 판단한다."""
+    src = tmp_path / "in.json"
+    src.write_text(json.dumps({
+        "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+        "paths": {"/pets": {"get": {
+            "responses": {"200": {"description": "ok"}}}}}}))
+    rc = main(["agentize", str(src), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "verify" in out and "missing operationId" in out
+
+
+def test_a_glossary_answer_alone_is_still_a_total_failure(
+        monkeypatch, tmp_path, capsys):
+    """용어집만 응답하고 pass 2 가 전부 실패하면 쓸 것이 하나도 없다."""
+    from spec2openapi.agentize import AgentizeResult
+    from spec2openapi.agentize.apply import ApplyReport
+
+    class _Stub:
+        name = "stub"
+        model = "stub-1"
+
+    out = tmp_path / "out.yaml"
+    monkeypatch.setattr("spec2openapi.cli._resolve_provider",
+                        lambda args: _Stub())
+    monkeypatch.setattr(
+        "spec2openapi.cli._agentize_run",
+        lambda *a, **k: AgentizeResult(
+            spec={"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+                  "paths": {}},
+            report=ApplyReport(),
+            failures=["pass 2a 스키마 Pet: 모의 실패",
+                      "pass 2b operation x: 모의 실패"],
+            calls=2, answered=0))
+    rc = main(["agentize", str(EXAMPLES / "orders.openapi.yaml"),
+               "-o", str(out)])
+    assert rc == 2
+    assert not out.exists()
+
+
+def test_dry_run_leaves_tool_name_failures_to_rename_tools(tmp_path, capsys):
+    """--rename-tools 는 빠진 operationId 를 새로 쓸 수 있다 - 실제 실행이
+    막지 않는 입력에 경고하지 않는다."""
+    src = tmp_path / "in.json"
+    src.write_text(json.dumps({
+        "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+        "paths": {"/pets": {"get": {
+            "responses": {"200": {"description": "ok"}}}}}}))
+    rc = main(["agentize", str(src), "--dry-run", "--rename-tools"])
+    assert rc == 0
+    assert "verify" not in capsys.readouterr().out
+
+
+def test_dry_run_warns_about_a_tool_name_rename_tools_cannot_reach(
+        tmp_path, capsys):
+    src = tmp_path / "in.json"
+    ok = {"responses": {"200": {"description": "ok"}}}
+    src.write_text(json.dumps({
+        "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+        "paths": {
+            "/a": {"get": {**ok, "description":
+                           "Returns the archived order for an account."}},
+            "/b": {"get": {**ok, "operationId": "b"}}}}))
+    rc = main(["agentize", str(src), "--dry-run", "--rename-tools"])
+    assert rc == 0
+    assert "missing operationId" in capsys.readouterr().out
+
+
+def test_dry_run_does_not_warn_about_a_null_field_the_run_fills(
+        tmp_path, capsys):
+    src = tmp_path / "in.json"
+    src.write_text(json.dumps({
+        "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+        "paths": {"/x": {"get": {
+            "operationId": "getX", "description": None,
+            "responses": {"200": {"description": "ok"}}}}}}))
+    rc = main(["agentize", str(src), "--dry-run"])
+    assert rc == 0
+    assert "verify" not in capsys.readouterr().out
