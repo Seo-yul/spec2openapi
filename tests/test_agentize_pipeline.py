@@ -939,3 +939,25 @@ def test_a_null_field_on_a_parameter_the_run_will_not_ask_fails_the_preflight():
     with pytest.raises(AgentizeError, match="LLM을 호출하기 전에"):
         agentize_spec(spec, provider)
     assert provider.calls == []
+
+
+def test_a_null_summary_the_run_rewrites_does_not_fail_the_preflight():
+    """pass 2b 는 desc 대상 operation 의 저품질 summary 도 다시 쓴다 - null
+    summary 는 그 실행이 채우는 자리다."""
+    from spec2openapi import verify
+
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/a": {"get": {
+                "operationId": "getA", "summary": None,
+                "responses": {"200": {"description": "ok"}}}}}}
+
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        return {"summary": "Read one A", "description":
+                "Reads one A record by its key.", "grounding": "named",
+                "parameters": []}
+    result = agentize_spec(spec, FP(respond))
+    op = result.spec["paths"]["/a"]["get"]
+    assert op["summary"] == "Read one A"
+    assert verify(result.spec).ok
