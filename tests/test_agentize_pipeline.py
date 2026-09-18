@@ -870,3 +870,15 @@ def test_a_model_echo_of_the_fold_lines_is_not_doubled():
     assert op["description"] == "Lists every pet.\nErrors: 404 (Not found)."
     again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
     assert again["paths"]["/pets"]["get"]["description"] == op["description"]
+
+
+@pytest.mark.parametrize("bad_id", [["x"], {"x": 1}])
+def test_rename_preflight_survives_a_non_string_operation_id(bad_id):
+    """operationId 는 신뢰할 수 없는 입력이다 - list/dict 여도 사전 검사가
+    크래시하지 않고, 개명이 그 자리를 새 이름으로 채운다."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": bad_id},
+                        {**ok, "operationId": "b",
+                         "description": "Returns one pet by its id."})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"

@@ -160,7 +160,9 @@ def _preflight_problems(working: dict, targets: list[Target], *,
     if rename_tools:
         queried = _queried_operations(targets)
         spec = copy.deepcopy(working)
-        taken = {op.get("operationId") for _, _, op in _operations(spec)}
+        # operationId 는 신뢰할 수 없는 입력이다 - list/dict 일 수 있다
+        taken = {oid for _, _, op in _operations(spec)
+                 if isinstance(oid := op.get("operationId"), str)}
         n = 0
         for path, method, op in _operations(spec):
             if f"#/paths/{escape_token(path)}/{method}" not in queried:
