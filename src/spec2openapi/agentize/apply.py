@@ -365,7 +365,16 @@ def apply_suggestions(spec: dict, suggestions: Iterable[Suggestion], *,
             parent[key] = typed
         elif key == "description":
             fold_key = fold_keys.get(id(parent)) or _op_fold_key(ptr, parent)
-            parent[key] = _truncate(text) + _kept_folds(out, fold_key, parent)
+            folds = _kept_folds(out, fold_key, parent)
+            if folds:
+                # 모델은 접힌 줄이 붙은 원래 설명을 보고 쓴다 - 그 줄을
+                # 되풀이해도 기록된 한 벌만 남긴다.
+                text = _split_folds(text)[0].strip()
+                if not text:
+                    report.rejected.append(
+                        f"{_safe(ptr)}: 접힌 줄 외에 설명이 없음")
+                    continue
+            parent[key] = _truncate(text) + folds
         else:
             parent[key] = _truncate(text)
         report.applied[ptr] = sug.grounding

@@ -13,6 +13,7 @@ import 시점에 어떤 LLM SDK도 끌어오지 않는다 - provider 어댑터�
 """
 from __future__ import annotations
 
+import copy
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -72,20 +73,10 @@ class AgentizeResult:
     answered: int = 0
 
 
-#: --rename-tools 가 operationId 를 새로 쓰거나 바꿔 고칠 수 있는 검사.
-_RENAME_FIXABLE = ("tool-name.",)
-
-
-def _verify_failures(spec: dict, *, rename_tools: bool = False) -> str:
-    """verify() 의 fail 메시지를 한 줄로 잇는다. 통과하면 빈 문자열.
-
-    rename_tools 면 개명으로 고칠 수 있는 실패는 빼고 본다 - 그 판정은
-    적용 뒤의 verify 가 한다.
-    """
-    waived = _RENAME_FIXABLE if rename_tools else ()
+def _verify_failures(spec: dict) -> str:
+    """verify() 의 fail 메시지를 한 줄로 잇는다. 통과하면 빈 문자열."""
     verdict = verify(spec)
-    return "; ".join(r.message for r in verdict.results
-                     if r.status == "fail" and not r.id.startswith(waived))
+    return "; ".join(r.message for r in verdict.results if r.status == "fail")
 
 
 def _schema_targets(targets: Iterable[Target]) -> dict[str, list[str]]:
@@ -143,6 +134,40 @@ def plan(spec: dict, *, kinds: Iterable[str] = KINDS,
     targets = [t for t in find_targets(working, kinds=kinds, policy=policy)
               if t.pointer not in done]
     return working, targets
+
+
+def _queried_operations(targets: Iterable[Target]) -> set[str]:
+    """pass 2b 가 질의할 operation 의 base 포인터 - desc 나 params 대상이
+    있는 operation 뿐이다. --rename-tools 도 이 operation 만 개명한다."""
+    return ({t.pointer.rsplit("/", 1)[0] for t in targets if t.kind == "desc"}
+            | set(_param_pointers(targets)))
+
+
+def _preflight_problems(working: dict, targets: list[Target], *,
+                        rename_tools: bool = False) -> str:
+    """LLM 을 부르기 전에 이미 확정된 verify 실패. 없으면 빈 문자열.
+
+    입력이 verify 를 통과하지 못하면 결과도 통과할 수 없다. 다만
+    --rename-tools 는 질의하는 operation 의 operationId 를 새로 쓸 수
+    있으므로, 그 operation 들에 서로 겹치지 않는 임시 operationId 를 넣은
+    사본으로 본다 - 개명으로도 고칠 수 없는 실패만 남는다. 검사 id 로
+    봐주면 질의되지 않는 operation 까지 봐주거나, 중복 id 가 함께 깨는
+    다른 검사(openapi.schema-valid 등)를 놓친다.
+    """
+    spec = working
+    if rename_tools:
+        queried = _queried_operations(targets)
+        spec = copy.deepcopy(working)
+        taken = {op.get("operationId") for _, _, op in _operations(spec)}
+        n = 0
+        for path, method, op in _operations(spec):
+            if f"#/paths/{escape_token(path)}/{method}" not in queried:
+                continue
+            n += 1
+            while f"s2o_rename_{n}" in taken:
+                n += 1
+            op["operationId"] = f"s2o_rename_{n}"
+    return _verify_failures(spec)
 
 
 def call_estimate(targets: Iterable[Target], *, tool_count: int = 0
@@ -302,7 +327,8 @@ def agentize_spec(spec: dict, provider: Any, *, kinds: Iterable[str] = KINDS,
 
     # 입력이 이미 verify 를 통과하지 못하면 결과도 통과할 수 없다 - 유료
     # 호출을 다 쓰고 나서 취소하지 않도록 첫 호출 전에 멈춘다.
-    problems = _verify_failures(working, rename_tools=rename_tools)
+    problems = _preflight_problems(working, targets,
+                                   rename_tools=rename_tools)
     if problems:
         raise AgentizeError(f"입력 스펙이 verify를 통과하지 못해 LLM을 "
                             f"호출하기 전에 중단한다: {problems}")

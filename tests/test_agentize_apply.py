@@ -629,6 +629,15 @@ def test_chained_renames_keep_each_fold_record_with_its_operation():
         "B 를 조회한다\nErrors: 409 (B conflict).")
 
 
+def test_a_description_of_only_fold_lines_is_rejected():
+    out, rep = apply_suggestions(_two_folded_ops(), [Suggestion(
+        "#/paths/~1a/get/description", "Errors: 404 (A missing).", "named")])
+    assert out["paths"]["/a"]["get"]["description"] == (
+        "Errors: 404 (A missing).")
+    assert "#/paths/~1a/get/description" not in rep.applied
+    assert rep.rejected
+
+
 def test_swapped_names_swap_their_fold_records():
     out, _ = apply_suggestions(_two_folded_ops(), [
         Suggestion("#/paths/~1a/get/operationId", "b", "named"),

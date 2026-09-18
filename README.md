@@ -274,8 +274,8 @@ What a run guarantees:
   `--allow-speculative` is given.
 - A run that writes anything must pass `verify()`, or nothing is written.
   An input that already fails `verify()` is rejected before the first
-  model call, and `--dry-run` says so; with `--rename-tools`, tool-name
-  failures are left for the run to fix.
+  model call, and `--dry-run` says so; with `--rename-tools`, name
+  problems on the operations the run queries are left for it to fix.
 - An `array` / `object` field only gets an example that parses as finite
   JSON of that shape; a `$ref` field gets none.
 - A rewritten operation description keeps the `Errors: ...` /

@@ -283,7 +283,12 @@ def _agentize_run(spec, provider, **kwargs):
 
 
 def cmd_agentize(args) -> int:
-    from .agentize import AgentizeError, _verify_failures, call_estimate, plan
+    from .agentize import (
+        AgentizeError,
+        _preflight_problems,
+        call_estimate,
+        plan,
+    )
     from .agentize.targets import KINDS
     from .convert import dump_spec
     from .openapi import _operations, resolve_pointer
@@ -329,7 +334,8 @@ def cmd_agentize(args) -> int:
             print("  (이 스펙은 손댈 곳이 없다)")
         print(f"operation {n_ops}건, 대상 스키마 {schemas}건, "
               f"예상 LLM 호출 {calls}회")
-        problems = (_verify_failures(_working, rename_tools=args.rename_tools)
+        problems = (_preflight_problems(_working, targets,
+                                        rename_tools=args.rename_tools)
                     if targets else "")
         if problems:
             # 실제 실행은 첫 호출 전에 멈춘다 - 호출 수만 보여주면 사용자가

@@ -802,3 +802,59 @@ def test_rename_tools_does_not_waive_other_verify_failures():
     with pytest.raises(AgentizeError, match="soapVersion"):
         agentize_spec(spec, provider, rename_tools=True)
     assert provider.calls == []
+
+
+def _two_op_spec(a_op, b_op):
+    return {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/a": {"get": a_op}, "/b": {"get": b_op}}}
+
+
+def _numbering_provider():
+    """operation 마다 서로 다른 이름을 돌려준다."""
+    seen = []
+
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        seen.append(user)
+        return {"summary": None, "description": "Reads one record by key.",
+                "grounding": "named", "parameters": [],
+                "operationId": f"read_{len(seen)}"}
+    return FP(respond)
+
+
+def test_rename_tools_does_not_waive_an_operation_it_will_not_query():
+    """설명이 충분해 질의되지 않는 operation 은 개명되지 않는다 - 그
+    operation 의 tool-name 결함은 호출 전에 막아야 한다."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec(
+        {**ok, "description": "Returns the archived order for an account."},
+        {**ok, "operationId": "b"})
+    provider = _numbering_provider()
+    with pytest.raises(AgentizeError, match="missing operationId"):
+        agentize_spec(spec, provider, rename_tools=True)
+    assert provider.calls == []
+
+
+def test_rename_tools_may_fix_duplicate_operation_ids():
+    """중복 operationId 는 tool-name.unique 와 openapi.schema-valid 를 함께
+    깨지만, 두 operation 이 모두 질의되면 개명으로 고칠 수 있다."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "dup"},
+                        {**ok, "operationId": "dup"})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    ids = {result.spec["paths"][p]["get"]["operationId"] for p in ("/a", "/b")}
+    assert ids == {"read_1", "read_2"}
+
+
+def test_a_model_echo_of_the_fold_lines_is_not_doubled():
+    """모델은 접힌 줄이 붙은 원래 설명을 본다 - 그 줄을 되풀이해도 한 벌만
+    남는다."""
+    from spec2openapi.minify import minify_for_mcp
+
+    result = agentize_spec(_fold_spec(), _op_provider(
+        "Lists every pet.\nErrors: 404 (Not found)."))
+    op = result.spec["paths"]["/pets"]["get"]
+    assert op["description"] == "Lists every pet.\nErrors: 404 (Not found)."
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == op["description"]

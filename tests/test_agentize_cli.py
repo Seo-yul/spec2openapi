@@ -403,3 +403,18 @@ def test_dry_run_leaves_tool_name_failures_to_rename_tools(tmp_path, capsys):
     rc = main(["agentize", str(src), "--dry-run", "--rename-tools"])
     assert rc == 0
     assert "verify" not in capsys.readouterr().out
+
+
+def test_dry_run_warns_about_a_tool_name_rename_tools_cannot_reach(
+        tmp_path, capsys):
+    src = tmp_path / "in.json"
+    ok = {"responses": {"200": {"description": "ok"}}}
+    src.write_text(json.dumps({
+        "openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+        "paths": {
+            "/a": {"get": {**ok, "description":
+                           "Returns the archived order for an account."}},
+            "/b": {"get": {**ok, "operationId": "b"}}}}))
+    rc = main(["agentize", str(src), "--dry-run", "--rename-tools"])
+    assert rc == 0
+    assert "missing operationId" in capsys.readouterr().out

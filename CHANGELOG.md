@@ -15,8 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicates those lines (#153).
 - `agentize` rejects an input that already fails `verify()` before the
   first model call instead of after every call; `--dry-run` reports it.
-  With `--rename-tools`, tool-name failures are left for the run to fix
-  (#153).
+  With `--rename-tools`, name problems on the operations the run queries
+  (and may rename) are left for it to fix (#153).
 - `agentize` writes an example on an `array` / `object` property only when
   it parses as finite JSON of that shape, and none on a `$ref` property
   (#153).
