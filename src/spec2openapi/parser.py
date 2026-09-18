@@ -76,6 +76,11 @@ class XsdMeta:
     # global elements declared abstract="true" (zeep drops @abstract too)
     abstract_elements: set[tuple[str, str]] = (
         dataclasses.field(default_factory=set))
+    # every named simpleType/complexType/global element: a qname declared
+    # here with no entry in a table has none - it must not borrow a
+    # same-named entry from another namespace
+    named_types: set[tuple[str, str]] = (
+        dataclasses.field(default_factory=set))
 
 
 @dataclasses.dataclass
@@ -159,18 +164,28 @@ _XSD_INTEGER_BASES = frozenset({
 _XSD_NUMBER_BASES = frozenset({"decimal", "float", "double"})
 
 
-def _restriction_number_kind(restriction: etree._Element) -> str:
+def _restriction_number_kind(
+        restriction: etree._Element,
+        simple_types: dict[tuple[str, str], etree._Element] | None = None,
+        _depth: int = 0) -> str:
     """Classify a restriction's base type for facet coercion: 'integer'
     (cast via int — exact, no float precision loss), 'number' (cast via
-    float), or 'string' (base is non-numeric, or is a reference to
-    another named simpleType this raw-XML metadata pass does not chase —
-    left as the original text rather than guessing)."""
+    float), or 'string' (base is non-numeric or unresolvable — left as
+    the original text rather than guessing). A base that is another
+    named simpleType is followed down to its XSD builtin."""
     base = restriction.get("base")
     if not base:
         return "string"
     resolved = _resolve_qname_ref(base, restriction)
-    if resolved is None or resolved[0] != XSD_NS:
+    if resolved is None:
         return "string"
+    if resolved[0] != XSD_NS:
+        base_st = (simple_types or {}).get(resolved)
+        inner = (base_st.find(f"{{{XSD_NS}}}restriction")
+                 if base_st is not None else None)
+        if inner is None or _depth >= 16:  # 16: cycle / runaway guard
+            return "string"
+        return _restriction_number_kind(inner, simple_types, _depth + 1)
     local = resolved[1]
     if local in _XSD_INTEGER_BASES:
         return "integer"
@@ -210,13 +225,16 @@ def _anchor_pattern(pattern: str) -> str:
     return f"^(?:{pattern})$"
 
 
-def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
+def _facets_from_restriction(
+        st: etree._Element,
+        simple_types: dict[tuple[str, str], etree._Element] | None = None,
+) -> dict[str, Any]:
     """xsd:simpleType node -> JSON Schema facet fragment (3.0 flavored)."""
     out: dict[str, Any] = {}
     restriction = st.find(f"{{{XSD_NS}}}restriction")
     if restriction is None:
         return out
-    kind = _restriction_number_kind(restriction)
+    kind = _restriction_number_kind(restriction, simple_types)
     enums = [
         _coerce_enum_value(e.get("value"), kind)
         for e in restriction.findall(f"{{{XSD_NS}}}enumeration")
@@ -238,10 +256,12 @@ def _facets_from_restriction(st: etree._Element) -> dict[str, Any]:
             except ValueError:
                 pass
         elif local == "fractionDigits":
+            # not multipleOf: 10**-n is inexact in binary floating point,
+            # so validators reject valid values (0.07 against 0.01)
             try:
                 digits = int(value)
                 if digits > 0:
-                    out["multipleOf"] = round(10 ** -digits, digits)
+                    out["x-fractionDigits"] = digits
             except ValueError:
                 pass
         elif local == "pattern":
@@ -282,7 +302,23 @@ def _resolve_qname_ref(value: str, node: etree._Element
     return None if ns is None else (ns, local)
 
 
-def _scan_schema_root(root: etree._Element, meta: XsdMeta) -> None:
+def _simple_type_index(roots: list[etree._Element]
+                       ) -> dict[tuple[str, str], etree._Element]:
+    """(namespace, name) -> named xsd:simpleType across every schema
+    document, so a restriction can follow a base declared elsewhere."""
+    index: dict[tuple[str, str], etree._Element] = {}
+    for root in roots:
+        for schema in root.iter(f"{{{XSD_NS}}}schema"):
+            tns = schema.get("targetNamespace", "")
+            for st in schema.findall(f"{{{XSD_NS}}}simpleType[@name]"):
+                index.setdefault((tns, st.get("name")), st)
+    return index
+
+
+def _scan_schema_root(
+        root: etree._Element, meta: XsdMeta,
+        simple_types: dict[tuple[str, str], etree._Element] | None = None,
+) -> None:
     for schema in root.iter(f"{{{XSD_NS}}}schema"):
         tns = schema.get("targetNamespace", "")
         # global elements: substitution-group membership + abstract flags
@@ -302,7 +338,8 @@ def _scan_schema_root(root: etree._Element, meta: XsdMeta) -> None:
         # named simple types: facets + docs
         for st in schema.findall(f"{{{XSD_NS}}}simpleType[@name]"):
             key = (tns, st.get("name"))
-            facets = _facets_from_restriction(st)
+            meta.named_types.add(key)
+            facets = _facets_from_restriction(st, simple_types)
             doc = _doc_text(st)
             if doc:
                 meta.type_docs.setdefault(key, doc)
@@ -312,6 +349,7 @@ def _scan_schema_root(root: etree._Element, meta: XsdMeta) -> None:
         for container_tag in ("complexType", "element"):
             for node in schema.findall(f"{{{XSD_NS}}}{container_tag}[@name]"):
                 cname = node.get("name")
+                meta.named_types.add((tns, cname))
                 doc = _doc_text(node)
                 if doc:
                     meta.type_docs.setdefault((tns, cname), doc)
@@ -342,6 +380,7 @@ def _collect_xsd_meta(client: Client, source: str,
     if source not in locations:
         locations.append(source)
     parser = _safe_xml_parser(huge_tree)
+    roots: list[etree._Element] = []
     for loc in locations:
         # the source itself was chosen by the caller; imported locations
         # are attacker-controllable and honor forbid_external
@@ -349,10 +388,12 @@ def _collect_xsd_meta(client: Client, source: str,
         if not raw:
             continue
         try:
-            root = etree.fromstring(raw, parser=parser)
+            roots.append(etree.fromstring(raw, parser=parser))
         except Exception:
             continue
-        _scan_schema_root(root, meta)
+    simple_types = _simple_type_index(roots)
+    for root in roots:
+        _scan_schema_root(root, meta, simple_types)
     # transitive closure: a member of a member substitutes the outer head
     changed = True
     while changed:

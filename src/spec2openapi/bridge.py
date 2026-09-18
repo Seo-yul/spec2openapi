@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+from decimal import Decimal
 from typing import Any
 
 import httpx2
@@ -167,6 +168,20 @@ def _client_kwargs(options: BridgeOptions) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+def _nullable_inner(schema: dict[str, Any]) -> tuple[str, dict] | None:
+    """(keyword, inner schema) when `schema` is anyOf/oneOf of exactly one
+    schema and {type: null} - the 3.1 form of a nullable wrapper."""
+    for key in ("anyOf", "oneOf"):
+        alts = schema.get(key)
+        if not isinstance(alts, list) or len(alts) != 2:
+            continue
+        rest = [a for a in alts
+                if not (isinstance(a, dict) and a.get("type") == "null")]
+        if len(rest) == 1 and isinstance(rest[0], dict):
+            return key, rest[0]
+    return None
+
+
 class _SpecIndex:
     def __init__(self, spec: dict[str, Any]):
         self.spec = spec
@@ -196,7 +211,9 @@ class _SpecIndex:
             self.ops[path] = {"x-soap": xsoap, "input": req, "output": out}
 
     def deref(self, schema: dict[str, Any] | None) -> dict[str, Any]:
-        """Resolve $ref / single-allOf wrappers, keeping xml annotations."""
+        """Resolve $ref / single-allOf wrappers and the 3.1 nullable
+        wrapper (anyOf/oneOf of a schema and {type: null}), keeping xml
+        annotations."""
         if not schema:
             return {}
         seen = 0
@@ -219,6 +236,17 @@ class _SpecIndex:
                     if k != "allOf":
                         merged.setdefault(k, v)
                 schema = merged
+            elif (nullable := _nullable_inner(schema)) is not None:
+                # to_openapi_31 turns a nullable allOf/$ref wrapper into
+                # anyOf: [wrapper, {type: null}]; the xml annotation then
+                # lives on the wrapper, not on the property itself
+                key, inner = nullable
+                merged = dict(inner)
+                for k, v in schema.items():
+                    if k != key:
+                        merged.setdefault(k, v)
+                xml = xml or inner.get("xml")
+                schema = merged
             else:
                 break
             seen += 1
@@ -236,6 +264,15 @@ class _SpecIndex:
 def _to_text(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NaN"
+        if math.isinf(value):
+            return "INF" if value > 0 else "-INF"
+        # str() switches to exponent notation (1e-05, 1e+16), which the
+        # xsd:decimal lexical space does not allow; positional text is
+        # valid for decimal, float and double alike
+        return format(Decimal(repr(value)), "f")
     return str(value)
 
 

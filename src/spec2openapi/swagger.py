@@ -112,6 +112,16 @@ def _as_bool(v: Any) -> bool:
     return bool(v)
 
 
+def _media_list(value: Any) -> list[str]:
+    """A consumes/produces value as a list of media types (a bare string is
+    a spec violation seen in the wild)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(t) for t in value] if isinstance(value, list) else []
+
+
 def _merge_params(shared: list, op_level: list) -> list:
     """Combine path-item and operation parameters. Per the spec, an
     operation parameter overrides a path-item one with the same
@@ -249,10 +259,7 @@ class _Upgrader:
             if k in _SCHEMA_MAP_KEYS and isinstance(v, dict):
                 # name -> schema-ish-object map: the map's own keys are
                 # opaque identifiers; each value is schema content
-                out[k] = {
-                    name: self._strip_nulls(entry, True, depth + 1)
-                    for name, entry in v.items()
-                }
+                out[k] = self._strip_null_entries(v, depth)
                 continue
             if k == "parameters" and isinstance(v, list):
                 # operation/path-item Parameter Object list (schema-ish
@@ -260,14 +267,32 @@ class _Upgrader:
                 # parameters map above)
                 out[k] = [self._strip_nulls(p, True, depth + 1) for p in v]
                 continue
+            if in_schema and k == "properties" and isinstance(v, dict):
+                # property names are opaque identifiers: a property named
+                # "default" or "enum" is a schema, not a data keyword
+                out[k] = self._strip_null_entries(v, depth)
+                continue
             if in_schema and k in _DATA_KEYWORDS:
                 out[k] = v  # null may be meaningful data here
+                continue
+            if not in_schema and k == "examples" and isinstance(v, dict):
+                out[k] = v  # Response Object examples: media type -> data
                 continue
             if v is None:
                 self._nulls_stripped += 1
                 continue
             nxt_schema = in_schema or k == "schema"
             out[k] = self._strip_nulls(v, nxt_schema, depth + 1)
+        return out
+
+    def _strip_null_entries(self, mapping: dict, depth: int) -> dict:
+        """A name -> schema map: a null entry is no schema at all."""
+        out: dict[str, Any] = {}
+        for name, entry in mapping.items():
+            if entry is None:
+                self._nulls_stripped += 1
+                continue
+            out[name] = self._strip_nulls(entry, True, depth + 1)
         return out
 
     @staticmethod
@@ -736,7 +761,7 @@ class _Upgrader:
         rb: dict[str, Any] = {}
         if p.get("description"):
             rb["description"] = p["description"]
-        if p.get("required"):
+        if _as_bool(p.get("required")):
             rb["required"] = True
         if p.get("name"):
             rb["x-original-body-name"] = p["name"]
@@ -747,12 +772,63 @@ class _Upgrader:
         }
         return rb
 
+    def _ref_request_body(self, raw_ref: str, ref: str, op: dict,
+                          ctx: str) -> dict:
+        """A $ref to a global body parameter's requestBody - inlined when the
+        operation declares consumes of its own, since the shared component
+        carries the global consumes."""
+        op_types = op.get("consumes")
+        if op_types is None:
+            return {"$ref": ref}
+        gname = self._source_name(self._param_key, raw_ref.rsplit("/", 1)[-1])
+        gparam = (self.src.get("parameters") or {}).get(gname)
+        if not isinstance(gparam, dict):
+            return {"$ref": ref}
+        default = ["application/json"]
+        if (_media_list(op_types) or default) == (
+                _media_list(self.src.get("consumes")) or default):
+            return {"$ref": ref}
+        self.assumptions.append(
+            f"{ctx}: requestBody $ref to global body parameter '{gname}' "
+            "inlined: the operation's consumes differ from the global "
+            "consumes"
+        )
+        return self._body_to_request_body(gparam, op, ctx)
+
+    def _ref_response(self, raw_ref: str, op: dict, ctx: str,
+                      code: Any) -> dict | None:
+        """A global response inlined with the operation's own produces, or
+        None to keep the $ref: the shared component carries the global
+        produces, which only matters when the response has a schema."""
+        op_types = op.get("produces")
+        if op_types is None or not raw_ref.startswith("#/responses/"):
+            return None
+        found, target = self._resolve_pointer(raw_ref)
+        if (not found or not isinstance(target, dict) or "$ref" in target
+                or "schema" not in target):
+            return None
+        default = ["application/json"]
+        if (_media_list(op_types) or default) == (
+                _media_list(self.src.get("produces")) or default):
+            return None
+        name = raw_ref.rsplit("/", 1)[-1]
+        self.assumptions.append(
+            f"{ctx}: response $ref to global response '{name}' inlined: "
+            "the operation's produces differ from the global produces"
+        )
+        return self._convert_response(target, op, ctx, code)
+
     def _form_to_request_body(self, params: list[dict], op: dict,
                               ctx: str) -> dict:
         has_file = any(p.get("type") == "file" for p in params)
-        media = "multipart/form-data" if has_file else (
-            "application/x-www-form-urlencoded"
-        )
+        op_types = op.get("consumes")
+        declared = {t.split(";")[0].strip().lower() for t in _media_list(
+            op_types if op_types is not None else self.src.get("consumes"))}
+        multipart = has_file or (
+            "multipart/form-data" in declared
+            and "application/x-www-form-urlencoded" not in declared)
+        media = ("multipart/form-data" if multipart
+                 else "application/x-www-form-urlencoded")
         props: dict[str, Any] = {}
         required: list[str] = []
         for p in params:
@@ -767,7 +843,7 @@ class _Upgrader:
             if p.get("description"):
                 schema["description"] = p["description"]
             props[name] = schema or {"type": "string"}
-            if p.get("required"):
+            if _as_bool(p.get("required")):
                 required.append(name)
             if p.get("collectionFormat"):
                 self.lossy.append(
@@ -822,7 +898,7 @@ class _Upgrader:
             if "$ref" in p:
                 ref = self._fix_ref(p["$ref"])
                 if "/requestBodies/" in ref:
-                    body = {"$ref": ref}
+                    body = self._ref_request_body(p["$ref"], ref, op, ctx)
                     continue
                 # a $ref to a global formData parameter must be inlined:
                 # formData fields are fragments of the form requestBody and
@@ -911,7 +987,15 @@ class _Upgrader:
 
     def _convert_response(self, resp: dict, op: dict, ctx: str,
                           code: Any = None) -> dict:
+        if not isinstance(resp, dict):
+            raise ConversionError(
+                f"{ctx}: response {code} must be a mapping, got "
+                f"{type(resp).__name__}"
+            )
         if "$ref" in resp:
+            inlined = self._ref_response(resp["$ref"], op, ctx, code)
+            if inlined is not None:
+                return inlined
             return {"$ref": self._fix_ref(resp["$ref"])}
         description = resp.get("description")
         if not description:  # required on the OA3 Response Object
@@ -936,6 +1020,11 @@ class _Upgrader:
                 content[mt] = entry
             out["content"] = content
         if "headers" in resp:
+            if not isinstance(resp["headers"], dict):
+                raise ConversionError(
+                    f"{ctx}: response {code} headers must be a mapping, got "
+                    f"{type(resp['headers']).__name__}"
+                )
             headers = {}
             for hname, h in resp["headers"].items():
                 if not isinstance(h, dict):
@@ -1223,6 +1312,18 @@ class _Upgrader:
                         new_op[k] = v
 
                 op_id = op.get("operationId")
+                if isinstance(op_id, (int, float)) and not isinstance(
+                        op_id, bool):
+                    self.assumptions.append(
+                        f"{ctx}: operationId {op_id!r} is not a string; "
+                        f"used '{op_id}'"
+                    )
+                    op_id = str(op_id)
+                elif op_id is not None and not isinstance(op_id, str):
+                    raise ConversionError(
+                        f"{ctx}: operationId must be a string, got "
+                        f"{type(op_id).__name__}"
+                    )
                 if not op_id:
                     op_id = self._gen_operation_id(method, path)
                     self.assumptions.append(
@@ -1257,12 +1358,16 @@ class _Upgrader:
                 if request_body is not None:
                     new_op["requestBody"] = request_body
 
+                # x-* keys on a Responses Object are extensions, not codes
                 responses = {
-                    str(code): self._convert_response(resp, op, ctx, code)
+                    str(code): (resp if str(code).startswith("x-")
+                                else self._convert_response(resp, op, ctx,
+                                                            code))
                     for code, resp in (op.get("responses") or {}).items()
                 }
-                if not responses:  # Responses Object requires >= 1 response
-                    responses = {"200": {"description": "OK"}}
+                # Responses Object requires >= 1 response (x-* don't count)
+                if not any(not k.startswith("x-") for k in responses):
+                    responses = {"200": {"description": "OK"}, **responses}
                     self.assumptions.append(
                         f"{ctx}: no responses declared; added a generic "
                         "'200 OK' (required in OpenAPI 3)"

@@ -65,7 +65,7 @@ paths:
                   type: number
                   minimum: 0.0
                   maximum: 100.0
-                  multipleOf: 0.01
+                  x-fractionDigits: 2
                   description: A percentage between 0 and 100.
                   x-soap-simple-type: Percent
                   xml:
@@ -124,7 +124,7 @@ paths:
                     type: number
                     minimum: 0.0
                     maximum: 100.0
-                    multipleOf: 0.01
+                    x-fractionDigits: 2
                     description: A percentage between 0 and 100.
                     x-soap-simple-type: Percent
                     xml:
@@ -162,7 +162,7 @@ components:
           description: Internal party identifier.
         country:
           type: string
-          pattern: '[A-Z]{2}'
+          pattern: ^(?:[A-Z]{2})$
           minLength: 2
           maxLength: 2
           description: ISO 3166-1 alpha-2 country code.
@@ -231,5 +231,5 @@ components:
       - message
 x-soap:
   wsdl: tests/fixtures/advanced.wsdl
-  generator: spec2openapi/0.5.0
+  generator: spec2openapi/0.8.0
   skippedOperations: []

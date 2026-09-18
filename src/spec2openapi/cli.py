@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import zipfile
 from pathlib import Path
 
 from . import __version__
@@ -19,7 +20,9 @@ from .errors import MCP_HINT
 _MCP_HINT = f"install the MCP runtime extras first: {MCP_HINT}"
 
 
-def _is_wsdl_source(src: str) -> bool:
+def _is_wsdl_source(src: str) -> bool | None:
+    """True/False when the name or the local file decides; None for an
+    http(s) URL without a spec or WSDL marker - its content decides."""
     low = src.lower()
     if low.endswith((".yaml", ".yml", ".json")):
         return False
@@ -29,22 +32,36 @@ def _is_wsdl_source(src: str) -> bool:
         return True
     p = Path(src)
     if p.exists():
+        if zipfile.is_zipfile(p):  # a WSDL bundle; convert_wsdl reads zips
+            return True
         head = p.read_text(encoding="utf-8-sig", errors="replace")[:512].lstrip()
         return head.startswith("<")
-    # a remote URL without a spec extension: zeep can fetch WSDLs, and
-    # load_spec cannot read a URL, so treat it as WSDL
     if low.startswith(("http://", "https://")):
-        return True
+        return None
     return False
 
 
+def _looks_like_xml(data: bytes) -> bool:
+    return data[:512].decode("utf-8-sig", errors="replace").lstrip().startswith("<")
+
+
 def _load_or_convert(source: str) -> dict:
-    from .convert import convert_wsdl, load_spec
+    from .convert import _fetch_url, _parse_spec, convert_wsdl, load_spec
     from .swagger import convert_swagger, is_swagger2
 
-    if _is_wsdl_source(source):
+    wsdl = _is_wsdl_source(source)
+    if wsdl is None:
+        # a remote URL without a marker (e.g. /v3/api-docs): WSDL is XML,
+        # OpenAPI/Swagger is JSON or YAML
+        data = _fetch_url(source)
+        if _looks_like_xml(data):
+            # zeep fetches it again so imports resolve against the URL
+            return convert_wsdl(source)
+        spec = _parse_spec(data, source, is_json=False)
+    elif wsdl:
         return convert_wsdl(source)
-    spec = load_spec(source)
+    else:
+        spec = load_spec(source)
     if is_swagger2(spec):
         print("note: Swagger 2.0 input detected; upgrading to OpenAPI 3.0 "
               "in memory (see `spec2openapi upgrade`)", file=sys.stderr)

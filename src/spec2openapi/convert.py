@@ -68,29 +68,37 @@ def convert_wsdl(
     )
 
 
+def _fetch_url(src: str) -> bytes:
+    """GET an http(s) URL; failures are ConversionError."""
+    from urllib.error import URLError
+    from urllib.request import Request, urlopen
+
+    from . import __version__
+
+    req = Request(src, headers={"User-Agent": f"spec2openapi/{__version__}"})
+    try:
+        with urlopen(req, timeout=30) as resp:  # noqa: S310 (user-supplied URL)
+            return resp.read()
+    except (URLError, OSError) as exc:
+        raise ConversionError(f"{src}: could not fetch — {exc}") from exc
+
+
 def load_spec(path: str | Path) -> dict[str, Any]:
     """Load an OpenAPI/Swagger spec from a .yaml/.yml/.json file or an
     http(s) URL (parity with ``convert``, which accepts WSDL URLs)."""
-    import yaml
-
     src = str(path)
     if src.startswith(("http://", "https://")):
-        from urllib.error import URLError
-        from urllib.request import Request, urlopen
+        return _parse_spec(_fetch_url(src), src,
+                           is_json=src.lower().endswith(".json"))
+    p = Path(path)
+    return _parse_spec(p.read_bytes(), str(p),
+                       is_json=p.suffix.lower() == ".json")
 
-        from . import __version__
 
-        req = Request(src, headers={"User-Agent": f"spec2openapi/{__version__}"})
-        try:
-            with urlopen(req, timeout=30) as resp:  # noqa: S310 (user-supplied URL)
-                data = resp.read()
-        except (URLError, OSError) as exc:
-            raise ConversionError(f"{src}: could not fetch — {exc}") from exc
-        label, is_json = src, src.lower().endswith(".json")
-    else:
-        p = Path(path)
-        data = p.read_bytes()
-        label, is_json = str(p), p.suffix.lower() == ".json"
+def _parse_spec(data: bytes, label: str, *, is_json: bool) -> dict[str, Any]:
+    """Decode and parse a JSON/YAML spec document."""
+    import yaml
+
     # decode loudly: replacing invalid bytes would silently corrupt text
     try:
         text = data.decode("utf-8-sig")
@@ -99,8 +107,15 @@ def load_spec(path: str | Path) -> dict[str, Any]:
     # parse errors are prefixed with the source so the location is
     # traceable (json/yaml already report the line and column)
     try:
-        if is_json or text.lstrip().startswith("{"):
+        if is_json:
             spec = json.loads(text)
+        elif text.lstrip().startswith("{"):
+            try:
+                spec = json.loads(text)
+            except json.JSONDecodeError:
+                # flow-style YAML ({key: value}) is not JSON; YAML is a
+                # superset of JSON, so it reads both
+                spec = yaml.safe_load(text)
         else:
             spec = yaml.safe_load(text)
     except json.JSONDecodeError as exc:
