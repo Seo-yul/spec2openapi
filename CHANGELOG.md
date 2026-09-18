@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-18
+
 ### Added
 - `spec2openapi agentize` — an optional command that uses an LLM to write
   the descriptions a source spec leaves empty: schema properties, operation
@@ -31,10 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   The output language is decided before the first call — detected from the
   prose already in the spec — and printed with the preflight line;
-  `--language` overrides it. Asking the model to match the document's
-  language instead produced a different answer per run, and a spec that
-  came back in the wrong language read as correct to `verify()` and to a
-  reviewer skimming the diff.
+  `--language` overrides it.
 
   Requires an optional extra: `pip install 'spec2openapi[llm-anthropic]'`
   or `[llm-openai]`. `import spec2openapi` pulls in neither SDK, and the
@@ -564,7 +563,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.3.0...v0.4.0
