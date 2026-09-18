@@ -583,3 +583,82 @@ def test_an_anonymous_simple_type_on_an_attribute_keeps_its_facets():
 </xsd:schema>"""
     code = _req_props(convert_wsdl(content=_wsdl(types)))["code"]
     assert code["maxLength"] == 4 and "enum" not in code
+
+
+# --- #161 review: an anonymous type's facets follow its restriction chain -----
+
+def _one_prop(element_xml: str, extra: str = "") -> dict:
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  {extra}
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    {element_xml}
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    props = _req_props(convert_wsdl(content=_wsdl(types)))
+    assert len(props) == 1
+    return next(iter(props.values()))
+
+
+def test_a_baseless_restriction_takes_its_inner_types_kind():
+    n = _one_prop("""<xsd:element name="n"><xsd:simpleType><xsd:restriction>
+      <xsd:simpleType><xsd:restriction base="xsd:int"/></xsd:simpleType>
+      <xsd:enumeration value="1"/><xsd:enumeration value="2"/>
+    </xsd:restriction></xsd:simpleType></xsd:element>""")
+    assert n["type"] == "integer" and n["enum"] == [1, 2] and n["example"] == 1
+
+
+def test_a_chameleon_included_base_is_followed():
+    spec = convert_wsdl(str(FIXTURES / "chameleon" / "service.wsdl"))
+    n = _req_props(spec)["n"]
+    assert n["type"] == "integer" and n["enum"] == [1, 2]
+
+
+@pytest.mark.parametrize("base", ["inner", "named"])
+def test_list_length_facets_are_not_string_lengths(base):
+    if base == "inner":
+        element = """<xsd:element name="ids"><xsd:simpleType><xsd:restriction>
+      <xsd:simpleType><xsd:list itemType="xsd:int"/></xsd:simpleType>
+      <xsd:maxLength value="3"/></xsd:restriction></xsd:simpleType></xsd:element>"""
+        extra = ""
+    else:
+        element = """<xsd:element name="ids"><xsd:simpleType>
+      <xsd:restriction base="tns:IdList"><xsd:maxLength value="3"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>"""
+        extra = ('<xsd:simpleType name="IdList"><xsd:list itemType="xsd:int"/>'
+                 "</xsd:simpleType>")
+    ids = _one_prop(element, extra)
+    assert "maxLength" not in ids and "minLength" not in ids
+
+
+def test_a_restriction_of_a_named_type_inherits_its_facets():
+    cur = _one_prop(
+        """<xsd:element name="cur"><xsd:simpleType>
+      <xsd:restriction base="tns:cur"><xsd:pattern value="[A-Z]+"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""",
+        """<xsd:simpleType name="cur"><xsd:restriction base="xsd:string">
+      <xsd:enumeration value="USD"/><xsd:enumeration value="EUR"/>
+      </xsd:restriction></xsd:simpleType>""")
+    assert cur["enum"] == ["USD", "EUR"]
+    assert cur["pattern"] == "^(?:[A-Z]+)$"
+
+
+def test_a_nested_restriction_keeps_the_inner_facets():
+    v = _one_prop("""<xsd:element name="v"><xsd:simpleType><xsd:restriction>
+      <xsd:simpleType><xsd:restriction base="xsd:string">
+        <xsd:maxLength value="5"/></xsd:restriction></xsd:simpleType>
+      <xsd:pattern value="[a-z]+"/></xsd:restriction></xsd:simpleType>
+      </xsd:element>""")
+    assert v["maxLength"] == 5 and v["pattern"] == "^(?:[a-z]+)$"
+
+
+@pytest.mark.parametrize("element_doc, expected", [
+    ("element doc", "element doc"), (None, "type doc")])
+def test_an_elements_own_documentation_wins_over_its_types(element_doc,
+                                                            expected):
+    ann = (f"<xsd:annotation><xsd:documentation>{element_doc}"
+           "</xsd:documentation></xsd:annotation>" if element_doc else "")
+    d = _one_prop(f"""<xsd:element name="d">{ann}<xsd:simpleType>
+      <xsd:annotation><xsd:documentation>type doc</xsd:documentation>
+      </xsd:annotation><xsd:restriction base="xsd:string"/>
+      </xsd:simpleType></xsd:element>""")
+    assert d["description"] == expected

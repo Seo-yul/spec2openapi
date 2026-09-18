@@ -234,11 +234,78 @@ def _facets_from_restriction(
         simple_types: dict[tuple[str, str], etree._Element] | None = None,
 ) -> dict[str, Any]:
     """xsd:simpleType node -> JSON Schema facet fragment (3.0 flavored)."""
-    out: dict[str, Any] = {}
     restriction = st.find(f"{{{XSD_NS}}}restriction")
     if restriction is None:
-        return out
-    kind = _restriction_number_kind(restriction, simple_types)
+        return {}
+    return _own_facets(restriction,
+                       _restriction_number_kind(restriction, simple_types))
+
+
+def _named_simple_type(
+        simple_types: dict[tuple[str, str], etree._Element],
+        qname: tuple[str, str]) -> etree._Element | None:
+    """A named simpleType by qname; a chameleon-included (no-namespace)
+    declaration is indexed under "" but referenced in the includer's
+    namespace."""
+    # explicit None tests: an lxml element with no children is falsy
+    found = simple_types.get(qname)
+    return found if found is not None else simple_types.get(("", qname[1]))
+
+
+def _simple_type_facets(
+        st: etree._Element,
+        simple_types: dict[tuple[str, str], etree._Element],
+        fallback_kind: str = "string",
+        _depth: int = 0) -> tuple[dict[str, Any], str]:
+    """(facets, kind) of a <simpleType>, following its restriction chain:
+    the base's facets first, then its own, which narrow them (an XSD
+    restriction inherits its base's facets). The base is the `base`
+    attribute or an inner <simpleType>. kind is "integer" / "number" /
+    "string" from the XSD builtin, or "list" - list length facets count
+    items, not characters, so they are dropped from the string schema. A
+    base outside the scanned documents (xsd:include merges them into the
+    includer, so zeep lists no location for them) takes `fallback_kind`,
+    the kind zeep resolved, so enum values agree with the schema type."""
+    if _depth > 16:  # cycle / runaway guard
+        return {}, "string"
+    restriction = st.find(f"{{{XSD_NS}}}restriction")
+    if restriction is None:
+        kind = "list" if st.find(f"{{{XSD_NS}}}list") is not None else "string"
+        return {}, kind
+    base_facets: dict[str, Any] = {}
+    kind = "string"
+    base = restriction.get("base")
+    if base:
+        resolved = _resolve_qname_ref(base, restriction)
+        if resolved is not None and resolved[0] == XSD_NS:
+            kind = ("integer" if resolved[1] in _XSD_INTEGER_BASES
+                    else "number" if resolved[1] in _XSD_NUMBER_BASES
+                    else "string")
+        elif resolved is not None:
+            base_st = _named_simple_type(simple_types, resolved)
+            if base_st is not None:
+                base_facets, kind = _simple_type_facets(
+                    base_st, simple_types, fallback_kind, _depth + 1)
+            else:
+                kind = fallback_kind
+    else:
+        inner = restriction.find(f"{{{XSD_NS}}}simpleType")
+        if inner is not None:
+            base_facets, kind = _simple_type_facets(
+                inner, simple_types, fallback_kind, _depth + 1)
+        else:
+            kind = fallback_kind
+    facets = {**base_facets,
+              **_own_facets(restriction, "string" if kind == "list" else kind)}
+    if kind == "list":
+        for key in ("minLength", "maxLength"):
+            facets.pop(key, None)
+    return facets, kind
+
+
+def _own_facets(restriction: etree._Element, kind: str) -> dict[str, Any]:
+    """The facets a <restriction> declares itself, coerced to `kind`."""
+    out: dict[str, Any] = {}
     enums = [
         _coerce_enum_value(e.get("value"), kind)
         for e in restriction.findall(f"{{{XSD_NS}}}enumeration")

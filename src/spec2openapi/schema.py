@@ -19,7 +19,7 @@ from zeep import xsd as zx
 
 from .errors import ConversionError
 from .openapi import sanitize_name  # noqa: F401  (canonical home; re-export)
-from .parser import XsdMeta, _doc_text, _facets_from_restriction
+from .parser import XsdMeta, _doc_text, _simple_type_facets
 
 logger = logging.getLogger("spec2openapi")
 
@@ -577,7 +577,9 @@ class SchemaConverter:
                 out["description"] = doc
             return out
         base["xml"] = xml_meta
-        if doc and "description" not in base:
+        # the element's own documentation outranks its anonymous type's
+        anonymous = getattr(el_type, "_s2o_simple_node", None) is not None
+        if doc and ("description" not in base or anonymous):
             base["description"] = doc
         return base
 
@@ -610,9 +612,13 @@ class SchemaConverter:
         if node is not None:
             # an anonymous simpleType: zeep named it after its element, so
             # the name lookup would find a same-named named type (#161) -
-            # its facets and docs come from its own declaration
-            for k, v in _facets_from_restriction(
-                    node, self.meta.simple_types).items():
+            # its facets and docs come from its own declaration, following
+            # its restriction chain
+            zeep_kind = schema.get("type")
+            facets, _kind = _simple_type_facets(
+                node, self.meta.simple_types,
+                zeep_kind if zeep_kind in ("integer", "number") else "string")
+            for k, v in facets.items():
                 schema.setdefault(k, v)
             doc = _doc_text(node)
             if doc:
