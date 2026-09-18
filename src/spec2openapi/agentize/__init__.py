@@ -144,6 +144,16 @@ def _queried_operations(targets: Iterable[Target]) -> set[str]:
             | set(_param_pointers(targets)))
 
 
+def _queried_pointers(targets: Iterable[Target]) -> set[str]:
+    """이번 실행이 모델에게 실제로 묻는 대상 포인터. pass 2a 는 속성
+    대상을, pass 2b 는 desc 대상을 모두 묻지만, 한 operation 안에서 이름이
+    겹치는 파라미터는 묻지 않는다(_param_pointers) - 그 자리는 채워지지
+    않는다."""
+    params = {ptr for by_name in _param_pointers(targets).values()
+              for ptr in by_name.values()}
+    return {t.pointer for t in targets if t.kind != "params"} | params
+
+
 def _preflight_problems(working: dict, targets: list[Target], *,
                         rename_tools: bool = False) -> str:
     """LLM 을 부르기 전에 이미 확정된 verify 실패. 없으면 빈 문자열.
@@ -151,8 +161,9 @@ def _preflight_problems(working: dict, targets: list[Target], *,
     가장 잘 풀린 실행의 결과를 흉내 낸 사본을 검사한다 - 그래도 실패하면
     어떤 응답으로도 고칠 수 없는 입력이다.
 
-    - 이번 실행이 채울 대상 자리에는 임시 문자열을 넣는다. 값이 비어
-      있는(null) description 처럼 그 자리 자체가 실패 원인일 수 있다.
+    - 이번 실행이 모델에게 묻는 대상 자리(_queried_pointers)에는 임시
+      문자열을 넣는다. 값이 비어 있는(null) description 처럼 그 자리 자체가
+      실패 원인일 수 있다.
     - --rename-tools 면 질의하는 operation 중 operationId 가 없거나 이름
       규칙을 어기는 것에 서로 겹치지 않는 임시 operationId 를 넣는다. 개명
       지시가 새 이름을 내라고 하는 경우다. 읽을 만한 이름은 유지하라는
@@ -163,8 +174,8 @@ def _preflight_problems(working: dict, targets: list[Target], *,
     함께 깨는 다른 검사(openapi.schema-valid 등)를 놓친다.
     """
     spec = copy.deepcopy(working)
-    for t in targets:
-        parent, key = _resolve_parent(spec, t.pointer)
+    for pointer in _queried_pointers(targets):
+        parent, key = _resolve_parent(spec, pointer)
         if isinstance(parent, dict):
             parent[key] = "s2o preflight placeholder"
     if rename_tools:

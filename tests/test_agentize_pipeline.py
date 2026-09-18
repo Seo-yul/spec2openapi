@@ -921,3 +921,21 @@ def test_a_null_field_the_run_will_not_fill_still_fails_the_preflight():
     with pytest.raises(AgentizeError, match="verify"):
         agentize_spec(_null_description_spec(), provider, kinds=("desc",))
     assert provider.calls == []
+
+
+def test_a_null_field_on_a_parameter_the_run_will_not_ask_fails_the_preflight():
+    """pass 2b 는 한 operation 안에서 이름이 겹치는 파라미터(path 의 id 와
+    header 의 id)를 묻지 않는다 - 그 null 은 채워지지 않는다."""
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/x/{id}": {"get": {
+                "operationId": "getX",
+                "parameters": [
+                    {"name": "id", "in": "path", "required": True,
+                     "description": None, "schema": {"type": "string"}},
+                    {"name": "id", "in": "header",
+                     "description": None, "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "ok"}}}}}}
+    provider = _op_provider("Reads one record by key.")
+    with pytest.raises(AgentizeError, match="LLM을 호출하기 전에"):
+        agentize_spec(spec, provider)
+    assert provider.calls == []
