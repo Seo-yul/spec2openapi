@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from ..checks import _component_schemas
-from ..minify import _split_folds
+from ..minify import _fold_key, _split_folds
 from ..openapi import _operations
 
 #: 이보다 짧은 설명은 정보량이 없다고 본다.
@@ -133,7 +133,8 @@ def find_targets(spec: dict, *, kinds: Iterable[str] = KINDS,
         # folded 기록이 있을 때만 벗긴다 - 사용자가 직접 쓴 marker 모양
         # 줄을 우리 것으로 오인하지 않기 위해서다(_split_folds 주석 참조).
         desc, summary = op.get("description"), op.get("summary")
-        if desc and _folded_ops and op.get("operationId") in _folded_ops:
+        if (desc and _folded_ops
+                and _fold_key(path, method, op) in _folded_ops):
             desc = _split_folds(desc)[0].strip() or None
         effective = desc if desc else summary
         add(f"{base}/description", "desc", op.get("operationId") or "",

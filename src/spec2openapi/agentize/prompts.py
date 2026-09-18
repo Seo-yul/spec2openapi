@@ -243,8 +243,9 @@ operationId 도 함께 제안한다. operationId 는 그대로 MCP tool 이름�
   Op_Sale_Insert     ->  create_sale     레거시 SOAP 이름
   addPet             ->  addPet          이미 읽을 만하면 그대로 둔다
 
-규칙: 소문자 snake_case, [A-Za-z0-9_.-] 만, 64자 이내. 이미 충분히
-읽을 만한 이름은 바꾸지 않는다 - 개명은 기존 클라이언트를 깨뜨린다.
+규칙: 소문자 snake_case, [A-Za-z0-9_] 만, 56자 이내, 밑줄을 연달아 쓰거나
+앞뒤에 쓰지 않는다. 이미 충분히 읽을 만한 이름은 바꾸지 않는다 - 개명은
+기존 클라이언트를 깨뜨린다.
 """
 
 

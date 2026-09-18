@@ -36,8 +36,8 @@ The fixed-runtime deployment model — build one image, swap the spec via a Kube
 - **`x-soap` contract** — SOAPAction, SOAP version, endpoint, wrapper element QNames, `soap:header` parts and declared faults are embedded as vendor extensions; OpenAPI `xml` annotations carry everything a call layer needs to serialize JSON ↔ literal XML.
 - **Swagger 2.0 → OpenAPI 3.x upgrade** — full mechanical mapping (servers, requestBody, formData/multipart, parameter schema wrapping, `collectionFormat` → `style`/`explode`, `$ref` rewriting, security schemes, `type: file`, `x-nullable`, discriminator), hardened against real-world documents: deep local `$ref`s are hoisted to components, dangling refs and duplicate parameters are neutralized, type-mismatched defaults are coerced, and common vendor extensions (`x-example`, `x-oneOf`, `x-anyOf`) are promoted to native keywords. Every assumption made for missing information is recorded in `x-s2o.assumptions`; untranslatable constructs are preserved as `x-` extensions and listed in `x-s2o.lossy`.
 - **Real OpenAPI 3.1 output** — `--openapi-version 3.1` is a semantic conversion to JSON Schema 2020-12 style (`nullable` → `type` arrays, boolean `exclusiveMinimum`/`exclusiveMaximum` → numeric bounds), not a version-string bump.
-- **FastMCP compatibility, guaranteed and verifiable** — operationIds are generated in FastMCP's tool-name alphabet (`[A-Za-z0-9_]`, unique, ≤64 chars) so *tool name == operationId*. `spec2openapi validate` proves it: static checks, `openapi-spec-validator`, and a real `FastMCP.from_openapi()` round-trip listing the resulting tools.
-- **Structured verification (`verify`)** — a library API that runs 21 checks over a converted document (Swagger- and WSDL-converted alike): document shape, MCP tool-name rules (SEP-986), tool descriptions, the full `x-soap` contract, and — with the optional deps installed — `openapi-spec-validator` plus the FastMCP in-memory round-trip. Returns a deterministic, JSON-serializable report in which every check carries normative citations and "could not check" (`skip`) is always distinguishable from "checked and passed". `verify` never raises; `spec2openapi validate --format json` exposes the same report on the CLI.
+- **FastMCP compatibility, guaranteed and verifiable** — operationIds are generated as names FastMCP 4 exposes unchanged (`[A-Za-z0-9_]`, unique, ≤56 chars, no double or edge underscores) so *tool name == operationId*. `spec2openapi validate` proves it: static checks, `openapi-spec-validator`, and a real `FastMCP.from_openapi()` round-trip that checks every tool is exposed under its operationId.
+- **Structured verification (`verify`)** — a library API that runs 22 checks over a converted document (Swagger- and WSDL-converted alike): document shape, MCP tool-name rules (SEP-986), tool descriptions, the full `x-soap` contract, and — with the optional deps installed — `openapi-spec-validator` plus the FastMCP in-memory round-trip. Returns a deterministic, JSON-serializable report in which every check carries normative citations and "could not check" (`skip`) is always distinguishable from "checked and passed". `verify` never raises; `spec2openapi validate --format json` exposes the same report on the CLI.
 - **MCP tool-payload minification (optional)** — `minify_for_mcp()` shrinks and enriches what FastMCP actually sends the model: foreign vendor extensions are stripped from schema subtrees, and error responses / payload examples — which the MCP tool shape otherwise drops — can be folded into tool descriptions deterministically. Serving behavior is unchanged. See [Minifying the LLM-facing surface](#minifying-the-llm-facing-surface-optional).
 - **LLM-filled descriptions (optional)** — `spec2openapi agentize` writes the descriptions a source spec leaves empty: schema properties, operation summaries, parameter docs; optionally readable tool names (`--rename-tools`). The model returns strings only, into a fixed JSON Pointer whitelist; every suggestion carries a grounding grade and ungrounded ones are dropped; the result must pass `verify()` or nothing is written. See [Filling the gaps with an LLM](#filling-the-gaps-with-an-llm-optional).
 - **SOAP bridge — required to *serve* SOAP specs** — `pip install "spec2openapi[mcp]"` adds the bridge (custom httpx2 transport) that implements the `x-soap` contract, plus FastMCP glue, a fixed Dockerfile, and Kubernetes examples. SOAP faults map to MCP tool errors. **Swagger-converted (pure REST) specs do not need this** — any OpenAPI runtime serves them. Only SOAP-converted specs require the bridge at runtime.
@@ -273,6 +273,15 @@ What a run guarantees:
   / `inferred` / `speculative`); ungrounded guesses are dropped unless
   `--allow-speculative` is given.
 - A run that writes anything must pass `verify()`, or nothing is written.
+  An input that fails `verify()` in a way the run cannot fix is rejected
+  before the first model call, and `--dry-run` says so. Fields the run
+  fills — and, with `--rename-tools`, a missing or rule-breaking
+  `operationId` on an operation it queries — are left for it to fix.
+- An `array` / `object` field only gets an example that parses as finite
+  JSON of that shape; a field whose type comes from `$ref` or an untyped
+  `allOf` / `oneOf` / `anyOf` gets none.
+- A rewritten operation description keeps the `Errors: ...` /
+  `Example ...:` lines `minify_for_mcp` folded into it.
 - What was generated is recorded under `x-s2o.agentize` as JSON Pointers,
   outside the schema nodes — so re-runs are idempotent and a reviewer can
   tell model-written prose from the rest.
@@ -284,7 +293,7 @@ appears in the diff too. The output is a text spec; review it with
 ## Kubernetes: one image, many MCP servers
 
 ```bash
-docker build -t spec2openapi:0.7.0 .
+docker build -t spec2openapi:0.8.0 .
 spec2openapi convert <wsdl> -o openapi.yaml
 kubectl create configmap my-mcp-spec --from-file=openapi.yaml
 kubectl apply -f k8s/example.yaml    # Deployment mounts /config/openapi.yaml

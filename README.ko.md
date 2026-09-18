@@ -157,8 +157,8 @@ deep copy하지 않음), 입력을 계속 쓰면서 결과를 수정하려면 `c
 
 이 프로젝트가 보장하는 계약은 이렇다. 생성된 스펙은 `FastMCP.from_openapi()`를 통과해 오퍼레이션 수만큼의 MCP tool을 만들어낸다.
 
-- FastMCP는 tool 이름을 `[A-Za-z0-9_]`로 정규화하므로, operationId를 처음부터 그 알파벳으로 생성한다(중복 없음, 64자 이하). 따라서 *tool 이름 == operationId*가 항상 성립한다.
-- `spec2openapi validate <spec>`이 정적 검사 + 실제 FastMCP 라운드트립으로 이를 확인한다. 같은 검증을 코드에서 쓰려면 `spec2openapi.verify(spec)` — 체크별 상태와 규범 근거(SEP-986 등)가 담긴 구조화 보고서를 반환하며, `validate --format json`이 동일 보고서를 CLI로 노출한다.
+- FastMCP 4는 operationId의 `__` 앞부분을 `[A-Za-z0-9_]`로 정규화하고 56자로 잘라 tool 이름을 만든다. 그래서 operationId를 처음부터 FastMCP가 그대로 노출하는 형태로 생성한다(중복 없음, 56자 이하, 연속·앞뒤 밑줄 없음). 따라서 *tool 이름 == operationId*가 항상 성립한다.
+- `spec2openapi validate <spec>`이 정적 검사 + 실제 FastMCP 라운드트립(각 tool이 operationId 그대로의 이름으로 노출되는지까지)으로 이를 확인한다. 같은 검증을 코드에서 쓰려면 `spec2openapi.verify(spec)` — 체크별 상태와 규범 근거(SEP-986 등)가 담긴 구조화 보고서를 반환하며, `validate --format json`이 동일 보고서를 CLI로 노출한다.
 - 테스트 스위트가 모든 픽스처 WSDL에 대해 3.0/3.1 두 버전 모두 라운드트립을 검증한다.
 - description, enum, pattern, min/max 등은 tool 스키마까지 그대로 전달되어 LLM의 인자 생성 품질을 높인다.
 
@@ -254,7 +254,15 @@ spec2openapi agentize petstore.json --provider openai --model <모델-id> -o out
   `speculative`)을 달고 오며, 근거 없는 추측은 `--allow-speculative`가
   없으면 폐기된다.
 - 무언가를 쓴 실행은 반드시 `verify()`를 통과해야 하고, 통과하지 못하면
-  아무것도 쓰지 않는다.
+  아무것도 쓰지 않는다. 입력이 실행으로 고칠 수 없는 방식으로 `verify()`를
+  통과하지 못하면 첫 모델 호출 전에 중단하며, `--dry-run`도 이를 알린다.
+  이번 실행이 채우는 필드와, `--rename-tools`를 쓸 때 질의하는 operation의
+  빠졌거나 규칙을 어기는 operationId는 실행이 고치도록 남겨 둔다.
+- `array`/`object` 필드에는 그 모양의 유한한 JSON으로 파싱되는 example만 쓰고,
+  type을 `$ref`나 type 선언 없는 `allOf`/`oneOf`/`anyOf`에서 가져오는
+  필드에는 example을 쓰지 않는다.
+- operation 설명을 새로 써도 `minify_for_mcp`가 접어 넣은 `Errors: ...` /
+  `Example ...:` 줄은 끝에 그대로 남는다.
 - 무엇이 생성됐는지는 `x-s2o.agentize`에 JSON Pointer로, 스키마 노드
   바깥에 기록된다 — 그래서 재실행은 멱등이고 리뷰어는 모델이 쓴 문장을
   구분할 수 있다.

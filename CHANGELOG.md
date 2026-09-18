@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-18
+
+### Added
+- `verify()` and `check_fastmcp_ready()` check `tool-name.length`: an
+  operationId whose FastMCP 4 tool name would exceed 56 characters fails,
+  because FastMCP truncates it (#155).
+
+### Changed
+- Converted operationIds are names FastMCP 4 exposes unchanged: at most 56
+  characters (was 64), `_` runs collapsed, and the dedupe suffix kept
+  inside the limit. Only ids FastMCP 4 would have exposed under a
+  different name change; each change is recorded in `x-s2o.assumptions`
+  as before (#155).
+- `fastmcp.tool-materialized` checks that each operation's tool is exposed
+  under the name FastMCP 4 derives from its operationId, instead of
+  counting tools (#155).
+- `agentize --rename-tools` applies only names FastMCP 4 exposes unchanged
+  (`[A-Za-z0-9_]`, at most 56 characters, no double or edge underscores)
+  (#155).
+
+### Fixed
+- `tool-name.normalization-collision` and `tool-name.normalized` follow
+  FastMCP 4's naming — the part before `__`, slugified, truncated to 56 —
+  so they report the collisions and renames it produces (#155).
+- `tool-name.present` fails an operationId from which FastMCP 4 derives an
+  empty tool name, such as `__internal` or `-` (#155).
+- `agentize` keeps the `Errors: ...` / `Example ...:` lines that
+  `minify_for_mcp` folded into an operation description when it writes a
+  new description, and `--rename-tools` moves the `x-s2o.minify.folded`
+  record to the new `operationId`. A later minify no longer loses or
+  duplicates those lines (#153).
+- `agentize` rejects an input that fails `verify()` in a way the run cannot
+  fix before the first model call instead of after every call; `--dry-run`
+  reports it. Fields the run fills (an empty `description:`, for instance)
+  and, with `--rename-tools`, a missing or rule-breaking `operationId` on an
+  operation it queries are left for it to fix (#153).
+- `agentize` writes an example on an `array` / `object` property only when
+  it parses as finite JSON of that shape, and none on a property whose type
+  comes from `$ref` or an untyped `allOf` / `oneOf` / `anyOf` (#153).
+- An operation without an `operationId` whose description holds only folded
+  lines counts as undocumented, matching the `"METHOD /path"` key minify
+  records it under (#153).
+- `spec2openapi agentize` exits 2 with "모든 LLM 호출이 실패" only when none
+  of the calls that produce suggestions answered; a run where some did
+  writes its output (#153).
+
 ## [0.7.0] - 2026-09-18
 
 ### Added
@@ -563,7 +609,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI workflow token restricted to read-only; the reference Docker image
   runs as a non-root user.
 
-[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Seo-yul/spec2openapi/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Seo-yul/spec2openapi/compare/v0.4.0...v0.5.0

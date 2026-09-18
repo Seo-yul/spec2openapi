@@ -156,6 +156,18 @@ def test_minify_folds_do_not_make_an_operation_look_documented():
         ("#/paths/~1pets~1{id}/get/description", "empty")]
 
 
+def test_fold_lines_of_an_operation_without_operation_id_are_stripped():
+    """minify 는 operationId 가 없는 operation 을 "GET /path" 키로
+    기록한다 - 같은 키로 찾아야 접힌 줄을 벗긴다."""
+    spec = _spec(paths={"/pets": {"get": {
+        "description": "Errors: 404 (Resource not found).",
+        "responses": {"200": {"description": "ok"}}}}})
+    spec["x-s2o"] = {"minify": {"folded": {"GET /pets": ["errors"]}}}
+    got = find_targets(spec, kinds=("desc",))
+    assert [(t.pointer, t.reason) for t in got] == [
+        ("#/paths/~1pets/get/description", "empty")]
+
+
 def test_a_user_written_marker_line_is_not_stripped():
     """folded 기록이 없으면 marker 모양 줄도 사용자 문서다 - 벗기지 않는다."""
     spec = _spec(paths={"/pets/{id}": {"get": {

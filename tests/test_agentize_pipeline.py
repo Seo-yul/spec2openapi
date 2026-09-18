@@ -674,3 +674,354 @@ def test_a_provider_failure_in_self_check_is_still_reported_as_a_note():
 
     notes = run_self_check(pipeline_spec(), FP(boom))
     assert notes and all("self-check 실패" in n for n in notes)
+
+
+# --- #153: fold 기록, 사전 verify, 호출 수 ------------------------------------
+
+def _fold_spec():
+    return {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/pets": {"get": {
+                "operationId": "get_pets",
+                "responses": {"200": {"description": "ok"},
+                              "404": {"description": "Not found"}}}}}}
+
+
+def _op_provider(description, operation_id=None):
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        reply = {"summary": None, "description": description,
+                 "grounding": "named", "parameters": []}
+        if operation_id:
+            reply["operationId"] = operation_id
+        return reply
+    return FP(respond)
+
+
+def test_operation_description_keeps_minify_fold_lines():
+    """새 설명이 minify 가 접어 넣은 줄까지 덮으면 folded 기록만 남고
+    에러 안내는 사라진다 - 다시 돌린 minify 도 복원하지 못한다."""
+    from spec2openapi.minify import minify_for_mcp
+
+    result = agentize_spec(_fold_spec(), _op_provider("Lists every pet."))
+    op = result.spec["paths"]["/pets"]["get"]
+    assert op["description"] == "Lists every pet.\nErrors: 404 (Not found)."
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == op["description"]
+
+
+def test_rename_moves_the_fold_record_to_the_new_operation_id():
+    from spec2openapi.minify import minify_for_mcp
+
+    result = agentize_spec(_fold_spec(), _op_provider(None, "list_pets"),
+                           rename_tools=True)
+    assert result.spec["x-s2o"]["minify"]["folded"] == {
+        "list_pets": ["errors"]}
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == (
+        "Errors: 404 (Not found).")
+
+
+def test_rename_with_a_new_description_keeps_one_copy_of_the_fold_lines():
+    from spec2openapi.minify import minify_for_mcp
+
+    result = agentize_spec(
+        _fold_spec(), _op_provider("Lists every pet.", "list_pets"),
+        rename_tools=True)
+    op = result.spec["paths"]["/pets"]["get"]
+    assert op["operationId"] == "list_pets"
+    assert op["description"] == "Lists every pet.\nErrors: 404 (Not found)."
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == op["description"]
+    assert again["x-s2o"]["minify"]["folded"] == {"list_pets": ["errors"]}
+
+
+def test_input_that_fails_verify_is_rejected_before_any_model_call():
+    """입력이 이미 verify 를 통과하지 못하면 결과도 통과할 수 없다 -
+    유료 호출을 다 쓴 뒤가 아니라 호출 전에 멈춘다."""
+    spec = _fold_spec()
+    del spec["paths"]["/pets"]["get"]["operationId"]
+    provider = _op_provider("Lists every pet.")
+    with pytest.raises(AgentizeError, match="missing operationId"):
+        agentize_spec(spec, provider)
+    assert provider.calls == []
+
+
+def test_result_counts_suggestion_calls_and_answers():
+    """calls/answered 는 제안을 만드는 pass 2 호출만 센다 - 용어집
+    응답만으로는 문서에 쓸 것이 하나도 나오지 않는다."""
+    provider = scripted_provider()
+    result = agentize_spec(pipeline_spec(), provider)
+    assert len(provider.calls) == 3          # 용어집 + 스키마 + operation
+    assert (result.calls, result.answered) == (2, 2)
+
+
+def test_result_counts_failed_suggestion_calls_too():
+    provider = FP({})  # 모든 요청이 ProviderError
+    result = agentize_spec(pipeline_spec(), provider)
+    assert (result.calls, result.answered) == (2, 0)
+    assert len(result.failures) == 3
+
+
+def test_a_glossary_answer_alone_is_not_an_answer():
+    from spec2openapi.agentize.providers import ProviderError
+
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        raise ProviderError("rate limited")
+    result = agentize_spec(pipeline_spec(), FP(respond))
+    assert (result.calls, result.answered) == (2, 0)
+
+
+def test_rename_tools_may_fix_a_missing_operation_id():
+    """--rename-tools 는 operationId 가 없는 operation 에 이름을 새로 쓸 수
+    있다 - tool-name 결함만 있는 입력은 호출 전에 막지 않는다."""
+    from spec2openapi.minify import minify_for_mcp
+
+    spec = _fold_spec()
+    del spec["paths"]["/pets"]["get"]["operationId"]
+    result = agentize_spec(
+        spec, _op_provider("Lists every pet.", "list_pets"),
+        rename_tools=True)
+    op = result.spec["paths"]["/pets"]["get"]
+    assert op["operationId"] == "list_pets"
+    assert op["description"] == "Lists every pet.\nErrors: 404 (Not found)."
+    assert result.spec["x-s2o"]["minify"]["folded"] == {
+        "list_pets": ["errors"]}
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == op["description"]
+
+
+def test_rename_tools_does_not_waive_other_verify_failures():
+    spec = _fold_spec()
+    op = spec["paths"]["/pets"]["get"]
+    del op["operationId"]
+    op["x-soap"] = {"soapVersion": "9.9", "soapAction": "x"}
+    provider = _op_provider("Lists every pet.", "list_pets")
+    with pytest.raises(AgentizeError, match="soapVersion"):
+        agentize_spec(spec, provider, rename_tools=True)
+    assert provider.calls == []
+
+
+def _two_op_spec(a_op, b_op):
+    return {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/a": {"get": a_op}, "/b": {"get": b_op}}}
+
+
+def _numbering_provider():
+    """operation 마다 서로 다른 이름을 돌려준다."""
+    seen = []
+
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        seen.append(user)
+        return {"summary": None, "description": "Reads one record by key.",
+                "grounding": "named", "parameters": [],
+                "operationId": f"read_{len(seen)}"}
+    return FP(respond)
+
+
+def test_rename_tools_does_not_waive_an_operation_it_will_not_query():
+    """설명이 충분해 질의되지 않는 operation 은 개명되지 않는다 - 그
+    operation 의 tool-name 결함은 호출 전에 막아야 한다."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec(
+        {**ok, "description": "Returns the archived order for an account."},
+        {**ok, "operationId": "b"})
+    provider = _numbering_provider()
+    with pytest.raises(AgentizeError, match="missing operationId"):
+        agentize_spec(spec, provider, rename_tools=True)
+    assert provider.calls == []
+
+
+def test_rename_tools_does_not_waive_duplicate_readable_names():
+    """개명 지시는 읽을 만한 이름을 유지하라고 하고, 모델은 operation 을
+    하나씩 봐서 중복을 알 수 없다 - 중복 이름은 호출 전에 막는다."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "getPet"},
+                        {**ok, "operationId": "getPet",
+                         "description": "Returns one pet by its id."})
+    provider = _numbering_provider()
+    with pytest.raises(AgentizeError, match="getPet"):
+        agentize_spec(spec, provider, rename_tools=True)
+    assert provider.calls == []
+
+
+def test_rename_tools_may_fix_a_rule_breaking_operation_id():
+    """규칙([A-Za-z0-9_.-], 64자)을 어기는 이름은 개명 지시가 바꾸라고 한다."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "get pet!"},
+                        {**ok, "operationId": "b",
+                         "description": "Returns one pet by its id."})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
+
+
+def test_a_model_echo_of_the_fold_lines_is_not_doubled():
+    """모델은 접힌 줄이 붙은 원래 설명을 본다 - 그 줄을 되풀이해도 한 벌만
+    남는다."""
+    from spec2openapi.minify import minify_for_mcp
+
+    result = agentize_spec(_fold_spec(), _op_provider(
+        "Lists every pet.\nErrors: 404 (Not found)."))
+    op = result.spec["paths"]["/pets"]["get"]
+    assert op["description"] == "Lists every pet.\nErrors: 404 (Not found)."
+    again = minify_for_mcp(result.spec, enrich=("errors", "examples"))
+    assert again["paths"]["/pets"]["get"]["description"] == op["description"]
+
+
+@pytest.mark.parametrize("bad_id", [["x"], {"x": 1}])
+def test_rename_preflight_survives_a_non_string_operation_id(bad_id):
+    """operationId 는 신뢰할 수 없는 입력이다 - list/dict 여도 사전 검사가
+    크래시하지 않고, 개명이 그 자리를 새 이름으로 채운다."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": bad_id},
+                        {**ok, "operationId": "b",
+                         "description": "Returns one pet by its id."})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
+
+
+def _null_description_spec():
+    """YAML 의 빈 `description:` 은 null 이다 - 검증기는 실패로 보지만
+    agentize 가 채우는 바로 그 자리다."""
+    return {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/x": {"get": {
+                "operationId": "getX", "description": None,
+                "parameters": [{"name": "q", "in": "query",
+                                "description": None,
+                                "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "ok"}}}}}}
+
+
+def test_a_null_field_the_run_fills_does_not_fail_the_preflight():
+    from spec2openapi import verify
+
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        return {"summary": None, "description": "Reads one record by key.",
+                "grounding": "named",
+                "parameters": [{"name": "q", "description":
+                                "Free-text search query.",
+                                "grounding": "named"}]}
+    result = agentize_spec(_null_description_spec(), FP(respond))
+    op = result.spec["paths"]["/x"]["get"]
+    assert op["description"] == "Reads one record by key."
+    assert op["parameters"][0]["description"] == "Free-text search query."
+    assert verify(result.spec).ok
+
+
+def test_a_null_field_the_run_will_not_fill_still_fails_the_preflight():
+    """kinds 가 desc 뿐이면 parameter 의 null 은 채워지지 않는다."""
+    provider = FP(lambda user: {"domain": "x", "overview": "y",
+                                "glossary": []})
+    with pytest.raises(AgentizeError, match="verify"):
+        agentize_spec(_null_description_spec(), provider, kinds=("desc",))
+    assert provider.calls == []
+
+
+def test_a_null_field_on_a_parameter_the_run_will_not_ask_fails_the_preflight():
+    """pass 2b 는 한 operation 안에서 이름이 겹치는 파라미터(path 의 id 와
+    header 의 id)를 묻지 않는다 - 그 null 은 채워지지 않는다."""
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/x/{id}": {"get": {
+                "operationId": "getX",
+                "parameters": [
+                    {"name": "id", "in": "path", "required": True,
+                     "description": None, "schema": {"type": "string"}},
+                    {"name": "id", "in": "header",
+                     "description": None, "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "ok"}}}}}}
+    provider = _op_provider("Reads one record by key.")
+    with pytest.raises(AgentizeError, match="LLM을 호출하기 전에"):
+        agentize_spec(spec, provider)
+    assert provider.calls == []
+
+
+def test_a_null_summary_the_run_rewrites_does_not_fail_the_preflight():
+    """pass 2b 는 desc 대상 operation 의 저품질 summary 도 다시 쓴다 - null
+    summary 는 그 실행이 채우는 자리다."""
+    from spec2openapi import verify
+
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/a": {"get": {
+                "operationId": "getA", "summary": None,
+                "responses": {"200": {"description": "ok"}}}}}}
+
+    def respond(user):
+        if '"glossary_request"' in user:
+            return {"domain": "x", "overview": "y", "glossary": []}
+        return {"summary": "Read one A", "description":
+                "Reads one A record by its key.", "grounding": "named",
+                "parameters": []}
+    result = agentize_spec(spec, FP(respond))
+    op = result.spec["paths"]["/a"]["get"]
+    assert op["summary"] == "Read one A"
+    assert verify(result.spec).ok
+
+
+@pytest.mark.parametrize("renamed, taken", [("list-pets", "list_pets"),
+                                            ("get__v1", "get_v1")])
+def test_rename_preflight_leaves_a_fixable_name_to_the_run(renamed, taken):
+    """개명할 operation 은 모델이 겹치지 않는 새 이름을 낼 수 있다 - 호출
+    전에 막는 것은 어떤 응답으로도 고칠 수 없는 입력뿐이다 (#155)."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": renamed},
+                        {**ok, "operationId": taken,
+                         "description": "Returns one pet by its id."})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
+
+
+def test_rename_preflight_never_rejects_an_input_that_passes_verify():
+    """get__v1 은 get 으로 노출될 뿐 verify 를 통과한다 - 모델이 이름을
+    유지하는 실행도 성공해야 한다."""
+    from spec2openapi import verify
+
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "get__v1"},
+                        {**ok, "operationId": "get_v1",
+                         "description": "Returns one pet by its id."})
+    assert verify(spec).ok
+    keep = _op_provider("Reads one record by key.", "get__v1")
+    result = agentize_spec(spec, keep, rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "get__v1"
+    assert verify(result.spec).ok
+
+
+def test_a_rule_breaking_name_without_a_collision_is_left_to_the_run():
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "list-pets"},
+                        {**ok, "operationId": "b",
+                         "description": "Returns one pet by its id."})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
+
+
+def test_rename_preflight_does_not_truncate_long_ids_into_a_collision():
+    """56자를 넘는 id 는 모델이 새로 짓는다 - 앞 56자에서 자른 이름으로
+    개명된다고 가정하면 고칠 수 있는 입력을 호출 전에 막는다 (#155)."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    stem = "getCustomerAccountInformationByIdentifierAndRegionForReport"
+    spec = _two_op_spec({**ok, "operationId": stem + "1"},
+                        {**ok, "operationId": stem + "2"})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    ids = {result.spec["paths"][p]["get"]["operationId"] for p in ("/a", "/b")}
+    assert ids == {"read_1", "read_2"}
+
+
+def test_rename_placeholders_avoid_exposed_names_too():
+    """임시 이름은 원래 operationId 뿐 아니라 FastMCP 가 노출하는 이름과도
+    겹치지 않아야 한다 - verify 를 통과하는 입력을 막지 않는다."""
+    from spec2openapi import verify
+
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "foo__bar"},
+                        {**ok, "operationId": "s2o_rename_1__x",
+                         "description": "Returns one pet by its id."})
+    assert verify(spec).ok
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
