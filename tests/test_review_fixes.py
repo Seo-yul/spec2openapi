@@ -914,3 +914,31 @@ def test_a_named_derived_type_follows_its_restriction_chain():
     assert re.search(named["pattern"], "aa")
     assert not re.search(named["pattern"], "bb")
     assert named["pattern"] == anonymous["pattern"]
+
+
+def _nested_code(code_attrs: str = "", code_doc: str = "") -> dict:
+    annotation = (f"<xsd:annotation><xsd:documentation>{code_doc}"
+                  "</xsd:documentation></xsd:annotation>" if code_doc else "")
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="inner"><xsd:complexType><xsd:sequence>
+      <xsd:element name="code" type="xsd:string">
+        <xsd:annotation><xsd:documentation>NESTED</xsd:documentation>
+        </xsd:annotation></xsd:element>
+    </xsd:sequence></xsd:complexType></xsd:element>
+    <xsd:element name="code"{code_attrs}>{annotation}<xsd:simpleType>
+      <xsd:restriction base="xsd:string"/></xsd:simpleType></xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    return _req_props(convert_wsdl(content=_wsdl(types)))["code"]
+
+
+def test_an_undocumented_anonymous_element_takes_no_other_elements_doc():
+    assert "description" not in _nested_code()
+
+
+def test_a_repeated_anonymous_element_takes_its_own_doc():
+    code = _nested_code(' maxOccurs="3"', "OWN")
+    assert code["type"] == "array"
+    assert code["description"] == "OWN"
+    assert "description" not in _nested_code(' maxOccurs="3"')

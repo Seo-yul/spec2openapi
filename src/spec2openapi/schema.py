@@ -534,7 +534,16 @@ class SchemaConverter:
                 base["enum"] = [*base["enum"], None]
             nillable = False
 
-        doc = self._child_doc(qkey, el_name)
+        node = getattr(el_type, "_s2o_simple_node", None)
+        if node is not None:
+            # an anonymous type is declared inside its element, so that
+            # element's documentation is exact and outranks the type's; the
+            # name-keyed docs can hold a same-named nested or other
+            # container's child, so they are not consulted
+            parent = node.getparent()
+            doc = _doc_text(parent) if parent is not None else None
+        else:
+            doc = self._child_doc(qkey, el_name)
 
         default = getattr(el, "default", None)
         if default is not None and "$ref" not in base:
@@ -581,19 +590,7 @@ class SchemaConverter:
                 out["description"] = doc
             return out
         base["xml"] = xml_meta
-        node = getattr(el_type, "_s2o_simple_node", None)
-        if node is not None:
-            # an anonymous type is declared inside its element, so that
-            # element's documentation is exact and outranks the type's;
-            # the name-keyed docs can hold a same-named nested or other
-            # container's child, so they only fill in when neither has one
-            parent = node.getparent()
-            own_doc = _doc_text(parent) if parent is not None else None
-            if own_doc:
-                base["description"] = own_doc
-            elif doc and "description" not in base:
-                base["description"] = doc
-        elif doc and "description" not in base:
+        if doc and ("description" not in base or node is not None):
             base["description"] = doc
         return base
 
