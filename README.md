@@ -293,7 +293,7 @@ appears in the diff too. The output is a text spec; review it with
 ## Kubernetes: one image, many MCP servers
 
 ```bash
-docker build -t spec2openapi:0.7.0 .
+docker build -t spec2openapi:0.8.0 .
 spec2openapi convert <wsdl> -o openapi.yaml
 kubectl create configmap my-mcp-spec --from-file=openapi.yaml
 kubectl apply -f k8s/example.yaml    # Deployment mounts /config/openapi.yaml
