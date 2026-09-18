@@ -985,3 +985,15 @@ def test_a_rule_breaking_name_without_a_collision_is_left_to_the_run():
                          "description": "Returns one pet by its id."})
     result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
     assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
+
+
+def test_rename_preflight_does_not_truncate_long_ids_into_a_collision():
+    """56자를 넘는 id 는 모델이 새로 짓는다 - 앞 56자에서 자른 이름으로
+    개명된다고 가정하면 고칠 수 있는 입력을 호출 전에 막는다 (#155)."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    stem = "getCustomerAccountInformationByIdentifierAndRegionForReport"
+    spec = _two_op_spec({**ok, "operationId": stem + "1"},
+                        {**ok, "operationId": stem + "2"})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    ids = {result.spec["paths"][p]["get"]["operationId"] for p in ("/a", "/b")}
+    assert ids == {"read_1", "read_2"}
