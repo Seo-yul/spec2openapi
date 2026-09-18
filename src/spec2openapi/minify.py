@@ -47,6 +47,7 @@ _KEEP_PREFIXES_RUNTIME = ("x-soap-", "x-fastmcp-")
 # records and break the "untranslatable syntax is preserved" invariant).
 _KEEP_EXACT_PROJECT = frozenset({
     "x-s2o", "x-pattern", "x-collectionFormat", "x-original-body-name",
+    "x-fractionDigits",
 })
 # Documentation-bearing community extensions: caller-facing hints a model
 # can use — exactly the kind of compact signal this function preserves.

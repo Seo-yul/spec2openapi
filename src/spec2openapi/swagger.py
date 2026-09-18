@@ -112,6 +112,16 @@ def _as_bool(v: Any) -> bool:
     return bool(v)
 
 
+def _media_list(value: Any) -> list[str]:
+    """A consumes/produces value as a list of media types (a bare string is
+    a spec violation seen in the wild)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(t) for t in value] if isinstance(value, list) else []
+
+
 def _merge_params(shared: list, op_level: list) -> list:
     """Combine path-item and operation parameters. Per the spec, an
     operation parameter overrides a path-item one with the same
@@ -260,8 +270,19 @@ class _Upgrader:
                 # parameters map above)
                 out[k] = [self._strip_nulls(p, True, depth + 1) for p in v]
                 continue
+            if in_schema and k == "properties" and isinstance(v, dict):
+                # property names are opaque identifiers: a property named
+                # "default" or "enum" is a schema, not a data keyword
+                out[k] = {
+                    name: self._strip_nulls(entry, True, depth + 1)
+                    for name, entry in v.items()
+                }
+                continue
             if in_schema and k in _DATA_KEYWORDS:
                 out[k] = v  # null may be meaningful data here
+                continue
+            if not in_schema and k == "examples" and isinstance(v, dict):
+                out[k] = v  # Response Object examples: media type -> data
                 continue
             if v is None:
                 self._nulls_stripped += 1
@@ -736,7 +757,7 @@ class _Upgrader:
         rb: dict[str, Any] = {}
         if p.get("description"):
             rb["description"] = p["description"]
-        if p.get("required"):
+        if _as_bool(p.get("required")):
             rb["required"] = True
         if p.get("name"):
             rb["x-original-body-name"] = p["name"]
@@ -747,12 +768,40 @@ class _Upgrader:
         }
         return rb
 
+    def _ref_request_body(self, raw_ref: str, ref: str, op: dict,
+                          ctx: str) -> dict:
+        """A $ref to a global body parameter's requestBody - inlined when the
+        operation declares consumes of its own, since the shared component
+        carries the global consumes."""
+        op_types = op.get("consumes")
+        if op_types is None:
+            return {"$ref": ref}
+        gname = self._source_name(self._param_key, raw_ref.rsplit("/", 1)[-1])
+        gparam = (self.src.get("parameters") or {}).get(gname)
+        if not isinstance(gparam, dict):
+            return {"$ref": ref}
+        default = ["application/json"]
+        if (_media_list(op_types) or default) == (
+                _media_list(self.src.get("consumes")) or default):
+            return {"$ref": ref}
+        self.assumptions.append(
+            f"{ctx}: requestBody $ref to global body parameter '{gname}' "
+            "inlined: the operation's consumes differ from the global "
+            "consumes"
+        )
+        return self._body_to_request_body(gparam, op, ctx)
+
     def _form_to_request_body(self, params: list[dict], op: dict,
                               ctx: str) -> dict:
         has_file = any(p.get("type") == "file" for p in params)
-        media = "multipart/form-data" if has_file else (
-            "application/x-www-form-urlencoded"
-        )
+        op_types = op.get("consumes")
+        declared = {t.split(";")[0].strip().lower() for t in _media_list(
+            op_types if op_types is not None else self.src.get("consumes"))}
+        multipart = has_file or (
+            "multipart/form-data" in declared
+            and "application/x-www-form-urlencoded" not in declared)
+        media = ("multipart/form-data" if multipart
+                 else "application/x-www-form-urlencoded")
         props: dict[str, Any] = {}
         required: list[str] = []
         for p in params:
@@ -767,7 +816,7 @@ class _Upgrader:
             if p.get("description"):
                 schema["description"] = p["description"]
             props[name] = schema or {"type": "string"}
-            if p.get("required"):
+            if _as_bool(p.get("required")):
                 required.append(name)
             if p.get("collectionFormat"):
                 self.lossy.append(
@@ -822,7 +871,7 @@ class _Upgrader:
             if "$ref" in p:
                 ref = self._fix_ref(p["$ref"])
                 if "/requestBodies/" in ref:
-                    body = {"$ref": ref}
+                    body = self._ref_request_body(p["$ref"], ref, op, ctx)
                     continue
                 # a $ref to a global formData parameter must be inlined:
                 # formData fields are fragments of the form requestBody and
@@ -911,6 +960,11 @@ class _Upgrader:
 
     def _convert_response(self, resp: dict, op: dict, ctx: str,
                           code: Any = None) -> dict:
+        if not isinstance(resp, dict):
+            raise ConversionError(
+                f"{ctx}: response {code} must be a mapping, got "
+                f"{type(resp).__name__}"
+            )
         if "$ref" in resp:
             return {"$ref": self._fix_ref(resp["$ref"])}
         description = resp.get("description")
@@ -1223,6 +1277,18 @@ class _Upgrader:
                         new_op[k] = v
 
                 op_id = op.get("operationId")
+                if isinstance(op_id, (int, float)) and not isinstance(
+                        op_id, bool):
+                    self.assumptions.append(
+                        f"{ctx}: operationId {op_id!r} is not a string; "
+                        f"used '{op_id}'"
+                    )
+                    op_id = str(op_id)
+                elif op_id is not None and not isinstance(op_id, str):
+                    raise ConversionError(
+                        f"{ctx}: operationId must be a string, got "
+                        f"{type(op_id).__name__}"
+                    )
                 if not op_id:
                     op_id = self._gen_operation_id(method, path)
                     self.assumptions.append(

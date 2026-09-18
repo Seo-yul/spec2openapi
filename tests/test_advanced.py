@@ -359,7 +359,9 @@ def test_facets_from_imported_xsd(adv_spec):
     discount = props["discount"]
     assert discount["minimum"] == 0.0
     assert discount["maximum"] == 100.0
-    assert discount["multipleOf"] == 0.01
+    # fractionDigits is kept as a facet, not an inexact float multipleOf
+    assert discount["x-fractionDigits"] == 2
+    assert "multipleOf" not in discount
     assert "percentage between 0 and 100" in discount["description"]
 
     person = adv_spec["components"]["schemas"]["Person"]

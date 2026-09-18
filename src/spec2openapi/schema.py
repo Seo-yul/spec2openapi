@@ -194,6 +194,10 @@ class SchemaConverter:
             return None
         if ns is not None and (ns, name) in table:
             return table[(ns, name)]
+        if ns is not None and (ns, name) in self.meta.named_types:
+            # declared in that namespace with no entry: it has none - a
+            # same-named type in another namespace is a different type
+            return None
         for key, value in table.items():
             if key[-1] == name or key[1] == name:
                 if len(key) == 2 and key[1] == name:
