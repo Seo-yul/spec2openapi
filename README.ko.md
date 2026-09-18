@@ -254,7 +254,12 @@ spec2openapi agentize petstore.json --provider openai --model <모델-id> -o out
   `speculative`)을 달고 오며, 근거 없는 추측은 `--allow-speculative`가
   없으면 폐기된다.
 - 무언가를 쓴 실행은 반드시 `verify()`를 통과해야 하고, 통과하지 못하면
-  아무것도 쓰지 않는다.
+  아무것도 쓰지 않는다. 입력이 이미 `verify()`를 통과하지 못하면 첫 모델
+  호출 전에 중단하며, `--dry-run`도 이를 알린다.
+- `array`/`object` 필드에는 그 모양의 JSON으로 파싱되는 example만 쓰고,
+  `$ref` 필드에는 example을 쓰지 않는다.
+- operation 설명을 새로 써도 `minify_for_mcp`가 접어 넣은 `Errors: ...` /
+  `Example ...:` 줄은 끝에 그대로 남는다.
 - 무엇이 생성됐는지는 `x-s2o.agentize`에 JSON Pointer로, 스키마 노드
   바깥에 기록된다 — 그래서 재실행은 멱등이고 리뷰어는 모델이 쓴 문장을
   구분할 수 있다.

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `agentize` keeps the `Errors: ...` / `Example ...:` lines that
+  `minify_for_mcp` folded into an operation description when it writes a
+  new description, and `--rename-tools` moves the `x-s2o.minify.folded`
+  record to the new `operationId`. A later minify no longer loses or
+  duplicates those lines (#153).
+- `agentize` rejects an input that already fails `verify()` before the
+  first model call instead of after every call; `--dry-run` reports it
+  (#153).
+- `agentize` writes an example on an `array` / `object` property only when
+  it parses as JSON of that shape, and none on a `$ref` property (#153).
+- An operation without an `operationId` whose description holds only folded
+  lines counts as undocumented, matching the `"METHOD /path"` key minify
+  records it under (#153).
+- `spec2openapi agentize` exits 2 with "모든 LLM 호출이 실패" only when every
+  provider call failed; a run where some calls answered writes its output
+  (#153).
+
 ## [0.7.0] - 2026-09-18
 
 ### Added

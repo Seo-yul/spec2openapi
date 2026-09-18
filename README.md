@@ -273,6 +273,12 @@ What a run guarantees:
   / `inferred` / `speculative`); ungrounded guesses are dropped unless
   `--allow-speculative` is given.
 - A run that writes anything must pass `verify()`, or nothing is written.
+  An input that already fails `verify()` is rejected before the first
+  model call, and `--dry-run` says so.
+- An `array` / `object` field only gets an example that parses as JSON of
+  that shape; a `$ref` field gets none.
+- A rewritten operation description keeps the `Errors: ...` /
+  `Example ...:` lines `minify_for_mcp` folded into it.
 - What was generated is recorded under `x-s2o.agentize` as JSON Pointers,
   outside the schema nodes — so re-runs are idempotent and a reviewer can
   tell model-written prose from the rest.
