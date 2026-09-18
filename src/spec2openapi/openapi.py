@@ -177,11 +177,12 @@ def check_fastmcp_ready(spec: dict[str, Any]) -> list[str]:
 
     Verifies the contract behind ``spec2openapi validate`` without
     importing fastmcp: the document has operations, every operation has
-    an operationId that is a safe MCP tool name and stays unique even
-    after FastMCP's ``[A-Za-z0-9_]`` normalization, and SOAP operations
-    carry their wrapper element. Returns one message per problem.
+    an operationId that is a safe MCP tool name, leaves a non-empty tool
+    name of at most 56 characters, and stays unique in the tool names
+    FastMCP 4 derives (``fastmcp_tool_name``), and SOAP operations carry
+    their wrapper element. Returns one message per problem.
 
-    This check set is frozen; `spec2openapi.verify` runs the superset."""
+    `spec2openapi.verify` runs the superset."""
     from .checks import fastmcp_ready_problems
 
     return fastmcp_ready_problems(spec)
@@ -272,8 +273,8 @@ def build_spec(
     fault_ref = f"#/components/schemas/{fault_ref_name}"
 
     for op in parsed.operations:
-        # FastMCP normalizes tool names to [A-Za-z0-9_]; emit operationIds
-        # in that alphabet, bounded to 64 chars, and re-checked for
+        # emit operationIds FastMCP 4 exposes unchanged as tool names
+        # (_tool_id: [A-Za-z0-9_], <= 56 chars, no '__'), re-checked for
         # uniqueness *after* normalization/truncation so two operations
         # never collide onto the same path (which would drop one).
         op_id = _unique_id(_tool_id(op.op_id), used_ids)
