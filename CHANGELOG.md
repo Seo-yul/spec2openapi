@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `verify()` and `check_fastmcp_ready()` check `tool-name.length`: an
+  operationId longer than 56 characters fails, because FastMCP 4 truncates
+  the tool name (#155).
+
+### Changed
+- Converted operationIds are names FastMCP 4 exposes unchanged: at most 56
+  characters (was 64), `_` runs collapsed, and the dedupe suffix kept
+  inside the limit. Only ids FastMCP 4 would have exposed under a
+  different name change; each change is recorded in `x-s2o.assumptions`
+  as before (#155).
+- `fastmcp.tool-materialized` checks that each operation's tool is exposed
+  under the name FastMCP 4 derives from its operationId, instead of
+  counting tools (#155).
+- `agentize --rename-tools` applies only names FastMCP 4 exposes unchanged
+  (`[A-Za-z0-9_]`, at most 56 characters, no double or edge underscores)
+  (#155).
+
 ### Fixed
+- `tool-name.normalization-collision` and `tool-name.normalized` follow
+  FastMCP 4's naming — the part before `__`, slugified, truncated to 56 —
+  so they report the collisions and renames it produces (#155).
 - `agentize` keeps the `Errors: ...` / `Example ...:` lines that
   `minify_for_mcp` folded into an operation description when it writes a
   new description, and `--rename-tools` moves the `x-s2o.minify.folded`
