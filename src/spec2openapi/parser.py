@@ -147,7 +147,7 @@ def _doc_text(node: etree._Element) -> str | None:
 
 # facets whose value is a numeric bound (minInclusive/etc.) -> the JSON
 # Schema keyword it becomes. Cast is picked dynamically from the
-# restriction's base type (see _restriction_number_kind): int for an
+# restriction's base type (see _simple_type_facets): int for an
 # integer base (exact, no float precision loss for e.g. int64 bounds),
 # float otherwise.
 _BOUND_FACET_MAP = {
@@ -169,38 +169,6 @@ _XSD_INTEGER_BASES = frozenset({
 _XSD_NUMBER_BASES = frozenset({"decimal", "float", "double"})
 # XSD's builtin list types: their length facets count items
 _XSD_LIST_BASES = frozenset({"NMTOKENS", "IDREFS", "ENTITIES"})
-
-
-def _restriction_number_kind(
-        restriction: etree._Element,
-        simple_types: dict[tuple[str, str], etree._Element] | None = None,
-        _depth: int = 0) -> str:
-    """Classify a restriction's base type for facet coercion: 'integer'
-    (cast via int — exact, no float precision loss), 'number' (cast via
-    float), or 'string' (base is non-numeric or unresolvable — left as
-    the original text rather than guessing). A base that is another
-    named simpleType is followed down to its XSD builtin."""
-    base = restriction.get("base")
-    if not base:
-        return "string"
-    resolved = _resolve_qname_ref(base, restriction)
-    if resolved is None:
-        return "string"
-    if resolved[0] != XSD_NS:
-        base_st = (simple_types or {}).get(resolved)
-        inner = (base_st.find(f"{{{XSD_NS}}}restriction")
-                 if base_st is not None else None)
-        if inner is None or _depth >= 16:  # 16: cycle / runaway guard
-            return "string"
-        return _restriction_number_kind(inner, simple_types, _depth + 1)
-    local = resolved[1]
-    if local == "boolean":
-        return "boolean"
-    if local in _XSD_INTEGER_BASES:
-        return "integer"
-    if local in _XSD_NUMBER_BASES:
-        return "number"
-    return "string"
 
 
 def _coerce_enum_value(raw: str, kind: str) -> Any:
@@ -244,17 +212,11 @@ def _facets_from_restriction(
         st: etree._Element,
         simple_types: dict[tuple[str, str], etree._Element] | None = None,
 ) -> dict[str, Any]:
-    """xsd:simpleType node -> JSON Schema facet fragment (3.0 flavored)."""
-    restriction = st.find(f"{{{XSD_NS}}}restriction")
-    if restriction is None:
+    """xsd:simpleType node -> JSON Schema facet fragment (3.0 flavored),
+    following its restriction chain exactly as an anonymous type does."""
+    if st.find(f"{{{XSD_NS}}}restriction") is None:
         return {}
-    facets = _own_facets(restriction,
-                         _restriction_number_kind(restriction, simple_types))
-    # list length facets count items, not characters
-    if _simple_type_facets(st, simple_types or {})[1] == "list":
-        facets.pop("minLength", None)
-        facets.pop("maxLength", None)
-    return facets
+    return _simple_type_facets(st, simple_types or {})[0]
 
 
 def _named_simple_type(

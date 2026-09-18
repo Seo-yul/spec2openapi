@@ -52,8 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Several `pattern` facets in one restriction are alternatives — a value
   matching any of them is valid; a derived type's pattern applies together
   with its base's (#161).
-- A named simpleType restricting `NMTOKENS`, `IDREFS` or `ENTITIES` drops
-  its length facets, which count items, not characters (#161).
+- A named simpleType follows its restriction chain like an inline one: it
+  keeps its base's facets, and one restricting `NMTOKENS`, `IDREFS`,
+  `ENTITIES` or a list type drops its length facets, which count items,
+  not characters (#161).
 - A nillable element with an enumeration accepts `null` (#161).
 - An `INF`/`NaN` enumeration value or bound is not emitted; JSON has no
   form for it (#161).

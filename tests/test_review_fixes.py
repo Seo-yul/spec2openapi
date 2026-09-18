@@ -877,3 +877,40 @@ def test_a_named_list_types_length_facets_are_dropped(base):
       <xsd:simpleType name="Ids"><xsd:restriction base="{base}">
         <xsd:maxLength value="3"/></xsd:restriction></xsd:simpleType>""")
     assert "maxLength" not in v and "minLength" not in v
+
+
+def test_an_undocumented_elements_anonymous_type_keeps_its_own_doc():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="inner"><xsd:complexType><xsd:sequence>
+      <xsd:element name="code" type="xsd:string">
+        <xsd:annotation><xsd:documentation>INNER doc</xsd:documentation>
+        </xsd:annotation></xsd:element>
+    </xsd:sequence></xsd:complexType></xsd:element>
+    <xsd:element name="code"><xsd:simpleType>
+      <xsd:annotation><xsd:documentation>type doc</xsd:documentation>
+      </xsd:annotation>
+      <xsd:restriction base="xsd:string"/></xsd:simpleType></xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    props = _req_props(convert_wsdl(content=_wsdl(types)))
+    assert props["code"]["description"] == "type doc"
+
+
+_A_B = """<xsd:simpleType name="A"><xsd:restriction base="xsd:string">
+      <xsd:pattern value="a+"/><xsd:maxLength value="4"/>
+    </xsd:restriction></xsd:simpleType>
+    <xsd:simpleType name="B"><xsd:restriction base="tns:A">
+      <xsd:pattern value="[a-c]+"/></xsd:restriction></xsd:simpleType>"""
+
+
+def test_a_named_derived_type_follows_its_restriction_chain():
+    import re
+    named = _one_prop('<xsd:element name="v" type="tns:B"/>', extra=_A_B)
+    anonymous = _one_prop("""<xsd:element name="v"><xsd:simpleType>
+      <xsd:restriction base="tns:B"/></xsd:simpleType></xsd:element>""",
+                          extra=_A_B)
+    assert named["maxLength"] == 4
+    assert re.search(named["pattern"], "aa")
+    assert not re.search(named["pattern"], "bb")
+    assert named["pattern"] == anonymous["pattern"]
