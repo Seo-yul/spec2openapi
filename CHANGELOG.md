@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension as OpenAPI/Swagger when it serves JSON or YAML, accept a zip
   bundle like `convert`, and `load_spec` reads flow-style YAML that starts
   with `{` (#159).
+- Swagger upgrader: `x-` extensions on a Responses Object are kept as
+  extensions, not converted as responses; a `null` property or definition
+  is dropped (#159).
+- `x-soap.refs` checks `$ref`s under names that look like data keywords —
+  a property called `default` or `enum`, the `default` response (#159).
+- `agentize` detects Japanese for kanji-heavy text that contains kana
+  (#159).
 
 ## [0.8.0] - 2026-09-18
 

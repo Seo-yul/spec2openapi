@@ -478,25 +478,42 @@ def _component_schemas(spec: dict) -> dict:
     return schemas if isinstance(schemas, dict) else {}
 
 
-def _iter_ref_strings(node):
+# name -> object maps: their keys are names a user chose (a "default"
+# response, a property called "enum"), never data keywords
+_NAME_MAP_KEYS = frozenset((
+    "properties", "patternProperties", "responses", "headers", "parameters",
+    "schemas", "requestBodies", "securitySchemes", "links", "callbacks",
+    "pathItems"))
+
+
+def _iter_ref_strings(node, *, names: bool = False):
     """Yield every "$ref" string in a JSON tree (no ref following).
 
     Subtrees under a data keyword (example/examples/default/enum/const)
     are skipped: their values are data, not schema, and may incidentally
-    contain a dict shaped like {"$ref": ...}. Explicit-stack iteration
-    (not recursive) so a deeply nested document cannot RecursionError."""
-    stack = [node]
+    contain a dict shaped like {"$ref": ...}. Keys of a name map
+    (_NAME_MAP_KEYS) are names, not keywords. Explicit-stack iteration
+    (not recursive) so a deeply nested document cannot RecursionError.
+    `names` says `node` itself is a name map (a Responses Object)."""
+    stack = [(node, names)]
     while stack:
-        cur = stack.pop()
+        cur, names = stack.pop()
         if isinstance(cur, dict):
+            if names:
+                stack.extend((v, False) for v in reversed(list(cur.values())))
+                continue
             ref = cur.get("$ref")
             if isinstance(ref, str):
                 yield ref
-            children = [v for k, v in cur.items()
-                       if k not in _DATA_SUBTREE_KEYS]
+            children = []
+            for k, v in cur.items():
+                if k in _NAME_MAP_KEYS and isinstance(v, dict):
+                    children.append((v, True))
+                elif k not in _DATA_SUBTREE_KEYS:
+                    children.append((v, False))
             stack.extend(reversed(children))
         elif isinstance(cur, list):
-            stack.extend(reversed(cur))
+            stack.extend((v, False) for v in reversed(cur))
 
 
 def _check_xsoap_refs(spec):
@@ -523,8 +540,9 @@ def _check_xsoap_refs(spec):
                         "x-soap.refs",
                         f"{oid}: x-soap.{kind} schema '{ref}' does not "
                         "resolve to components.schemas", location=loc))
-        for section in (op.get("requestBody"), op.get("responses")):
-            for ref in _iter_ref_strings(section):
+        for section, names in ((op.get("requestBody"), False),
+                               (op.get("responses"), True)):
+            for ref in _iter_ref_strings(section, names=names):
                 if ref.startswith(_SCHEMA_REF_PREFIX) and not _resolvable(ref):
                     out.append(_finding(
                         "x-soap.refs",

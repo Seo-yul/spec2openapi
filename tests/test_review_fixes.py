@@ -276,3 +276,60 @@ def test_flow_style_yaml_starting_with_a_brace_loads(tmp_path):
     src.write_text('{openapi: 3.0.3, info: {title: t, version: "1"}, '
                    "paths: {}}")
     assert load_spec(src)["openapi"] == "3.0.3"
+
+
+# --- cycle 2 ------------------------------------------------------------------
+
+def test_a_null_property_or_definition_is_dropped():
+    out = convert_swagger(_sw(definitions={
+        "X": {"type": "object",
+              "properties": {"foo": None, "bar": {"type": "string"}}},
+        "Y": None}))
+    schemas = out["components"]["schemas"]
+    assert schemas["X"]["properties"] == {"bar": {"type": "string"}}
+    assert "Y" not in schemas
+
+
+@pytest.mark.parametrize("owner", ["team-a", {"team": "a"}])
+def test_vendor_extensions_on_responses_are_kept_not_converted(owner):
+    out = convert_swagger(_sw({"/a": {"get": {
+        "operationId": "a",
+        "responses": {"200": {"description": "ok"}, "x-owner": owner}}}}))
+    responses = out["paths"]["/a"]["get"]["responses"]
+    assert responses["x-owner"] == owner
+    assert set(responses) == {"200", "x-owner"}
+
+
+def test_refs_under_names_that_look_like_data_keywords_are_checked():
+    from spec2openapi import verify
+
+    xsoap = {"soapVersion": "1.1", "endpoint": "http://e",
+             "input": {"element": "In"}, "output": {"element": "Out"}}
+    missing = "#/components/schemas/Missing"
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {"/operations/Op": {"post": {
+                "operationId": "Op", "summary": "s", "x-soap": xsoap,
+                "requestBody": {"content": {"application/json": {"schema": {
+                    "type": "object", "properties": {
+                        "default": {"$ref": missing + "1"},
+                        "enum": {"$ref": missing + "2"}}}}}},
+                "responses": {"default": {
+                    "description": "d", "content": {"application/json": {
+                        "schema": {"$ref": missing + "3"}}}}}}}},
+            "components": {"schemas": {}}}
+    messages = " ".join(r.message for r in verify(spec, deep=False).results
+                        if r.id == "x-soap.refs")
+    for n in "123":
+        assert missing + n in messages
+
+
+def test_kana_makes_kanji_heavy_text_japanese():
+    from spec2openapi.agentize.targets import detect_language
+
+    spec = {"openapi": "3.0.3", "info": {"title": "t", "version": "1"},
+            "paths": {}, "components": {"schemas": {"O": {
+                "type": "object", "properties": {
+                    k: {"type": "string", "description": d} for k, d in (
+                        ("a", "顧客番号"), ("b", "注文日時"),
+                        ("c", "商品コード"), ("d", "受注金額の合計"))}}}}}
+    assert detect_language(spec) == "Japanese"

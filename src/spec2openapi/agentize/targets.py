@@ -218,6 +218,11 @@ def detect_language(spec: Any) -> str:
         else:
             if ch.isalpha():
                 latin += 1
+    # 한자는 중국어와 일본어가 함께 쓴다 - 가나가 하나라도 있으면
+    # 한자도 일본어로 센다. 한자가 많은 짧은 API 설명이 흔하다.
+    if counts.get("Japanese") and counts.get("Chinese"):
+        counts["Japanese"] += counts["Chinese"]
+        counts["Chinese"] = 0
     total = sum(counts.values()) + latin
     if total:
         top, n = max(counts.items(), key=lambda kv: kv[1])

@@ -259,10 +259,7 @@ class _Upgrader:
             if k in _SCHEMA_MAP_KEYS and isinstance(v, dict):
                 # name -> schema-ish-object map: the map's own keys are
                 # opaque identifiers; each value is schema content
-                out[k] = {
-                    name: self._strip_nulls(entry, True, depth + 1)
-                    for name, entry in v.items()
-                }
+                out[k] = self._strip_null_entries(v, depth)
                 continue
             if k == "parameters" and isinstance(v, list):
                 # operation/path-item Parameter Object list (schema-ish
@@ -273,10 +270,7 @@ class _Upgrader:
             if in_schema and k == "properties" and isinstance(v, dict):
                 # property names are opaque identifiers: a property named
                 # "default" or "enum" is a schema, not a data keyword
-                out[k] = {
-                    name: self._strip_nulls(entry, True, depth + 1)
-                    for name, entry in v.items()
-                }
+                out[k] = self._strip_null_entries(v, depth)
                 continue
             if in_schema and k in _DATA_KEYWORDS:
                 out[k] = v  # null may be meaningful data here
@@ -289,6 +283,16 @@ class _Upgrader:
                 continue
             nxt_schema = in_schema or k == "schema"
             out[k] = self._strip_nulls(v, nxt_schema, depth + 1)
+        return out
+
+    def _strip_null_entries(self, mapping: dict, depth: int) -> dict:
+        """A name -> schema map: a null entry is no schema at all."""
+        out: dict[str, Any] = {}
+        for name, entry in mapping.items():
+            if entry is None:
+                self._nulls_stripped += 1
+                continue
+            out[name] = self._strip_nulls(entry, True, depth + 1)
         return out
 
     @staticmethod
@@ -1323,8 +1327,11 @@ class _Upgrader:
                 if request_body is not None:
                     new_op["requestBody"] = request_body
 
+                # x-* keys on a Responses Object are extensions, not codes
                 responses = {
-                    str(code): self._convert_response(resp, op, ctx, code)
+                    str(code): (resp if str(code).startswith("x-")
+                                else self._convert_response(resp, op, ctx,
+                                                            code))
                     for code, resp in (op.get("responses") or {}).items()
                 }
                 if not responses:  # Responses Object requires >= 1 response
