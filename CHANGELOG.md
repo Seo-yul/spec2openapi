@@ -15,11 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicates those lines (#153).
 - `agentize` rejects an input that already fails `verify()` before the
   first model call instead of after every call; `--dry-run` reports it.
-  With `--rename-tools`, name problems on the operations the run queries
-  (and may rename) are left for it to fix (#153).
+  With `--rename-tools`, a missing or rule-breaking `operationId` on an
+  operation the run queries is left for it to fix (#153).
 - `agentize` writes an example on an `array` / `object` property only when
-  it parses as finite JSON of that shape, and none on a `$ref` property
-  (#153).
+  it parses as finite JSON of that shape, and none on a property whose type
+  comes from `$ref` or an untyped `allOf` / `oneOf` / `anyOf` (#153).
 - An operation without an `operationId` whose description holds only folded
   lines counts as undocumented, matching the `"METHOD /path"` key minify
   records it under (#153).

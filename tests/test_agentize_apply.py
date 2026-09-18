@@ -647,6 +647,22 @@ def test_swapped_names_swap_their_fold_records():
         "b": ["errors"], "a": ["errors", "examples"]}
 
 
+@pytest.mark.parametrize("wrapper", ["allOf", "oneOf", "anyOf"])
+def test_example_is_not_written_on_a_composed_untyped_field(wrapper):
+    """변환기는 형제 키가 있는 $ref 를 allOf 로 감싼다 - type 이 없는 합성
+    필드도 type 을 확인할 수 없다."""
+    spec = base_spec()
+    spec["components"]["schemas"]["Pet"]["properties"]["owner"] = {
+        wrapper: [{"$ref": "#/components/schemas/Pet"}]}
+    out, rep = apply_suggestions(spec, [Suggestion(
+        "#/components/schemas/Pet/properties/owner/description",
+        "소유자", "named", example="바둑이 주인")])
+    node = out["components"]["schemas"]["Pet"]["properties"]["owner"]
+    assert node["description"] == "소유자"
+    assert "example" not in node
+    assert any("example" in r for r in rep.rejected)
+
+
 def test_example_is_not_written_next_to_a_ref():
     """$ref 필드는 type 을 확인할 수 없다 - example 을 붙이지 않는다."""
     spec = base_spec()

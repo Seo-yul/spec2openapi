@@ -836,15 +836,27 @@ def test_rename_tools_does_not_waive_an_operation_it_will_not_query():
     assert provider.calls == []
 
 
-def test_rename_tools_may_fix_duplicate_operation_ids():
-    """중복 operationId 는 tool-name.unique 와 openapi.schema-valid 를 함께
-    깨지만, 두 operation 이 모두 질의되면 개명으로 고칠 수 있다."""
+def test_rename_tools_does_not_waive_duplicate_readable_names():
+    """개명 지시는 읽을 만한 이름을 유지하라고 하고, 모델은 operation 을
+    하나씩 봐서 중복을 알 수 없다 - 중복 이름은 호출 전에 막는다."""
     ok = {"responses": {"200": {"description": "ok"}}}
-    spec = _two_op_spec({**ok, "operationId": "dup"},
-                        {**ok, "operationId": "dup"})
+    spec = _two_op_spec({**ok, "operationId": "getPet"},
+                        {**ok, "operationId": "getPet",
+                         "description": "Returns one pet by its id."})
+    provider = _numbering_provider()
+    with pytest.raises(AgentizeError, match="getPet"):
+        agentize_spec(spec, provider, rename_tools=True)
+    assert provider.calls == []
+
+
+def test_rename_tools_may_fix_a_rule_breaking_operation_id():
+    """규칙([A-Za-z0-9_.-], 64자)을 어기는 이름은 개명 지시가 바꾸라고 한다."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "get pet!"},
+                        {**ok, "operationId": "b",
+                         "description": "Returns one pet by its id."})
     result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
-    ids = {result.spec["paths"][p]["get"]["operationId"] for p in ("/a", "/b")}
-    assert ids == {"read_1", "read_2"}
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"
 
 
 def test_a_model_echo_of_the_fold_lines_is_not_doubled():

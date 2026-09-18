@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from ..checks import _component_schemas, verify
 from ..errors import ConversionError
 from ..minify import minify_for_mcp
-from ..openapi import _operations, _unescape_pointer_token
+from ..openapi import _SAFE_TOOL_RE, _operations, _unescape_pointer_token
 from .apply import (
     ApplyReport,
     already_generated,
@@ -148,11 +148,13 @@ def _preflight_problems(working: dict, targets: list[Target], *,
     """LLM 을 부르기 전에 이미 확정된 verify 실패. 없으면 빈 문자열.
 
     입력이 verify 를 통과하지 못하면 결과도 통과할 수 없다. 다만
-    --rename-tools 는 질의하는 operation 의 operationId 를 새로 쓸 수
-    있으므로, 그 operation 들에 서로 겹치지 않는 임시 operationId 를 넣은
-    사본으로 본다 - 개명으로도 고칠 수 없는 실패만 남는다. 검사 id 로
-    봐주면 질의되지 않는 operation 까지 봐주거나, 중복 id 가 함께 깨는
-    다른 검사(openapi.schema-valid 등)를 놓친다.
+    --rename-tools 는 질의하는 operation 중 operationId 가 없거나 이름
+    규칙을 어기는 것에는 새 이름을 내라고 지시받는다. 그 operation 들에
+    서로 겹치지 않는 임시 operationId 를 넣은 사본으로 본다 - 개명으로도
+    고칠 수 없는 실패만 남는다. 읽을 만한 이름은 유지하라는 지시를 받고,
+    operation 을 하나씩 보는 모델은 이름이 겹치는지 알 수 없으므로 중복
+    이름은 그대로 둔 채 본다. 검사 id 로 봐주면 질의되지 않는 operation
+    까지 봐주거나, 이름 결함이 함께 깨는 다른 검사를 놓친다.
     """
     spec = working
     if rename_tools:
@@ -162,6 +164,9 @@ def _preflight_problems(working: dict, targets: list[Target], *,
         n = 0
         for path, method, op in _operations(spec):
             if f"#/paths/{escape_token(path)}/{method}" not in queried:
+                continue
+            oid = op.get("operationId")
+            if isinstance(oid, str) and _SAFE_TOOL_RE.fullmatch(oid):
                 continue
             n += 1
             while f"s2o_rename_{n}" in taken:

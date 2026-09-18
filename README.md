@@ -274,10 +274,12 @@ What a run guarantees:
   `--allow-speculative` is given.
 - A run that writes anything must pass `verify()`, or nothing is written.
   An input that already fails `verify()` is rejected before the first
-  model call, and `--dry-run` says so; with `--rename-tools`, name
-  problems on the operations the run queries are left for it to fix.
+  model call, and `--dry-run` says so; with `--rename-tools`, a missing or
+  rule-breaking `operationId` on an operation the run queries is left for
+  it to fix.
 - An `array` / `object` field only gets an example that parses as finite
-  JSON of that shape; a `$ref` field gets none.
+  JSON of that shape; a field whose type comes from `$ref` or an untyped
+  `allOf` / `oneOf` / `anyOf` gets none.
 - A rewritten operation description keeps the `Errors: ...` /
   `Example ...:` lines `minify_for_mcp` folded into it.
 - What was generated is recorded under `x-s2o.agentize` as JSON Pointers,

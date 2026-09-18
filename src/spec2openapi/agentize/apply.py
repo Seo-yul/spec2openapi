@@ -195,16 +195,28 @@ def _typed_example(raw: Any, declared_type: Any) -> tuple[bool, Any]:
     return True, raw
 
 
+#: 다른 스키마에서 type 을 가져오는 합성 키워드. 변환기는 형제 키가 있는
+#: $ref 를 allOf 로 감싼다.
+_COMPOSITION_KEYS = ("allOf", "oneOf", "anyOf")
+
+
+def _type_from_elsewhere(parent: dict) -> bool:
+    """type 을 $ref 나 type 선언 없는 합성에서 가져오는 필드인가."""
+    return "$ref" in parent or ("type" not in parent and any(
+        k in parent for k in _COMPOSITION_KEYS))
+
+
 def _example_for(parent: dict, raw: Any) -> tuple[bool, Any]:
-    """부모 스키마에 맞춘 example. $ref 필드는 type 을 알 수 없어 받지 않는다."""
-    if "$ref" in parent:
+    """부모 스키마에 맞춘 example. type 을 다른 스키마에서 가져오는 필드는
+    type 을 확인할 수 없어 받지 않는다."""
+    if _type_from_elsewhere(parent):
         return False, None
     return _typed_example(raw, parent.get("type"))
 
 
 def _example_rejection(parent: dict) -> str:
-    if "$ref" in parent:
-        return "$ref 필드에는 example 을 쓰지 않음"
+    if _type_from_elsewhere(parent):
+        return "$ref·합성 필드에는 example 을 쓰지 않음"
     return "example 이 선언된 type과 맞지 않음"
 
 
