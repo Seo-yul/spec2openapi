@@ -218,10 +218,15 @@ def detect_language(spec: Any) -> str:
         else:
             if ch.isalpha():
                 latin += 1
-    # 한자는 중국어와 일본어가 함께 쓴다 - 가나가 하나라도 있으면
-    # 한자도 일본어로 센다. 한자가 많은 짧은 API 설명이 흔하다.
-    if counts.get("Japanese") and counts.get("Chinese"):
-        counts["Japanese"] += counts["Chinese"]
+    # 한자는 중국어와 일본어가 함께 쓴다 - 가나 글자가 한자와 가나를 합친
+    # 것의 5% 이상이면 한자도 일본어로 센다. 한자가 많은 짧은 API 설명이
+    # 흔하다. 가운뎃점(・)·장음 부호(ー)는 중국어 외래 인명에도 쓰이므로
+    # 가나 글자로 세지 않는다.
+    kana = sum(1 for ch in prose
+               if "ぁ" <= ch <= "ゖ" or "ァ" <= ch <= "ヺ")
+    han = counts.get("Chinese", 0)
+    if kana and han and kana / (kana + han) >= 0.05:
+        counts["Japanese"] += han
         counts["Chinese"] = 0
     total = sum(counts.values()) + latin
     if total:

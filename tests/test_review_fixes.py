@@ -333,3 +333,84 @@ def test_kana_makes_kanji_heavy_text_japanese():
                         ("a", "顧客番号"), ("b", "注文日時"),
                         ("c", "商品コード"), ("d", "受注金額の合計"))}}}}}
     assert detect_language(spec) == "Japanese"
+
+
+# --- cycle 3 ------------------------------------------------------------------
+
+@pytest.mark.parametrize("named_ns", ["urn:t", "urn:b"])
+def test_an_inline_simple_type_keeps_its_own_facets(named_ns):
+    """zeep names an anonymous simpleType after its element, so its qname
+    can equal a named type's - it must not borrow that type's facets."""
+    prefix = "tns" if named_ns == "urn:t" else "b"
+    named = """<xsd:simpleType name="code"><xsd:restriction base="xsd:string">
+    <xsd:enumeration value="USD"/><xsd:enumeration value="EUR"/>
+  </xsd:restriction></xsd:simpleType>"""
+    other = (f'<xsd:schema targetNamespace="urn:b">{named}</xsd:schema>'
+             if named_ns == "urn:b" else "")
+    types = f"""{other}<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  {named if named_ns == "urn:t" else ""}
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="code"><xsd:simpleType><xsd:restriction base="xsd:string">
+      <xsd:maxLength value="10"/></xsd:restriction></xsd:simpleType></xsd:element>
+    <xsd:element name="cur" type="{prefix}:code"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    props = _req_props(convert_wsdl(content=_wsdl(types)))
+    assert "enum" not in props["code"]
+    assert props["code"]["maxLength"] == 10
+    assert "x-soap-simple-type" not in props["code"]
+    assert props["cur"]["enum"] == ["USD", "EUR"]
+
+
+def test_decimal_values_are_written_without_an_exponent():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="rate" type="xsd:decimal"/>
+    <xsd:element name="big" type="xsd:decimal"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    spec = convert_wsdl(content=_wsdl(types))
+    idx = _SpecIndex(spec)
+    env = build_envelope(idx.ops["/operations/Op"],
+                         {"rate": 0.00001, "big": 1e16}, idx,
+                         BridgeOptions()).decode()
+    assert "<tns:rate>0.00001</tns:rate>" in env
+    assert "<tns:big>10000000000000000</tns:big>" in env
+
+
+def test_a_ref_response_follows_the_operations_produces():
+    out = convert_swagger(_sw(
+        {"/a": {"get": {"operationId": "a", "produces": ["application/xml"],
+                        "responses": {
+                            "200": {"description": "ok",
+                                    "schema": {"type": "string"}},
+                            "400": {"$ref": "#/responses/Err"}}}}},
+        produces=["application/json"],
+        responses={"Err": {"description": "e",
+                           "schema": {"type": "string"}}}))
+    r400 = out["paths"]["/a"]["get"]["responses"]["400"]
+    assert list(r400["content"]) == ["application/xml"]
+    assert any("'Err'" in n and "produces" in n
+               for n in out["x-s2o"]["assumptions"])
+
+
+def test_extension_only_responses_still_get_a_response_code():
+    out = convert_swagger(_sw({"/a": {"get": {
+        "operationId": "a", "responses": {"x-note": "hi"}}}}))
+    responses = out["paths"]["/a"]["get"]["responses"]
+    assert responses["x-note"] == "hi"
+    assert "200" in responses
+
+
+def test_non_mapping_response_headers_are_a_conversion_error():
+    with pytest.raises(ConversionError, match="headers"):
+        convert_swagger(_sw({"/a": {"get": {"operationId": "a", "responses": {
+            "200": {"description": "ok", "headers": ["X"]}}}}}))
+
+
+def test_a_stray_katakana_mark_does_not_make_chinese_japanese():
+    from spec2openapi.agentize.targets import detect_language
+
+    spec = {"info": {"description":
+                     "查询用户订单信息，返回订单列表。支持分页查询。迈克尔・杰克逊"}}
+    assert detect_language(spec) == "Chinese"

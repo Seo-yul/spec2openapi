@@ -81,6 +81,11 @@ class XsdMeta:
     # same-named entry from another namespace
     named_types: set[tuple[str, str]] = (
         dataclasses.field(default_factory=set))
+    # (namespace, container name, child element name) -> facets of the
+    # child's inline anonymous simpleType. zeep names such a type after its
+    # element, so its qname can equal a named type's; this tells them apart
+    inline_simple: dict[tuple[str, str, str], dict[str, Any]] = (
+        dataclasses.field(default_factory=dict))
 
 
 @dataclasses.dataclass
@@ -356,6 +361,12 @@ def _scan_schema_root(
                 for child in node.iter(f"{{{XSD_NS}}}element"):
                     if child is node or not child.get("name"):
                         continue
+                    inline = (child.find(f"{{{XSD_NS}}}simpleType")
+                              if child.get("type") is None else None)
+                    if inline is not None:
+                        meta.inline_simple.setdefault(
+                            (tns, cname, child.get("name")),
+                            _facets_from_restriction(inline, simple_types))
                     cdoc = _doc_text(child)
                     if cdoc:
                         meta.child_docs.setdefault(

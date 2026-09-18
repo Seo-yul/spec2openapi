@@ -90,7 +90,13 @@ paths:
             application/xml:
               schema: *id001
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: Resource not found
+          content:
+            application/json:
+              schema: &id002
+                $ref: '#/components/schemas/Error'
+            application/xml:
+              schema: *id002
     delete:
       operationId: delete_pets_petId
       parameters:
@@ -201,11 +207,13 @@ components:
           tokenUrl: https://auth.example.com/token
 x-s2o:
   source: swagger-2.0
-  generator: spec2openapi/0.5.0
+  generator: spec2openapi/0.8.0
   assumptions:
   - 'GET /pets: no operationId; generated ''get_pets'''
   - 'GET /pets: no ''produces'' declared; assumed application/json'
   - 'POST /pets: no ''produces'' declared; assumed application/json'
+  - 'GET /pets/{petId}: response $ref to global response ''NotFound'' inlined: the operation''s produces
+    differ from the global produces'
   - 'DELETE /pets/{petId}: no operationId; generated ''delete_pets_petId'''
   - 'responses.NotFound: no ''produces'' declared; assumed application/json'
   lossy: []

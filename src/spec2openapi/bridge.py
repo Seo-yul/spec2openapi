@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+from decimal import Decimal
 from typing import Any
 
 import httpx2
@@ -263,6 +264,15 @@ class _SpecIndex:
 def _to_text(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NaN"
+        if math.isinf(value):
+            return "INF" if value > 0 else "-INF"
+        # str() switches to exponent notation (1e-05, 1e+16), which the
+        # xsd:decimal lexical space does not allow; positional text is
+        # valid for decimal, float and double alike
+        return format(Decimal(repr(value)), "f")
     return str(value)
 
 

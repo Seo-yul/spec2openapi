@@ -515,7 +515,13 @@ class SchemaConverter:
         if sub is not None:
             return sub
 
-        base = self._type_to_schema(el_type, hint=f"{parent_hint}_{el_name}")
+        inline = (self.meta.inline_simple.get((qkey[0], qkey[1], el_name))
+                  if qkey else None)
+        if inline is not None and not isinstance(el_type, zx.ComplexType):
+            base = self._simple_to_schema(el_type, inline_facets=inline)
+        else:
+            base = self._type_to_schema(el_type,
+                                        hint=f"{parent_hint}_{el_name}")
 
         qname = getattr(el, "qname", None)
         xml_meta: dict[str, Any] = {"name": el_name}
@@ -581,7 +587,11 @@ class SchemaConverter:
             base["description"] = doc
         return base
 
-    def _simple_to_schema(self, t: Any) -> dict[str, Any]:
+    def _simple_to_schema(self, t: Any,
+                          inline_facets: dict[str, Any] | None = None
+                          ) -> dict[str, Any]:
+        """inline_facets: the element's own anonymous simpleType - its qname
+        is the element's name, so the named-type lookup must not run."""
         if t is None:
             return {"type": "string"}
         cls_names = [k.__name__ for k in type(t).__mro__]
@@ -606,7 +616,10 @@ class SchemaConverter:
         builtin_names = {"string", "int", "integer", "decimal", "boolean",
                          "float", "double", "dateTime", "date", "time",
                          "long", "short", "byte", "anyURI", "base64Binary"}
-        if tname and tname not in builtin_names:
+        if inline_facets is not None:
+            for k, v in inline_facets.items():
+                schema.setdefault(k, v)
+        elif tname and tname not in builtin_names:
             facets = self._lookup(self.meta.facets, tns, tname)
             if facets:
                 for k, v in facets.items():

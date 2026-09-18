@@ -36,8 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is dropped (#159).
 - `x-soap.refs` checks `$ref`s under names that look like data keywords —
   a property called `default` or `enum`, the `default` response (#159).
-- `agentize` detects Japanese for kanji-heavy text that contains kana
+- `agentize` detects Japanese for kanji-heavy text whose kana letters are
+  at least 5% of its kana and kanji; a stray `・` or `ー` does not count
   (#159).
+- An element's inline anonymous simpleType keeps its own facets and no
+  longer takes the facets of a named simpleType with the same name (zeep
+  gives both the same qname) (#159).
+- The SOAP bridge writes floating-point values without an exponent
+  (`0.00001`, not `1e-05`) — `xsd:decimal` has no exponent form — and
+  non-finite values as `INF` / `-INF` / `NaN` (#159).
+- Swagger upgrader: a `$ref` to a global response with a schema follows the
+  operation's own `produces`; a Responses Object with only `x-` keys still
+  gets a response code; non-mapping response `headers` raise
+  `ConversionError` (#159).
 
 ## [0.8.0] - 2026-09-18
 

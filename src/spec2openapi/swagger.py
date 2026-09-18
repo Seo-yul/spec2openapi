@@ -795,6 +795,29 @@ class _Upgrader:
         )
         return self._body_to_request_body(gparam, op, ctx)
 
+    def _ref_response(self, raw_ref: str, op: dict, ctx: str,
+                      code: Any) -> dict | None:
+        """A global response inlined with the operation's own produces, or
+        None to keep the $ref: the shared component carries the global
+        produces, which only matters when the response has a schema."""
+        op_types = op.get("produces")
+        if op_types is None or not raw_ref.startswith("#/responses/"):
+            return None
+        found, target = self._resolve_pointer(raw_ref)
+        if (not found or not isinstance(target, dict) or "$ref" in target
+                or "schema" not in target):
+            return None
+        default = ["application/json"]
+        if (_media_list(op_types) or default) == (
+                _media_list(self.src.get("produces")) or default):
+            return None
+        name = raw_ref.rsplit("/", 1)[-1]
+        self.assumptions.append(
+            f"{ctx}: response $ref to global response '{name}' inlined: "
+            "the operation's produces differ from the global produces"
+        )
+        return self._convert_response(target, op, ctx, code)
+
     def _form_to_request_body(self, params: list[dict], op: dict,
                               ctx: str) -> dict:
         has_file = any(p.get("type") == "file" for p in params)
@@ -970,6 +993,9 @@ class _Upgrader:
                 f"{type(resp).__name__}"
             )
         if "$ref" in resp:
+            inlined = self._ref_response(resp["$ref"], op, ctx, code)
+            if inlined is not None:
+                return inlined
             return {"$ref": self._fix_ref(resp["$ref"])}
         description = resp.get("description")
         if not description:  # required on the OA3 Response Object
@@ -994,6 +1020,11 @@ class _Upgrader:
                 content[mt] = entry
             out["content"] = content
         if "headers" in resp:
+            if not isinstance(resp["headers"], dict):
+                raise ConversionError(
+                    f"{ctx}: response {code} headers must be a mapping, got "
+                    f"{type(resp['headers']).__name__}"
+                )
             headers = {}
             for hname, h in resp["headers"].items():
                 if not isinstance(h, dict):
@@ -1334,8 +1365,9 @@ class _Upgrader:
                                                             code))
                     for code, resp in (op.get("responses") or {}).items()
                 }
-                if not responses:  # Responses Object requires >= 1 response
-                    responses = {"200": {"description": "OK"}}
+                # Responses Object requires >= 1 response (x-* don't count)
+                if not any(not k.startswith("x-") for k in responses):
+                    responses = {"200": {"description": "OK"}, **responses}
                     self.assumptions.append(
                         f"{ctx}: no responses declared; added a generic "
                         "'200 OK' (required in OpenAPI 3)"
