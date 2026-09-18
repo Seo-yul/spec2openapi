@@ -961,3 +961,27 @@ def test_a_null_summary_the_run_rewrites_does_not_fail_the_preflight():
     op = result.spec["paths"]["/a"]["get"]
     assert op["summary"] == "Read one A"
     assert verify(result.spec).ok
+
+
+@pytest.mark.parametrize("renamed, taken", [("list-pets", "list_pets"),
+                                            ("get__v1", "get_v1")])
+def test_rename_preflight_sees_the_natural_rename_collide(renamed, taken):
+    """규칙상 바꿔야 하는 이름은 모델이 자연스러운 형태로 고친다 - 그 이름을
+    다른 operation 이 이미 쓰면 어떤 개명도 성공하지 못한다 (#155)."""
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": renamed},
+                        {**ok, "operationId": taken,
+                         "description": "Returns one pet by its id."})
+    provider = _numbering_provider()
+    with pytest.raises(AgentizeError, match="LLM을 호출하기 전에"):
+        agentize_spec(spec, provider, rename_tools=True)
+    assert provider.calls == []
+
+
+def test_a_rule_breaking_name_without_a_collision_is_left_to_the_run():
+    ok = {"responses": {"200": {"description": "ok"}}}
+    spec = _two_op_spec({**ok, "operationId": "list-pets"},
+                        {**ok, "operationId": "b",
+                         "description": "Returns one pet by its id."})
+    result = agentize_spec(spec, _numbering_provider(), rename_tools=True)
+    assert result.spec["paths"]["/a"]["get"]["operationId"] == "read_1"

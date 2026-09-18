@@ -21,7 +21,13 @@ from typing import Any, Iterable
 from ..checks import _component_schemas, verify
 from ..errors import ConversionError
 from ..minify import minify_for_mcp
-from ..openapi import _operations, _unescape_pointer_token, fastmcp_tool_name
+from ..openapi import (
+    _SAFE_TOOL_RE,
+    _exposed_id,
+    _operations,
+    _unescape_pointer_token,
+    fastmcp_tool_name,
+)
 from .apply import (
     ApplyReport,
     _resolve_parent,
@@ -172,11 +178,14 @@ def _preflight_problems(working: dict, targets: list[Target], *,
       함께 다시 쓰는 저품질 summary 자리에는 임시 문자열을 넣는다. 값이
       비어 있는(null) description·summary 처럼 그 자리 자체가 실패 원인일
       수 있다.
-    - --rename-tools 면 질의하는 operation 중 operationId 가 없거나 이름
-      규칙을 어기는 것에 서로 겹치지 않는 임시 operationId 를 넣는다. 개명
-      지시가 새 이름을 내라고 하는 경우다. 읽을 만한 이름은 유지하라는
-      지시를 받고, operation 을 하나씩 보는 모델은 이름이 겹치는지 알 수
-      없으므로 중복 이름은 그대로 둔 채 본다.
+    - --rename-tools 면 질의하는 operation 중 개명 지시가 새 이름을 내라고
+      하는 것을 개명된 것으로 본다. operationId 가 없거나 문법이 깨진 것은
+      서로 겹치지 않는 임시 이름으로, 문법은 맞지만 FastMCP 가 다른 이름으로
+      노출하는 것(list-pets, get__v1, 56자 초과)은 모델이 낼 자연스러운 형태
+      (FastMCP 가 노출하는 형태)로 본다 - 그 이름이 다른 operation 과 겹치면
+      개명해도 실패한다. 읽을 만한 이름은 유지하라는 지시를 받고,
+      operation 을 하나씩 보는 모델은 이름이 겹치는지 알 수 없으므로 중복
+      이름은 그대로 둔 채 본다.
 
     검사 id 로 실패를 봐주면 채우지 않을 자리까지 봐주거나, 한 결함이
     함께 깨는 다른 검사(openapi.schema-valid 등)를 놓친다.
@@ -204,6 +213,11 @@ def _preflight_problems(working: dict, targets: list[Target], *,
                 continue
             oid = op.get("operationId")
             if isinstance(oid, str) and oid and fastmcp_tool_name(oid) == oid:
+                continue
+            natural = (_exposed_id(oid) if isinstance(oid, str)
+                       and _SAFE_TOOL_RE.fullmatch(oid) else "")
+            if natural:
+                op["operationId"] = natural
                 continue
             n += 1
             while f"s2o_rename_{n}" in taken:
