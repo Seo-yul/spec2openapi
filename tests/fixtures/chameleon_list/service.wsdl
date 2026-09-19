@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:tns="urn:t" xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:t" name="S">
+  <types><xsd:schema><xsd:import namespace="urn:t" schemaLocation="main.xsd"/></xsd:schema></types>
+  <message name="In"><part name="p" element="tns:Req"/></message>
+  <message name="Out"><part name="p" element="tns:Resp"/></message>
+  <portType name="PT"><operation name="Op"><input message="tns:In"/><output message="tns:Out"/></operation></portType>
+  <binding name="B" type="tns:PT"><soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="Op"><soap:operation soapAction="urn:op"/><input><soap:body use="literal"/></input><output><soap:body use="literal"/></output></operation></binding>
+  <service name="S"><port name="P" binding="tns:B"><soap:address location="http://x/s"/></port></service>
+</definitions>

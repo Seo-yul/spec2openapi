@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import logging
+import math
 import os
 import tempfile
 import zipfile
@@ -81,6 +82,10 @@ class XsdMeta:
     # same-named entry from another namespace
     named_types: set[tuple[str, str]] = (
         dataclasses.field(default_factory=set))
+    # (namespace, name) -> named <simpleType> node across every schema
+    # document, for following a restriction's base (anonymous types too)
+    simple_types: dict[tuple[str, str], etree._Element] = (
+        dataclasses.field(default_factory=dict))
 
 
 @dataclasses.dataclass
@@ -142,7 +147,7 @@ def _doc_text(node: etree._Element) -> str | None:
 
 # facets whose value is a numeric bound (minInclusive/etc.) -> the JSON
 # Schema keyword it becomes. Cast is picked dynamically from the
-# restriction's base type (see _restriction_number_kind): int for an
+# restriction's base type (see _simple_type_facets): int for an
 # integer base (exact, no float precision loss for e.g. int64 bounds),
 # float otherwise.
 _BOUND_FACET_MAP = {
@@ -162,36 +167,8 @@ _XSD_INTEGER_BASES = frozenset({
     "unsignedLong", "unsignedInt", "unsignedShort", "unsignedByte",
 })
 _XSD_NUMBER_BASES = frozenset({"decimal", "float", "double"})
-
-
-def _restriction_number_kind(
-        restriction: etree._Element,
-        simple_types: dict[tuple[str, str], etree._Element] | None = None,
-        _depth: int = 0) -> str:
-    """Classify a restriction's base type for facet coercion: 'integer'
-    (cast via int — exact, no float precision loss), 'number' (cast via
-    float), or 'string' (base is non-numeric or unresolvable — left as
-    the original text rather than guessing). A base that is another
-    named simpleType is followed down to its XSD builtin."""
-    base = restriction.get("base")
-    if not base:
-        return "string"
-    resolved = _resolve_qname_ref(base, restriction)
-    if resolved is None:
-        return "string"
-    if resolved[0] != XSD_NS:
-        base_st = (simple_types or {}).get(resolved)
-        inner = (base_st.find(f"{{{XSD_NS}}}restriction")
-                 if base_st is not None else None)
-        if inner is None or _depth >= 16:  # 16: cycle / runaway guard
-            return "string"
-        return _restriction_number_kind(inner, simple_types, _depth + 1)
-    local = resolved[1]
-    if local in _XSD_INTEGER_BASES:
-        return "integer"
-    if local in _XSD_NUMBER_BASES:
-        return "number"
-    return "string"
+# XSD's builtin list types: their length facets count items
+_XSD_LIST_BASES = frozenset({"NMTOKENS", "IDREFS", "ENTITIES"})
 
 
 def _coerce_enum_value(raw: str, kind: str) -> Any:
@@ -209,6 +186,12 @@ def _coerce_enum_value(raw: str, kind: str) -> Any:
             return float(raw)
         except ValueError:
             return raw
+    if kind == "boolean":
+        low = raw.strip()
+        if low in ("true", "1"):
+            return True
+        if low in ("false", "0"):
+            return False
     return raw
 
 
@@ -229,19 +212,107 @@ def _facets_from_restriction(
         st: etree._Element,
         simple_types: dict[tuple[str, str], etree._Element] | None = None,
 ) -> dict[str, Any]:
-    """xsd:simpleType node -> JSON Schema facet fragment (3.0 flavored)."""
-    out: dict[str, Any] = {}
+    """xsd:simpleType node -> JSON Schema facet fragment (3.0 flavored),
+    following its restriction chain exactly as an anonymous type does."""
+    if st.find(f"{{{XSD_NS}}}restriction") is None:
+        return {}
+    return _simple_type_facets(st, simple_types or {})[0]
+
+
+def _named_simple_type(
+        simple_types: dict[tuple[str, str], etree._Element],
+        qname: tuple[str, str]) -> etree._Element | None:
+    """A named simpleType by exact qname, or None. No fallback to a
+    no-namespace declaration of the same name: that is an unrelated type
+    unless it was chameleon-included, which the scanned documents cannot
+    tell - an unresolved base takes the kind zeep resolved instead."""
+    return simple_types.get(qname)
+
+
+def _simple_type_facets(
+        st: etree._Element,
+        simple_types: dict[tuple[str, str], etree._Element],
+        fallback_kind: str = "string",
+        _depth: int = 0) -> tuple[dict[str, Any], str]:
+    """(facets, kind) of a <simpleType>, following its restriction chain:
+    the base's facets first, then its own, which narrow them (an XSD
+    restriction inherits its base's facets). The base is the `base`
+    attribute or an inner <simpleType>. kind is "integer" / "number" /
+    "string" from the XSD builtin, or "list" - list length facets count
+    items, not characters, so they are dropped from the string schema. A
+    base outside the scanned documents (xsd:include merges them into the
+    includer, so zeep lists no location for them) takes `fallback_kind`,
+    the kind zeep resolved, so enum values agree with the schema type."""
+    if _depth > 16:  # cycle / runaway guard
+        return {}, "string"
     restriction = st.find(f"{{{XSD_NS}}}restriction")
     if restriction is None:
-        return out
-    kind = _restriction_number_kind(restriction, simple_types)
-    enums = [
-        _coerce_enum_value(e.get("value"), kind)
-        for e in restriction.findall(f"{{{XSD_NS}}}enumeration")
-        if e.get("value") is not None
-    ]
-    if enums:
+        kind = "list" if st.find(f"{{{XSD_NS}}}list") is not None else "string"
+        return {}, kind
+    base_facets: dict[str, Any] = {}
+    kind = "string"
+    base = restriction.get("base")
+    if base:
+        resolved = _resolve_qname_ref(base, restriction)
+        if resolved is not None and resolved[0] == XSD_NS:
+            local = resolved[1]
+            kind = ("list" if local in _XSD_LIST_BASES
+                    else "boolean" if local == "boolean"
+                    else "integer" if local in _XSD_INTEGER_BASES
+                    else "number" if local in _XSD_NUMBER_BASES
+                    else "string")
+        elif resolved is not None:
+            base_st = _named_simple_type(simple_types, resolved)
+            if base_st is not None:
+                base_facets, kind = _simple_type_facets(
+                    base_st, simple_types, fallback_kind, _depth + 1)
+            else:
+                kind = fallback_kind
+    else:
+        inner = restriction.find(f"{{{XSD_NS}}}simpleType")
+        if inner is not None:
+            base_facets, kind = _simple_type_facets(
+                inner, simple_types, fallback_kind, _depth + 1)
+        else:
+            kind = fallback_kind
+    own = _own_facets(restriction, "string" if kind == "list" else kind)
+    facets = dict(base_facets)
+    # a bound this step sets replaces the inherited one, flag included
+    for bound, flag in (("minimum", "exclusiveMinimum"),
+                        ("maximum", "exclusiveMaximum")):
+        if bound in own and flag not in own:
+            facets.pop(flag, None)
+    # patterns of different derivation steps all apply (XSD ANDs them)
+    if "pattern" in base_facets and "pattern" in own:
+        own = {**own, "pattern":
+               f"(?={base_facets['pattern']}){own['pattern']}"}
+    facets.update(own)
+    if kind == "list":
+        for key in ("minLength", "maxLength"):
+            facets.pop(key, None)
+    return facets, kind
+
+
+def _own_facets(restriction: etree._Element, kind: str) -> dict[str, Any]:
+    """The facets a <restriction> declares itself, coerced to `kind`."""
+    out: dict[str, Any] = {}
+    enums: list[Any] = []
+    seen: set[tuple[str, Any]] = set()
+    for e in restriction.findall(f"{{{XSD_NS}}}enumeration"):
+        if e.get("value") is None:
+            continue
+        value = _coerce_enum_value(e.get("value"), kind)
+        # "true"/"1" and "1"/"01" are one value: enum items are unique
+        key = (type(value).__name__, value)
+        if key not in seen:
+            seen.add(key)
+            enums.append(value)
+    # INF/NaN (xsd:float/double) have no JSON form: drop the enumeration
+    # rather than emit invalid JSON or a value nothing can equal
+    if enums and not any(isinstance(v, float) and not math.isfinite(v)
+                         for v in enums):
         out["enum"] = enums
+    patterns: list[str] = []
     bound_cast = int if kind == "integer" else float
     for facet in restriction:
         if not isinstance(facet.tag, str):
@@ -265,7 +336,9 @@ def _facets_from_restriction(
             except ValueError:
                 pass
         elif local == "pattern":
-            out["pattern"] = _anchor_pattern(value)
+            # keep the key where the first pattern stood (stable output)
+            out.setdefault("pattern", None)
+            patterns.append(value)
         elif local in ("minLength", "maxLength"):
             try:
                 out[local] = int(value)
@@ -278,9 +351,19 @@ def _facets_from_restriction(
             # schema-invalid, unlike an enum value of the same shape)
             key = _BOUND_FACET_MAP[local]
             try:
-                out[key] = bound_cast(value)
+                bound = bound_cast(value)
+                # an INF/NaN bound is no bound in JSON (INF is unbounded)
+                if isinstance(bound, float) and not math.isfinite(bound):
+                    continue
+                out[key] = bound
             except ValueError:
                 pass
+    # patterns in one restriction step are alternatives (XSD ORs them)
+    if len(patterns) == 1:
+        out["pattern"] = _anchor_pattern(patterns[0])
+    elif patterns:
+        out["pattern"] = _anchor_pattern(
+            "|".join(f"(?:{p})" for p in patterns))
     # OpenAPI 3.0 exclusive bounds are boolean flags on minimum/maximum
     if "exclusiveMinimumValue" in out:
         out["minimum"] = out.pop("exclusiveMinimumValue")
@@ -363,6 +446,53 @@ def _scan_schema_root(
                         )
 
 
+_ANONYMOUS_HOOK_INSTALLED = False
+
+
+def install_anonymous_type_hook() -> bool:
+    """Mark each anonymous simpleType with the <simpleType> node that
+    declares it (attribute `_s2o_simple_node`); True once installed.
+
+    zeep names an anonymous simpleType after its element, so its qname can
+    equal a named type's and the raw-XML metadata cannot tell them apart by
+    name (#161). zeep's SchemaVisitor still has the node while it parses;
+    this wraps its simpleType dispatch to carry the node onto the resolved
+    type. zeep's behaviour is unchanged. The dispatch table is private API:
+    if a zeep release changes it, the hook stays off and conversion falls
+    back to the name lookup (a test pins the hook)."""
+    global _ANONYMOUS_HOOK_INSTALLED
+    if _ANONYMOUS_HOOK_INSTALLED:
+        return True
+    try:
+        from zeep.xsd import visitor as zv
+        from zeep.xsd.types.unresolved import UnresolvedCustomType
+
+        table = zv.SchemaVisitor.visitors
+        schema_tag, simple_tag = zv.tags.schema, zv.tags.simpleType
+        original = table[simple_tag]
+    except (ImportError, AttributeError, KeyError, TypeError):
+        return False
+
+    def visit_simple_type(self, node, parent):
+        xsd_type = original(self, node, parent)
+        if (parent.tag != schema_tag
+                and isinstance(xsd_type, UnresolvedCustomType)):
+            resolve = xsd_type.resolve
+
+            def resolve_marked():
+                resolved = resolve()
+                resolved._s2o_simple_node = node
+                return resolved
+
+            xsd_type.resolve = resolve_marked
+        return xsd_type
+
+    table[simple_tag] = visit_simple_type
+    zv.SchemaVisitor.visit_simple_type = visit_simple_type
+    _ANONYMOUS_HOOK_INSTALLED = True
+    return True
+
+
 def _collect_xsd_meta(client: Client, source: str,
                       *, forbid_external: bool = False,
                       huge_tree: bool = False) -> XsdMeta:
@@ -392,6 +522,7 @@ def _collect_xsd_meta(client: Client, source: str,
         except Exception:
             continue
     simple_types = _simple_type_index(roots)
+    meta.simple_types = simple_types
     for root in roots:
         _scan_schema_root(root, meta, simple_types)
     # transitive closure: a member of a member substitutes the outer head
@@ -693,6 +824,7 @@ def _parse_wsdl_location(
         forbid_external=forbid_external,
     )
     try:
+        install_anonymous_type_hook()
         client = Client(source, settings=settings)
     except (FileNotFoundError, ConversionError):
         raise

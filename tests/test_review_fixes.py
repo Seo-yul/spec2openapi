@@ -337,7 +337,6 @@ def test_kana_makes_kanji_heavy_text_japanese():
 
 # --- cycle 3 ------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason="#161: zeep gives an anonymous simpleType its element's name; no name-free way to tell them apart yet")
 @pytest.mark.parametrize("named_ns", ["urn:t", "urn:b"])
 def test_an_inline_simple_type_keeps_its_own_facets(named_ns):
     """zeep names an anonymous simpleType after its element, so its qname
@@ -444,9 +443,14 @@ def test_a_nested_inline_type_does_not_leak_to_a_same_named_outer_element(
     assert "maxLength" not in outer_code
     if outer == "tns:code":
         assert outer_code["enum"] == ["USD", "EUR"]
+    inner = _req_props(spec)["inner"]
+    ref = (inner.get("allOf") or [inner])[0].get("$ref")
+    inner_schema = (spec["components"]["schemas"][ref.rsplit("/", 1)[-1]]
+                    if ref else inner)
+    inner_code = inner_schema["properties"]["code"]
+    assert inner_code["maxLength"] == 3 and "enum" not in inner_code
 
 
-@pytest.mark.xfail(strict=True, reason="#161: zeep gives an anonymous simpleType its element's name; no name-free way to tell them apart yet")
 @pytest.mark.parametrize("via", ["extension", "group"])
 def test_an_inherited_inline_type_keeps_its_own_facets(via):
     if via == "extension":
@@ -542,3 +546,399 @@ def test_group_and_type_names_are_separate():
     spec = convert_wsdl(content=_wsdl(types))
     addr_zip = _component_of(spec, _req_props(spec)["a"])["properties"]["zip"]
     assert addr_zip["type"] == "integer" and "maxLength" not in addr_zip
+    home_zip = _component_of(spec, _req_props(spec)["h"])["properties"]["zip"]
+    assert home_zip["maxLength"] == 5
+
+
+# --- #161: anonymous simpleTypes are told apart without names ------------------
+
+def test_the_zeep_hook_marks_anonymous_simple_types():
+    """The hook wraps zeep's private SchemaVisitor dispatch; if a zeep
+    upgrade changes it, this fails first (conversion then falls back to
+    the name lookup)."""
+    from spec2openapi.parser import install_anonymous_type_hook, parse_wsdl
+
+    assert install_anonymous_type_hook()
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  {_CODE_NAMED}
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    {_INLINE_CODE}<xsd:element name="named" type="tns:code"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    parsed = parse_wsdl(content=_wsdl(types))
+    elements = dict(parsed.operations[0].input_element.type.elements)
+    assert getattr(elements["code"].type, "_s2o_simple_node", None) is not None
+    assert getattr(elements["named"].type, "_s2o_simple_node", None) is None
+
+
+def test_an_anonymous_simple_type_on_an_attribute_keeps_its_facets():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  {_CODE_NAMED}
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="v" type="xsd:string"/></xsd:sequence>
+    <xsd:attribute name="code"><xsd:simpleType>
+      <xsd:restriction base="xsd:string"><xsd:maxLength value="4"/>
+      </xsd:restriction></xsd:simpleType></xsd:attribute>
+  </xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    code = _req_props(convert_wsdl(content=_wsdl(types)))["code"]
+    assert code["maxLength"] == 4 and "enum" not in code
+
+
+# --- #161 review: an anonymous type's facets follow its restriction chain -----
+
+def _one_prop(element_xml: str, extra: str = "") -> dict:
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  {extra}
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    {element_xml}
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    props = _req_props(convert_wsdl(content=_wsdl(types)))
+    assert len(props) == 1
+    return next(iter(props.values()))
+
+
+def test_a_baseless_restriction_takes_its_inner_types_kind():
+    n = _one_prop("""<xsd:element name="n"><xsd:simpleType><xsd:restriction>
+      <xsd:simpleType><xsd:restriction base="xsd:int"/></xsd:simpleType>
+      <xsd:enumeration value="1"/><xsd:enumeration value="2"/>
+    </xsd:restriction></xsd:simpleType></xsd:element>""")
+    assert n["type"] == "integer" and n["enum"] == [1, 2] and n["example"] == 1
+
+
+def test_a_chameleon_included_base_is_followed():
+    spec = convert_wsdl(str(FIXTURES / "chameleon" / "service.wsdl"))
+    n = _req_props(spec)["n"]
+    assert n["type"] == "integer" and n["enum"] == [1, 2]
+
+
+@pytest.mark.parametrize("base", ["inner", "named"])
+def test_list_length_facets_are_not_string_lengths(base):
+    if base == "inner":
+        element = """<xsd:element name="ids"><xsd:simpleType><xsd:restriction>
+      <xsd:simpleType><xsd:list itemType="xsd:int"/></xsd:simpleType>
+      <xsd:maxLength value="3"/></xsd:restriction></xsd:simpleType></xsd:element>"""
+        extra = ""
+    else:
+        element = """<xsd:element name="ids"><xsd:simpleType>
+      <xsd:restriction base="tns:IdList"><xsd:maxLength value="3"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>"""
+        extra = ('<xsd:simpleType name="IdList"><xsd:list itemType="xsd:int"/>'
+                 "</xsd:simpleType>")
+    ids = _one_prop(element, extra)
+    assert "maxLength" not in ids and "minLength" not in ids
+
+
+def test_a_restriction_of_a_named_type_inherits_its_facets():
+    cur = _one_prop(
+        """<xsd:element name="cur"><xsd:simpleType>
+      <xsd:restriction base="tns:cur"><xsd:pattern value="[A-Z]+"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""",
+        """<xsd:simpleType name="cur"><xsd:restriction base="xsd:string">
+      <xsd:enumeration value="USD"/><xsd:enumeration value="EUR"/>
+      </xsd:restriction></xsd:simpleType>""")
+    assert cur["enum"] == ["USD", "EUR"]
+    assert cur["pattern"] == "^(?:[A-Z]+)$"
+
+
+def test_a_nested_restriction_keeps_the_inner_facets():
+    v = _one_prop("""<xsd:element name="v"><xsd:simpleType><xsd:restriction>
+      <xsd:simpleType><xsd:restriction base="xsd:string">
+        <xsd:maxLength value="5"/></xsd:restriction></xsd:simpleType>
+      <xsd:pattern value="[a-z]+"/></xsd:restriction></xsd:simpleType>
+      </xsd:element>""")
+    assert v["maxLength"] == 5 and v["pattern"] == "^(?:[a-z]+)$"
+
+
+@pytest.mark.parametrize("element_doc, expected", [
+    ("element doc", "element doc"), (None, "type doc")])
+def test_an_elements_own_documentation_wins_over_its_types(element_doc,
+                                                            expected):
+    ann = (f"<xsd:annotation><xsd:documentation>{element_doc}"
+           "</xsd:documentation></xsd:annotation>" if element_doc else "")
+    d = _one_prop(f"""<xsd:element name="d">{ann}<xsd:simpleType>
+      <xsd:annotation><xsd:documentation>type doc</xsd:documentation>
+      </xsd:annotation><xsd:restriction base="xsd:string"/>
+      </xsd:simpleType></xsd:element>""")
+    assert d["description"] == expected
+
+
+# --- #161 review round 2 --------------------------------------------------------
+
+@pytest.mark.parametrize("base_facet, own_facet, bound, value", [
+    ('<xsd:minExclusive value="0"/>', '<xsd:minInclusive value="10"/>',
+     "minimum", 10),
+    ('<xsd:maxExclusive value="100"/>', '<xsd:maxInclusive value="50"/>',
+     "maximum", 50)])
+def test_an_inclusive_bound_replaces_an_inherited_exclusive_one(
+        base_facet, own_facet, bound, value):
+    flag = "exclusiveMinimum" if bound == "minimum" else "exclusiveMaximum"
+    n = _one_prop(
+        f"""<xsd:element name="n"><xsd:simpleType>
+      <xsd:restriction base="tns:Bounded">{own_facet}</xsd:restriction>
+      </xsd:simpleType></xsd:element>""",
+        f"""<xsd:simpleType name="Bounded"><xsd:restriction base="xsd:int">
+      {base_facet}</xsd:restriction></xsd:simpleType>""")
+    assert n[bound] == value
+    assert flag not in n
+
+
+@pytest.mark.parametrize("builtin", ["NMTOKENS", "IDREFS", "ENTITIES"])
+def test_builtin_list_types_drop_length_facets(builtin):
+    toks = _one_prop(f"""<xsd:element name="toks"><xsd:simpleType>
+      <xsd:restriction base="xsd:{builtin}"><xsd:maxLength value="2"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""")
+    assert "maxLength" not in toks
+
+
+def test_an_included_list_base_drops_length_facets():
+    spec = convert_wsdl(str(FIXTURES / "chameleon_list" / "service.wsdl"))
+    ids = _req_props(spec)["ids"]
+    assert "maxLength" not in ids and "minLength" not in ids
+
+
+def test_boolean_enumerations_are_booleans():
+    b = _one_prop("""<xsd:element name="b"><xsd:simpleType>
+      <xsd:restriction base="xsd:boolean"><xsd:enumeration value="true"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""")
+    assert b["type"] == "boolean" and b["enum"] == [True] and b["example"] is True
+    named = _one_prop(
+        '<xsd:element name="nb" type="tns:Flag"/>',
+        """<xsd:simpleType name="Flag"><xsd:restriction base="xsd:boolean">
+      <xsd:enumeration value="1"/></xsd:restriction></xsd:simpleType>""")
+    assert named["enum"] == [True]
+
+
+# --- #161 review round 3 --------------------------------------------------------
+
+def test_an_unresolved_base_does_not_borrow_a_no_namespace_type():
+    """A base missing from the scanned documents (xsd:include merges them
+    into the includer) must not resolve to a same-named no-namespace type:
+    that is an unrelated type as far as the lookup can tell."""
+    from lxml import etree
+
+    from spec2openapi.parser import XSD_NS, _named_simple_type
+
+    index = {("", "Code"): etree.fromstring(
+        f'<simpleType xmlns="{XSD_NS}" name="Code"/>')}
+    assert _named_simple_type(index, ("urn:t", "Code")) is None
+    assert _named_simple_type(index, ("", "Code")) is not None
+
+
+def test_patterns_in_one_restriction_are_alternatives():
+    v = _one_prop("""<xsd:element name="v"><xsd:simpleType>
+      <xsd:restriction base="xsd:string">
+        <xsd:pattern value="[A-Z]+"/><xsd:pattern value="[0-9]+"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""")
+    import re
+    assert re.fullmatch(v["pattern"], "ABC") and re.fullmatch(v["pattern"], "123")
+    assert not re.fullmatch(v["pattern"], "abc")
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_a_nillable_enumeration_accepts_null(version):
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="c" nillable="true"><xsd:simpleType>
+      <xsd:restriction base="xsd:string">
+        <xsd:enumeration value="A"/><xsd:enumeration value="B"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    c = _req_props(convert_wsdl(content=_wsdl(types), openapi_version=version))["c"]
+    assert None in c["enum"]
+
+
+def test_non_finite_values_are_not_emitted():
+    d = _one_prop("""<xsd:element name="d"><xsd:simpleType>
+      <xsd:restriction base="xsd:double">
+        <xsd:enumeration value="INF"/><xsd:enumeration value="1.0"/>
+        <xsd:maxInclusive value="INF"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""")
+    import math
+    for key in ("enum", "maximum", "example"):
+        values = d.get(key)
+        values = values if isinstance(values, list) else [values]
+        assert all(not isinstance(x, float) or math.isfinite(x)
+                   for x in values if x is not None), (key, d)
+
+
+def test_an_anonymous_types_doc_outranks_a_same_named_elements_doc():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:complexType name="Other"><xsd:sequence>
+    <xsd:element name="code" type="xsd:string">
+      <xsd:annotation><xsd:documentation>Currency code</xsd:documentation>
+      </xsd:annotation></xsd:element>
+  </xsd:sequence></xsd:complexType>
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="code"><xsd:simpleType>
+      <xsd:annotation><xsd:documentation>Postal code</xsd:documentation>
+      </xsd:annotation>
+      <xsd:restriction base="xsd:string"/></xsd:simpleType></xsd:element>
+    <xsd:element name="o" type="tns:Other"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    code = _req_props(convert_wsdl(content=_wsdl(types)))["code"]
+    assert code["description"] == "Postal code"
+
+
+def test_a_derived_pattern_keeps_the_base_pattern():
+    v = _one_prop("""<xsd:element name="v"><xsd:simpleType>
+      <xsd:restriction base="tns:Three"><xsd:pattern value="[0-9]+"/>
+      </xsd:restriction></xsd:simpleType></xsd:element>""",
+                  extra="""<xsd:simpleType name="Three">
+      <xsd:restriction base="xsd:string"><xsd:pattern value=".{3}"/>
+      </xsd:restriction></xsd:simpleType>""")
+    import re
+    assert re.search(v["pattern"], "123")
+    assert not re.search(v["pattern"], "12345")
+    assert not re.search(v["pattern"], "abc")
+
+
+@pytest.mark.parametrize("base,values,expected", [
+    ("xsd:boolean", ("true", "1", "false", "0"), [True, False]),
+    ("xsd:int", ("1", "01", "2"), [1, 2]),
+])
+def test_enumeration_values_are_unique(base, values, expected):
+    enums = "".join(f'<xsd:enumeration value="{x}"/>' for x in values)
+    v = _one_prop(f"""<xsd:element name="v"><xsd:simpleType>
+      <xsd:restriction base="{base}">{enums}</xsd:restriction>
+      </xsd:simpleType></xsd:element>""")
+    assert v["enum"] == expected
+
+
+_ELEM_DOC = """<xsd:element name="d">
+      <xsd:annotation><xsd:documentation>elem doc</xsd:documentation>
+      </xsd:annotation>
+      <xsd:simpleType>
+        <xsd:annotation><xsd:documentation>anon doc</xsd:documentation>
+        </xsd:annotation>
+        <xsd:restriction base="xsd:string"/></xsd:simpleType></xsd:element>"""
+
+
+def test_a_nested_elements_doc_outranks_its_anonymous_types():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="Inner"><xsd:complexType><xsd:sequence>
+      {_ELEM_DOC}
+    </xsd:sequence></xsd:complexType></xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    spec = convert_wsdl(content=_wsdl(types))
+    inner = _component_of(spec, _req_props(spec)["Inner"])
+    assert inner["properties"]["d"]["description"] == "elem doc"
+
+
+def test_an_inherited_elements_doc_outranks_its_anonymous_types():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:complexType name="Base"><xsd:sequence>{_ELEM_DOC}
+  </xsd:sequence></xsd:complexType>
+  <xsd:complexType name="Derived"><xsd:complexContent>
+    <xsd:extension base="tns:Base"><xsd:sequence>
+      <xsd:element name="e" type="xsd:string"/></xsd:sequence>
+    </xsd:extension></xsd:complexContent></xsd:complexType>
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="x" type="tns:Derived"/>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    spec = convert_wsdl(content=_wsdl(types))
+    derived = spec["components"]["schemas"]["Derived"]
+    props = derived.get("properties") or {
+        k: v for part in derived.get("allOf", [])
+        for k, v in (part.get("properties") or {}).items()}
+    assert props["d"]["description"] == "elem doc"
+
+
+def test_the_declaring_elements_doc_outranks_a_nested_same_named_child():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="item"><xsd:complexType><xsd:sequence>
+      <xsd:element name="id" type="xsd:string">
+        <xsd:annotation><xsd:documentation>item id</xsd:documentation>
+        </xsd:annotation></xsd:element>
+    </xsd:sequence></xsd:complexType></xsd:element>
+    <xsd:element name="id">
+      <xsd:annotation><xsd:documentation>request id</xsd:documentation>
+      </xsd:annotation>
+      <xsd:simpleType><xsd:restriction base="xsd:string"/></xsd:simpleType>
+    </xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    props = _req_props(convert_wsdl(content=_wsdl(types)))
+    assert props["id"]["description"] == "request id"
+
+
+@pytest.mark.parametrize("base", ["xsd:NMTOKENS", "tns:Words"])
+def test_a_named_list_types_length_facets_are_dropped(base):
+    v = _one_prop('<xsd:element name="v" type="tns:Ids"/>', extra=f"""
+      <xsd:simpleType name="Words"><xsd:list itemType="xsd:string"/>
+      </xsd:simpleType>
+      <xsd:simpleType name="Ids"><xsd:restriction base="{base}">
+        <xsd:maxLength value="3"/></xsd:restriction></xsd:simpleType>""")
+    assert "maxLength" not in v and "minLength" not in v
+
+
+def test_an_undocumented_elements_anonymous_type_keeps_its_own_doc():
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="inner"><xsd:complexType><xsd:sequence>
+      <xsd:element name="code" type="xsd:string">
+        <xsd:annotation><xsd:documentation>INNER doc</xsd:documentation>
+        </xsd:annotation></xsd:element>
+    </xsd:sequence></xsd:complexType></xsd:element>
+    <xsd:element name="code"><xsd:simpleType>
+      <xsd:annotation><xsd:documentation>type doc</xsd:documentation>
+      </xsd:annotation>
+      <xsd:restriction base="xsd:string"/></xsd:simpleType></xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    props = _req_props(convert_wsdl(content=_wsdl(types)))
+    assert props["code"]["description"] == "type doc"
+
+
+_A_B = """<xsd:simpleType name="A"><xsd:restriction base="xsd:string">
+      <xsd:pattern value="a+"/><xsd:maxLength value="4"/>
+    </xsd:restriction></xsd:simpleType>
+    <xsd:simpleType name="B"><xsd:restriction base="tns:A">
+      <xsd:pattern value="[a-c]+"/></xsd:restriction></xsd:simpleType>"""
+
+
+def test_a_named_derived_type_follows_its_restriction_chain():
+    import re
+    named = _one_prop('<xsd:element name="v" type="tns:B"/>', extra=_A_B)
+    anonymous = _one_prop("""<xsd:element name="v"><xsd:simpleType>
+      <xsd:restriction base="tns:B"/></xsd:simpleType></xsd:element>""",
+                          extra=_A_B)
+    assert named["maxLength"] == 4
+    assert re.search(named["pattern"], "aa")
+    assert not re.search(named["pattern"], "bb")
+    assert named["pattern"] == anonymous["pattern"]
+
+
+def _nested_code(code_attrs: str = "", code_doc: str = "") -> dict:
+    annotation = (f"<xsd:annotation><xsd:documentation>{code_doc}"
+                  "</xsd:documentation></xsd:annotation>" if code_doc else "")
+    types = f"""<xsd:schema targetNamespace="urn:t" elementFormDefault="qualified">
+  <xsd:element name="Req"><xsd:complexType><xsd:sequence>
+    <xsd:element name="inner"><xsd:complexType><xsd:sequence>
+      <xsd:element name="code" type="xsd:string">
+        <xsd:annotation><xsd:documentation>NESTED</xsd:documentation>
+        </xsd:annotation></xsd:element>
+    </xsd:sequence></xsd:complexType></xsd:element>
+    <xsd:element name="code"{code_attrs}>{annotation}<xsd:simpleType>
+      <xsd:restriction base="xsd:string"/></xsd:simpleType></xsd:element>
+  </xsd:sequence></xsd:complexType></xsd:element>{_RESP}
+</xsd:schema>"""
+    return _req_props(convert_wsdl(content=_wsdl(types)))["code"]
+
+
+def test_an_undocumented_anonymous_element_takes_no_other_elements_doc():
+    assert "description" not in _nested_code()
+
+
+def test_a_repeated_anonymous_element_takes_its_own_doc():
+    code = _nested_code(' maxOccurs="3"', "OWN")
+    assert code["type"] == "array"
+    assert code["description"] == "OWN"
+    assert "description" not in _nested_code(' maxOccurs="3"')

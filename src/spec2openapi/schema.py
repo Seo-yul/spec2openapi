@@ -19,7 +19,7 @@ from zeep import xsd as zx
 
 from .errors import ConversionError
 from .openapi import sanitize_name  # noqa: F401  (canonical home; re-export)
-from .parser import XsdMeta
+from .parser import XsdMeta, _doc_text, _simple_type_facets
 
 logger = logging.getLogger("spec2openapi")
 
@@ -528,9 +528,22 @@ class SchemaConverter:
         nillable = bool(getattr(el, "nillable", False))
         if nillable and "$ref" not in base:
             base["nullable"] = True
+            # an enum constrains null too (OAS 3.0.3, and the 3.1 type
+            # list): xsi:nil must stay an accepted value
+            if isinstance(base.get("enum"), list) and None not in base["enum"]:
+                base["enum"] = [*base["enum"], None]
             nillable = False
 
-        doc = self._child_doc(qkey, el_name)
+        node = getattr(el_type, "_s2o_simple_node", None)
+        if node is not None:
+            # an anonymous type is declared inside its element, so that
+            # element's documentation is exact and outranks the type's; the
+            # name-keyed docs can hold a same-named nested or other
+            # container's child, so they are not consulted
+            parent = node.getparent()
+            doc = _doc_text(parent) if parent is not None else None
+        else:
+            doc = self._child_doc(qkey, el_name)
 
         default = getattr(el, "default", None)
         if default is not None and "$ref" not in base:
@@ -577,7 +590,7 @@ class SchemaConverter:
                 out["description"] = doc
             return out
         base["xml"] = xml_meta
-        if doc and "description" not in base:
+        if doc and ("description" not in base or node is not None):
             base["description"] = doc
         return base
 
@@ -606,7 +619,28 @@ class SchemaConverter:
         builtin_names = {"string", "int", "integer", "decimal", "boolean",
                          "float", "double", "dateTime", "date", "time",
                          "long", "short", "byte", "anyURI", "base64Binary"}
-        if tname and tname not in builtin_names:
+        node = getattr(t, "_s2o_simple_node", None)
+        if node is not None:
+            # an anonymous simpleType: zeep named it after its element, so
+            # the name lookup would find a same-named named type (#161) -
+            # its facets and docs come from its own declaration, following
+            # its restriction chain
+            # the kind zeep resolved, for a base outside the scanned
+            # documents (xsd:include merges them into the includer)
+            if any(k.__name__ == "ListType" for k in type(t).__mro__):
+                fallback = "list"
+            elif schema.get("type") in ("integer", "number", "boolean"):
+                fallback = schema["type"]
+            else:
+                fallback = "string"
+            facets, _kind = _simple_type_facets(
+                node, self.meta.simple_types, fallback)
+            for k, v in facets.items():
+                schema.setdefault(k, v)
+            doc = _doc_text(node)
+            if doc:
+                schema.setdefault("description", doc)
+        elif tname and tname not in builtin_names:
             facets = self._lookup(self.meta.facets, tns, tname)
             if facets:
                 for k, v in facets.items():
